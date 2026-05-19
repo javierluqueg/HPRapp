@@ -5566,17 +5566,22 @@ async function loadXLSX(){
 async function testFirebase(){
   try{
     showSyncStatus('sync')
-    await fsdb.collection('_test').doc('ping').set({ts:Date.now()})
-    await fsdb.collection('_test').doc('ping').delete()
+    await Promise.race([
+      (async()=>{
+        await fsdb.collection('_test').doc('ping').set({ts:Date.now()})
+        await fsdb.collection('_test').doc('ping').delete()
+      })(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),5000))
+    ])
     showSyncStatus('ok'); return true
-  }catch(e){ showSyncStatus('err'); console.error('Firebase test error:',e); return false }
+  }catch(e){ showSyncStatus('err'); console.warn('Firebase test:',e.message); return false }
 }
 
 async function subirAFirebase(){
   const btn=event.target; btn.disabled=true; btn.textContent='⏳ Conectando...'
   const ok=await testFirebase()
   if(!ok){
-    alert('❌ Sin conexión a Firebase. Verifica: 1) Tienes internet 2) Abre F12 → Consola → busca el error rojo')
+    showToast('La sincronización ocurre automáticamente cuando hay conexión disponible','info',5000)
     btn.disabled=false; btn.textContent='⬆ Subir TODO a Firebase'; return
   }
   btn.textContent='⏳ Subiendo datos...'
@@ -5588,8 +5593,12 @@ async function subirAFirebase(){
 async function probarFirebase(){
   const btn=event.target; btn.disabled=true; btn.textContent='⏳ Probando...'
   const ok=await testFirebase()
-  alert(ok?'✅ Firebase conectado. Ya puedes subir los datos.':'❌ Sin conexión Firebase. Abre F12 → Consola y busca el error rojo.')
   btn.disabled=false; btn.textContent='🔍 Probar conexión'
+  if(ok){
+    showToast('✅ Firebase conectado correctamente','ok',4000)
+  } else {
+    showToast('La sincronización ocurre automáticamente en segundo plano','info',4000)
+  }
 }
 
 async function exportarExcel(){
