@@ -4937,16 +4937,47 @@ async function pgPotreroFicha({id}) {
   else {
     const TIPOS_LP = {CERCA:'🔧 Cerca', GUADANA:'🌿 Guadaña', FUMIGACION:'🧴 Fumigación', TOCONEO:'🪓 Toconeo', SIEMBRA:'🌱 Siembra', RESIEMBRA:'🌾 Resiembra'}
     const TIPOS_COLOR = {CERCA:'bl-blue', GUADANA:'bl-green', FUMIGACION:'bl-yellow', TOCONEO:'bl-black', SIEMBRA:'bl-green', RESIEMBRA:'bl-green'}
-    const lps = await db.laboresPotrero.where('potreroId').equals(id).reverse().sortBy('fecha')
+    // Consulta defensiva: comparación con == para tolerar potreroId guardado como string o número
+    const todosLps = await db.laboresPotrero.toArray()
+    const lps = todosLps
+      .filter(l => l.potreroId == id)   // == tolera "3" === 3
+      .sort((a, b) => (b.fecha||0) - (a.fecha||0))
     const btnAdd = `<button class="btn btn-b btn-sm mb12" onclick="openNuevaLaborPotrero(${id})">+ Registrar labor</button>`
+
+    // Si Dexie está vacío para este potrero, recuperar desde Firebase automáticamente
+    if (!lps.length) {
+      try {
+        const snap = await fsdb.collection('laboresPotrero').where('potreroId','==',id).get()
+        const snapStr = await fsdb.collection('laboresPotrero').where('potreroId','==',String(id)).get()
+        const vistos = new Set()
+        for (const doc of [...snap.docs, ...snapStr.docs]) {
+          if (vistos.has(doc.id)) continue
+          vistos.add(doc.id)
+          const d = doc.data()
+          const localId = parseInt(doc.id)
+          if (isNaN(localId)) continue
+          const {_id, _ts, ...clean} = d
+          const exists = await db.laboresPotrero.get(localId)
+          if (!exists) await db.laboresPotrero.put({...clean, potreroId: id, id: localId})
+          lps.push({...clean, potreroId: id, id: localId})
+        }
+        lps.sort((a,b) => (b.fecha||0) - (a.fecha||0))
+      } catch(e) { console.warn('Recuperación Firebase labores:', e.message) }
+    }
+
     if (!lps.length) {
       body = btnAdd + '<div class="empty"><div class="eico">🛠</div><p>Sin labores registradas</p></div>'
     } else {
-      // Chips de filtro — scoped por potrero para evitar que persista entre potreros
+      // Filtro sin persistencia entre potreros — se lee del estado de navegación actual
       if (!window._lpFiltros) window._lpFiltros = {}
+      // Resetear si venimos de otro potrero
+      if (window._lpFiltrosPotrero !== id) {
+        window._lpFiltros[id] = 'TODAS'
+        window._lpFiltrosPotrero = id
+      }
       let filtroActual = window._lpFiltros[id] || 'TODAS'
-      // Si el filtro guardado ya no existe en este potrero, resetear a TODAS
       const tiposPresentes = Object.keys(TIPOS_LP).filter(t => lps.some(l => l.tipo === t))
+      // Si el tipo filtrado no existe en este potrero, resetear a TODAS
       if (filtroActual !== 'TODAS' && !tiposPresentes.includes(filtroActual)) {
         filtroActual = 'TODAS'
         window._lpFiltros[id] = 'TODAS'
@@ -4954,14 +4985,14 @@ async function pgPotreroFicha({id}) {
       const chips = ['TODAS', ...tiposPresentes].map(t => {
         const label = t === 'TODAS' ? '📋 Todas' : TIPOS_LP[t]
         const activo = filtroActual === t
-        return `<button onclick="window._lpFiltros=window._lpFiltros||{};window._lpFiltros[${id}]='${t}';go('potrero-ficha',{id:${id}})"
+        return `<button onclick="if(!window._lpFiltros)window._lpFiltros={};window._lpFiltros[${id}]='${t}';window._lpFiltrosPotrero=${id};go('potrero-ficha',{id:${id}})"
           style="flex-shrink:0;border:none;border-radius:20px;padding:6px 14px;font-size:.78rem;font-weight:700;cursor:pointer;
           background:${activo?'#1565C0':'#e8e8e8'};color:${activo?'white':'#555'};
           box-shadow:${activo?'0 2px 8px rgba(21,101,192,.35)':'none'}">${label}</button>`
       }).join('')
       const filtroBar = `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:4px;scrollbar-width:none;-webkit-overflow-scrolling:touch">${chips}</div>`
 
-      // Filtrar y ordenar cronológicamente (más reciente primero)
+      // Filtrar — ya vienen ordenados cronológicamente (más reciente primero)
       const filtrados = filtroActual === 'TODAS' ? lps : lps.filter(l => l.tipo === filtroActual)
 
       const filas = filtrados.map(l => {
@@ -5212,6 +5243,36 @@ async function saveEditarLaborPotrero(laborId, potreroId) {
   showToast('Labor actualizada ✓', 'ok')
   setTab('pf','labores')
   go('potrero-ficha', {id: potreroId})
+}
+
+async function recuperarLaboresFirebase(potreroId) {
+  showToast('Buscando en Firebase…','info',3000)
+  try {
+    const snap1 = await fsdb.collection('laboresPotrero').get()
+    let recuperados = 0
+    for (const doc of snap1.docs) {
+      const d = doc.data()
+      const localId = parseInt(doc.id)
+      if (isNaN(localId)) continue
+      const {_id, _ts, ...clean} = d
+      const pid = clean.potreroId
+      if (pid != potreroId && String(pid) !== String(potreroId)) continue
+      const exists = await db.laboresPotrero.get(localId)
+      if (!exists) {
+        await db.laboresPotrero.put({...clean, potreroId: parseInt(potreroId), id: localId})
+        recuperados++
+      }
+    }
+    if (recuperados > 0) {
+      showToast(`${recuperados} labor${recuperados>1?'es':''} recuperada${recuperados>1?'s':''}  ✓`, 'ok')
+    } else {
+      showToast('No se encontraron registros en Firebase para este potrero','info', 5000)
+    }
+    setTab('pf','labores')
+    go('potrero-ficha', {id: potreroId})
+  } catch(e) {
+    showToast('Error al consultar Firebase: ' + e.message, 'err', 5000)
+  }
 }
 
 async function eliminarLaborPotrero(laborId, potreroId) {
