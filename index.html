@@ -431,7 +431,7 @@ function initFirebaseSync() {
 
 // ─── Push all local data to Firebase (first sync) ─
 async function pushAllToFirebase(showAlert=false) {
-  const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero']
+  const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones']
   showSyncStatus('sync')
   let total=0,errors=0
   for(const t of tables){
@@ -1994,7 +1994,7 @@ async function saveLaborSeleccionados() {
       const lid = await fsAdd('labores', {
         animalId, fecha,
         tipo: tipoLabel,
-        obs: obsTexto || undefined,
+        obs: obsTexto || null,
         registradoPor: USER?.nombre||'—',
         registradoEn: Date.now()
       })
@@ -3930,7 +3930,7 @@ async function saveLaborLoteFicha() {
     for (const animalId of ids) {
       const lid = await fsAdd('labores', {
         animalId, fecha, tipo: tipoLabel,
-        obs: obsTexto || undefined,
+        obs: obsTexto || null,
         registradoPor: USER?.nombre||'—',
         registradoEn: Date.now()
       })
@@ -5152,7 +5152,7 @@ async function saveNuevaLaborPotrero(potreroId) {
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
 
   // Construir objeto sin campos vacíos (evita conflictos con Dexie/IndexedDB)
-  const payload = { potreroId, tipo, fecha, jornales }
+  const payload = { potreroId: parseInt(potreroId), tipo, fecha, jornales }
   if (fechaFin) payload.fechaFin = fechaFin
   if (productos) payload.productos = productos
   if (obs) payload.observaciones = obs
@@ -5958,7 +5958,7 @@ async function importarTodo(input) {
         const desc       = String(getCol(row,'Descripción / Obs.','Descripcion','descripcion','Obs') || '').trim()
         const proc       = String(getCol(row,'Procedencia','procedencia','Origen') || '').trim()
         const loteNombre = String(getCol(row,'Nombre del Lote','Lote','lote') || '').trim().toLowerCase()
-        const loteId     = loteNombre ? (loteMap[loteNombre] || undefined) : undefined
+        const loteId     = loteNombre ? (loteMap[loteNombre] || null) : null
 
         const id = await fsAdd('animales', {
           arete, nombre, categoria:cat, raza, color, pesoInicial:pesoIni,
@@ -6235,7 +6235,7 @@ async function importarBackup(input){
   if(!confirm('⚠️ Esto borrará TODOS los datos actuales. ¿Continuar?')){input.value='';return}
   try{
     const d=JSON.parse(await file.text())
-    await db.transaction('rw',[db.animales,db.pesajes,db.labores,db.potreros,db.lotes,db.ciclos,db.lluvias,db.usuarios,db.config,db.laboresPotrero],async()=>{
+    await db.transaction('rw',[db.animales,db.pesajes,db.labores,db.potreros,db.lotes,db.ciclos,db.lluvias,db.usuarios,db.config,db.laboresPotrero,db.rotaciones],async()=>{
       await db.animales.clear();        await db.animales.bulkAdd(d.animales||[])
       await db.pesajes.clear();         await db.pesajes.bulkAdd(d.pesajes||[])
       await db.labores.clear();         await db.labores.bulkAdd(d.labores||[])
