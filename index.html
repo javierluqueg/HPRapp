@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-013'
+const APP_VERSION = '20260526-015'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -5784,6 +5784,7 @@ async function pgConfig() {
       <p class="sm gray mb10">Sube todos tus datos locales a Firebase para que el equipo pueda acceder desde cualquier dispositivo.</p>
       <button class="btn btn-g mb8" onclick="subirAFirebase()">⬆ Subir TODO a Firebase</button>
       <button class="btn btn-gray btn-sm" onclick="probarFirebase()">🔍 Probar conexión</button>
+      <button class="btn btn-gray btn-sm mt8" onclick="diagnosticoFirestore()">📊 Diagnóstico Firestore</button>
     </div>
 
     <div class="card mb10">
@@ -6007,6 +6008,20 @@ async function subirAFirebase(){
   const r=await pushAllToFirebase(true)
   btn.textContent='✅ '+r.total+' registros subidos'
   setTimeout(()=>{ btn.disabled=false; btn.textContent='⬆ Subir TODO a Firebase' },5000)
+}
+
+async function diagnosticoFirestore(){
+  showToast('Consultando Firestore...','ok',3000)
+  try {
+    const tables=['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+    const results=[]
+    for(const t of tables){
+      const snap=await fsdb.collection(t).get()
+      if(!snap.empty) results.push(t+': '+snap.size)
+    }
+    const msg = results.length ? results.join(' | ') : 'Firestore vacío'
+    alert('📊 Firestore:\n\n'+msg+'\n\nDexie local:\nAnimales: '+(await db.animales.count()))
+  } catch(e){ alert('Error: '+e.message) }
 }
 
 async function probarFirebase(){
@@ -6975,54 +6990,51 @@ async function ejecutarResetear() {
     _resetSnapshot = {}
     for (const t of tables) _resetSnapshot[t] = await db[t].toArray()
 
-    // 2. Detener listeners temporalmente
+    // 2. Detener listeners
     _syncActive = false
     _unsubscribers.forEach(u => u())
     _unsubscribers = []
 
-    // 3. Borrar Dexie local (instantáneo)
+    // 3. Limpiar Dexie local
     for (const t of tables) await db[t].clear()
 
-    // 4. Marcar timestamp de reset — se guarda en Firestore para que TODOS los dispositivos lo respeten
+    // 4. Mostrar pantalla de progreso
+    _seg['reset_step'] = 'borrando'
+    go('config')
+
+    // 5. Borrar Firestore SINCRONO — paralelo por tabla, garantizado antes de continuar
+    let totalBorrados = 0
+    const borrarTabla = async (t) => {
+      try {
+        const snap = await fsdb.collection(t).get()
+        if (snap.empty) return
+        for (let i = 0; i < snap.docs.length; i += 400) {
+          const batch = fsdb.batch()
+          snap.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref))
+          await batch.commit()
+          totalBorrados += Math.min(400, snap.docs.length - i)
+        }
+      } catch(e) { console.warn('Reset Firestore:', t, e.message) }
+    }
+    await Promise.all(tables.map(t => borrarTabla(t)))
+
+    // 6. Guardar reset_ts en Firestore y Dexie para que otros dispositivos lo detecten
     _resetTs = Date.now()
     localStorage.setItem('hpr_reset_ts', String(_resetTs))
+    localStorage.setItem('hpr_reset_applied', String(_resetTs))
     try {
       await fsdb.collection('config').doc('reset_ts').set({clave:'reset_ts', valor:String(_resetTs), _ts:_resetTs})
-      // Guardar también en Dexie local para que bootstrap lo lea sin red
       await setCfg('reset_ts', String(_resetTs))
-      localStorage.setItem('hpr_reset_applied', String(_resetTs))
-    } catch(e) { console.warn('reset_ts Firestore:', e.message) }
+    } catch(e) {}
 
-    // 5. Reactivar sync DE INMEDIATO — docs viejos serán filtrados por _resetTs
+    // 7. Reactivar sync — Firestore ya está limpio
     _syncActive = true
     initFirebaseSync()
 
-    // 6. Mostrar éxito al instante
+    // 8. Mostrar éxito
     _seg['reset_step'] = 'hecho'
     go('config')
-    showToast('Datos borrados ✅', 'ok', 3000)
-
-    // 7. Limpiar Firestore en segundo plano (no bloquea UI ni sync)
-    ;(async () => {
-      const borrarTabla = async (t) => {
-        try {
-          const snap = await fsdb.collection(t).get()
-          if (snap.empty) return
-          const viejos = snap.docs.filter(d => (d.data()._ts || 0) < _resetTs)
-          if (!viejos.length) return
-          for (let i = 0; i < viejos.length; i += 400) {
-            const batch = fsdb.batch()
-            viejos.slice(i, i + 400).forEach(doc => batch.delete(doc.ref))
-            await batch.commit()
-          }
-        } catch(e) { console.warn('Reset bg:', t, e.message) }
-      }
-      await Promise.all(tables.map(t => borrarTabla(t)))
-      // Limpiar el filtro — Firestore ya no tiene docs viejos
-      _resetTs = 0
-      localStorage.removeItem('hpr_reset_ts')
-      showToast('Nube limpiada ✅', 'ok', 2000)
-    })()
+    showToast('✅ Firestore y datos locales borrados completamente', 'ok', 5000)
 
   } catch(e) {
     _syncActive = true
@@ -7030,7 +7042,6 @@ async function ejecutarResetear() {
     showToast('Error al resetear: ' + e.message, 'err', 5000)
   }
 }
-
 async function deshacerResetear() {
   if (!_resetSnapshot) { showToast('No hay datos para restaurar','err'); return }
   try {
