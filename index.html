@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
 <link rel="manifest" id="pwaManifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-touch-fullscreen" content="yes">
@@ -367,7 +370,7 @@ async function setCfgSync(k, v) {
 }
 
 // ─── Real-time listeners ──────────────────────────
-const SYNC_TABLES = ['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones']
+const SYNC_TABLES = ['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones','lluvias']
 let _unsubscribers = []
 let _suppressRefreshUntil = 0  // Evitar re-render por writes propios
 
