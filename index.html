@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-005'
+const APP_VERSION = '20260526-007'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6837,30 +6837,29 @@ async function migrarNombresLote(){
 async function bootstrapFromFirebase(){
   try {
     // ── PRIMERO: leer reset_ts de Firestore y limpiar Dexie local ──
+    const _dataTables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
     try {
       const resetDoc = await fsdb.collection('config').doc('reset_ts').get()
       if (resetDoc.exists) {
         const serverTs = parseInt(resetDoc.data().valor || '0') || 0
-        if (serverTs > _resetTs) {
+        const localApplied = parseInt(localStorage.getItem('hpr_reset_applied') || '0') || 0
+        showToast('🔍 reset_ts servidor: ' + serverTs + ' | aplicado: ' + localApplied, 'ok', 8000)
+        if (serverTs > 0 && serverTs !== localApplied) {
+          showToast('🗑 Aplicando reset en este dispositivo...', 'ok', 5000)
           _resetTs = serverTs
           localStorage.setItem('hpr_reset_ts', String(_resetTs))
-        }
-      }
-    } catch(e) {}
-
-    // Si hay un reset_ts activo, limpiar registros viejos del Dexie local
-    // (datos de sesiones anteriores que quedaron en el dispositivo)
-    if (_resetTs > 0) {
-      const _cleanTables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
-      for (const t of _cleanTables) {
-        try {
-          const rows = await db[t].toArray()
-          for (const row of rows) {
-            if ((row._ts || 0) < _resetTs) await db[t].delete(row.id)
+          for (const t of _dataTables) {
+            try { await db[t].clear() } catch(e) {}
           }
-        } catch(e) {}
+          localStorage.setItem('hpr_reset_applied', String(serverTs))
+          showToast('✅ Dexie limpiado', 'ok', 5000)
+        } else {
+          showToast('ℹ️ Sin reset pendiente', 'ok', 5000)
+        }
+      } else {
+        showToast('⚠️ No hay reset_ts en Firestore', 'err', 8000)
       }
-    }
+    } catch(e) { showToast('❌ Error reset_ts: ' + e.message, 'err', 8000) }
 
     // Pull ALL collections from Firebase to local Dexie
     const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones','lluvias']
