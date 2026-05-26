@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-004'
+const APP_VERSION = '20260526-005'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6836,7 +6836,7 @@ async function migrarNombresLote(){
 }
 async function bootstrapFromFirebase(){
   try {
-    // ── PRIMERO: leer reset_ts de Firestore para filtrar docs viejos ──
+    // ── PRIMERO: leer reset_ts de Firestore y limpiar Dexie local ──
     try {
       const resetDoc = await fsdb.collection('config').doc('reset_ts').get()
       if (resetDoc.exists) {
@@ -6847,6 +6847,20 @@ async function bootstrapFromFirebase(){
         }
       }
     } catch(e) {}
+
+    // Si hay un reset_ts activo, limpiar registros viejos del Dexie local
+    // (datos de sesiones anteriores que quedaron en el dispositivo)
+    if (_resetTs > 0) {
+      const _cleanTables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+      for (const t of _cleanTables) {
+        try {
+          const rows = await db[t].toArray()
+          for (const row of rows) {
+            if ((row._ts || 0) < _resetTs) await db[t].delete(row.id)
+          }
+        } catch(e) {}
+      }
+    }
 
     // Pull ALL collections from Firebase to local Dexie
     const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones','lluvias']
