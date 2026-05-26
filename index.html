@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-008'
+const APP_VERSION = '20260526-009'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -391,10 +391,26 @@ function scheduleRefresh() {
   }, 2000)  // 2s de delay para agrupar múltiples cambios de otros dispositivos
 }
 
-function initFirebaseSync() {
+async function initFirebaseSync() {
   // Disconnect previous listeners
   _unsubscribers.forEach(u => u())
   _unsubscribers = []
+
+  // ── ANTES de arrancar listeners: verificar reset pendiente ──
+  // Lee reset_ts desde Dexie config (no necesita red) y limpia si corresponde
+  try {
+    const localApplied = parseInt(localStorage.getItem('hpr_reset_applied') || '0') || 0
+    const cfgTs = await getCfg('reset_ts')
+    const dexieResetTs = parseInt(cfgTs || '0') || 0
+    if (dexieResetTs > _resetTs) _resetTs = dexieResetTs
+    if (_resetTs > 0 && _resetTs !== localApplied) {
+      const _rt = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+      await Promise.all(_rt.map(t => db[t].clear().catch(()=>{})))
+      localStorage.setItem('hpr_reset_applied', String(_resetTs))
+      localStorage.setItem('hpr_reset_ts', String(_resetTs))
+    }
+  } catch(e) {}
+  // ── Ahora _resetTs está correctamente seteado antes de arrancar listeners ──
 
   SYNC_TABLES.forEach(table => {
     const unsub = fsdb.collection(table)
@@ -404,7 +420,6 @@ function initFirebaseSync() {
         for (const change of snap.docChanges()) {
           const localId = parseInt(change.doc.id)
           if (isNaN(localId)) continue
-          // Sincronizar eliminaciones de otros dispositivos
           if (change.type === 'removed') {
             try {
               const exists = await db[table].get(localId)
@@ -439,19 +454,18 @@ function initFirebaseSync() {
       if (change.type === 'removed') continue
       const data = change.doc.data()
       if (data.clave) await setCfg(data.clave, data.valor)
-      // Propagar reset_ts a este dispositivo en tiempo real
       if (data.clave === 'reset_ts' && data.valor) {
         const serverResetTs = parseInt(data.valor) || 0
         const localApplied = parseInt(localStorage.getItem('hpr_reset_applied') || '0') || 0
         if (serverResetTs > 0 && serverResetTs !== localApplied) {
           _resetTs = serverResetTs
           localStorage.setItem('hpr_reset_ts', String(_resetTs))
-          // Limpiar TODO el Dexie local — no row-by-row, directamente clear()
-          const tables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
-          for (const t of tables) { try { await db[t].clear() } catch(e) {} }
+          const _rt = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+          await Promise.all(_rt.map(t => db[t].clear().catch(()=>{})))
           localStorage.setItem('hpr_reset_applied', String(serverResetTs))
-          showToast('🔄 Datos actualizados desde otro dispositivo', 'ok', 4000)
-          scheduleRefresh()
+          showToast('🔄 Sincronizando datos nuevos...', 'ok', 3000)
+          // Reiniciar listeners para obtener snapshot fresco con _resetTs activo
+          setTimeout(() => initFirebaseSync(), 500)
         }
       }
     }
