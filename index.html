@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-011'
+const APP_VERSION = '20260526-012'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6936,22 +6936,30 @@ function pwaBannerDismiss() {
   if (b) b.style.display = 'none'
 }
 
-// ── Auto-actualización silenciosa ──────────────────
+// ── Auto-actualización via GitHub API ──────────────
 async function checkAppVersion() {
   try {
-    const r = await fetch(location.pathname + '?_v=' + Date.now(), {
+    // Usa la API de GitHub para obtener el último commit — no le afecta el caché del CDN
+    const r = await fetch('https://api.github.com/repos/javierluqueg/HPRapp/commits/main', {
       cache: 'no-store',
-      headers: {'Cache-Control':'no-cache','Pragma':'no-cache'}
+      headers: {'Accept': 'application/vnd.github.v3+json'}
     })
     if (!r.ok) return
-    const html = await r.text()
-    const m = html.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/)
-    if (m && m[1] !== APP_VERSION) {
-      console.log('Nueva versión detectada:', m[1], '— recargando...')
-      // Usar href con cache-bust en vez de reload(true) — más confiable en iOS
-      window.location.href = location.pathname + '?_v=' + Date.now()
+    const data = await r.json()
+    const latestSha = (data.sha || '').substring(0, 10)
+    if (!latestSha) return
+    const storedSha = localStorage.getItem('hpr_commit_sha')
+    if (!storedSha) {
+      // Primera vez — guardar SHA sin recargar
+      localStorage.setItem('hpr_commit_sha', latestSha)
+      return
     }
-  } catch(e) { /* offline o error — no hacer nada */ }
+    if (storedSha !== latestSha) {
+      // Hay versión nueva — recargar con cache-bust
+      localStorage.setItem('hpr_commit_sha', latestSha)
+      window.location.href = location.pathname + '?_reload=' + Date.now()
+    }
+  } catch(e) { /* offline o rate limit — no hacer nada */ }
 }
 
 // ── Resetear todos los datos ──────────────────────
