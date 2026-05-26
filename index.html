@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-012'
+const APP_VERSION = '20260526-013'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6889,7 +6889,8 @@ async function bootstrapFromFirebase(){
         const d=doc.data()
         const localId=parseInt(doc.id)
         if(isNaN(localId)) continue
-        if(_resetTs&&(d._ts||0)<_resetTs) continue
+        // No filtrar usuarios por reset_ts — los usuarios no se resetean
+        if(t!=='usuarios' && _resetTs&&(d._ts||0)<_resetTs) continue
         const {_id,_ts,...clean}=d
         try{
           const exists=await db[t].get(localId)
@@ -7065,7 +7066,17 @@ async function init(){
       console.warn('Bootstrap omitido:', e.message)
     }
     await migrarNombresLote()
-    const ok=await getCfg('setup_ok')
+    let ok=await getCfg('setup_ok')
+    if(!ok){
+      // Fallback: leer setup_ok directamente de Firestore si Dexie está vacío
+      try{
+        const doc=await fsdb.collection('config').doc('setup_ok').get()
+        if(doc.exists&&doc.data().valor==='true'){
+          ok='true'
+          await setCfg('setup_ok','true')
+        }
+      }catch(e){}
+    }
     await go(ok?'login':'setup')
     // Verificar actualizaciones en segundo plano (no bloquea el inicio)
     setTimeout(checkAppVersion, 3000)
