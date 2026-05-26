@@ -1266,7 +1266,10 @@ async function pgLluvias() {
   // ── Filtrar registros según modo ──
   let filtradas = []
   let titulo_periodo = ''
-  if (modo === 'mes') {
+  if (modo === 'historial') {
+    filtradas = todas
+    titulo_periodo = 'Historial completo'
+  } else if (modo === 'mes') {
     filtradas = todas.filter(l => {
       const d = new Date(l.fecha)
       return d.getFullYear() === selAnio && d.getMonth() === selMes
@@ -1290,9 +1293,10 @@ async function pgLluvias() {
 
   // ── Barra de selección de modo ──
   const segModo = `<div class="seg mb10">
-    <button class="${modo==='mes'?'on':''}"   onclick="_seg['llv_modo']='mes';go('lluvias')">Por mes</button>
-    <button class="${modo==='periodo'?'on':''}" onclick="_seg['llv_modo']='periodo';go('lluvias')">Período</button>
-    <button class="${modo==='anio'?'on':''}"   onclick="_seg['llv_modo']='anio';go('lluvias')">Por año</button>
+    <button class="${modo==='mes'?'on':''}"       onclick="_seg['llv_modo']='mes';go('lluvias')">Por mes</button>
+    <button class="${modo==='periodo'?'on':''}"   onclick="_seg['llv_modo']='periodo';go('lluvias')">Período</button>
+    <button class="${modo==='anio'?'on':''}"      onclick="_seg['llv_modo']='anio';go('lluvias')">Por año</button>
+    <button class="${modo==='historial'?'on':''}" onclick="_seg['llv_modo']='historial';go('lluvias')">Historial</button>
   </div>`
 
   // ── Selector según modo ──
@@ -1373,8 +1377,112 @@ async function pgLluvias() {
       }).join('')
     : '<p class="xs gray">Sin registros en este período</p>'
 
+  // ── Historial mes × año ──
+  let historialHTML = ''
+  if (modo === 'historial') {
+    const aniosList = [...new Set(todas.map(l => new Date(l.fecha).getFullYear()))].sort((a,b)=>a-b)
+    // Construir matriz [mes][anio] = mm
+    const mat = {}
+    const totAnio = {}
+    const totMes = Array(12).fill(0)
+    todas.forEach(l => {
+      const d = new Date(l.fecha)
+      const a = d.getFullYear(), m = d.getMonth()
+      if (!mat[m]) mat[m] = {}
+      mat[m][a] = (mat[m][a] || 0) + l.mm
+      totAnio[a] = (totAnio[a] || 0) + l.mm
+      totMes[m] += l.mm
+    })
+    const globalMax = Math.max(...Object.values(mat).flatMap(r=>Object.values(r)), 1)
+    const cellBg = mm => {
+      if (!mm) return '#f5f5f5'
+      const pct = mm / globalMax
+      if (pct < 0.2) return '#E3F2FD'
+      if (pct < 0.4) return '#90CAF9'
+      if (pct < 0.6) return '#42A5F5'
+      if (pct < 0.8) return '#1976D2'
+      return '#0D47A1'
+    }
+    const cellTxt = mm => {
+      if (!mm) return '#ccc'
+      const pct = mm / globalMax
+      return pct < 0.4 ? '#1a1a1a' : 'white'
+    }
+    const thStyle = 'padding:6px 4px;font-size:.68rem;font-weight:700;color:#555;text-align:center;white-space:nowrap'
+    const tdStyle = (mm) => `background:${cellBg(mm)};color:${cellTxt(mm)};padding:5px 3px;text-align:center;font-size:.7rem;font-weight:${mm?'700':'400'};border-radius:4px`
+    const leyenda = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <span style="font-size:.68rem;color:#888">Intensidad:</span>
+      ${['Sin dato','Baja','Media-baja','Media','Alta','Muy alta'].map((lbl,i) => {
+        const colors = ['#f5f5f5','#E3F2FD','#90CAF9','#42A5F5','#1976D2','#0D47A1']
+        const txts   = ['#ccc','#1a1a1a','#1a1a1a','#1a1a1a','white','white']
+        return `<span style="background:${colors[i]};color:${txts[i]};padding:2px 7px;border-radius:10px;font-size:.65rem;font-weight:600">${lbl}</span>`
+      }).join('')}
+    </div>`
+    const totalGlobal = Object.values(totAnio).reduce((s,v)=>s+v,0)
+    const resumen = `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="flex:1;min-width:90px;text-align:center;background:#E3F2FD;border-radius:10px;padding:8px 4px">
+        <p style="font-size:1.2rem;font-weight:800;color:#1565C0">${totalGlobal.toFixed(0)}</p>
+        <p style="font-size:.68rem;color:#666">mm totales</p>
+      </div>
+      <div style="flex:1;min-width:90px;text-align:center;background:#E8F5E9;border-radius:10px;padding:8px 4px">
+        <p style="font-size:1.2rem;font-weight:800;color:#388E3C">${todas.length}</p>
+        <p style="font-size:.68rem;color:#666">días con lluvia</p>
+      </div>
+      <div style="flex:1;min-width:90px;text-align:center;background:#FFF3E0;border-radius:10px;padding:8px 4px">
+        <p style="font-size:1.2rem;font-weight:800;color:#E65100">${aniosList.length}</p>
+        <p style="font-size:.68rem;color:#666">año${aniosList.length!==1?'s':''} registrado${aniosList.length!==1?'s':''}</p>
+      </div>
+    </div>`
+    const mesMaxIdx = totMes.indexOf(Math.max(...totMes))
+    const mesMinIdx = totMes.filter(m=>m>0).length ? totMes.map((v,i)=>v>0?{v,i}:null).filter(Boolean).reduce((mn,x)=>x.v<mn.v?x:mn).i : -1
+    const extremos = mesMaxIdx >= 0 ? `<div style="display:flex;gap:8px;margin-bottom:10px">
+      <div style="flex:1;background:#E3F2FD;border-radius:8px;padding:7px 10px">
+        <p style="font-size:.68rem;color:#888">☔ Mes más lluvioso</p>
+        <p style="font-weight:700;color:#1565C0;font-size:.9rem">${MESES[mesMaxIdx]} <span style="font-size:.75rem;font-weight:400">(${totMes[mesMaxIdx].toFixed(0)} mm)</span></p>
+      </div>
+      ${mesMinIdx>=0?`<div style="flex:1;background:#FFF8E1;border-radius:8px;padding:7px 10px">
+        <p style="font-size:.68rem;color:#888">☀️ Mes más seco</p>
+        <p style="font-weight:700;color:#E65100;font-size:.9rem">${MESES[mesMinIdx]} <span style="font-size:.75rem;font-weight:400">(${totMes[mesMinIdx].toFixed(0)} mm)</span></p>
+      </div>`:''}
+    </div>` : ''
+    const tabla = `<div style="overflow-x:auto">
+      <table style="border-collapse:separate;border-spacing:3px;width:100%;min-width:${60+aniosList.length*52}px">
+        <thead>
+          <tr>
+            <th style="${thStyle};text-align:left;min-width:56px">Mes</th>
+            ${aniosList.map(a=>`<th style="${thStyle}">${a}</th>`).join('')}
+            <th style="${thStyle};color:#388E3C">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${MESES.map((nom,m) => {
+            const rowMm = aniosList.map(a => (mat[m]&&mat[m][a]) ? mat[m][a] : 0)
+            const rowTot = rowMm.reduce((s,v)=>s+v,0)
+            return `<tr>
+              <td style="font-size:.72rem;font-weight:600;color:#333;padding:4px 2px;white-space:nowrap">${nom.slice(0,3)}</td>
+              ${rowMm.map(mm=>`<td style="${tdStyle(mm)}">${mm?mm.toFixed(0):'—'}</td>`).join('')}
+              <td style="font-size:.72rem;font-weight:700;color:${rowTot>0?'#1565C0':'#ccc'};text-align:center;padding:4px 2px">${rowTot?rowTot.toFixed(0):'—'}</td>
+            </tr>`
+          }).join('')}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td style="font-size:.7rem;font-weight:700;color:#388E3C;padding:6px 2px">Total</td>
+            ${aniosList.map(a=>`<td style="font-size:.72rem;font-weight:800;color:#388E3C;text-align:center;padding:4px 2px">${(totAnio[a]||0).toFixed(0)}</td>`).join('')}
+            <td style="font-size:.76rem;font-weight:800;color:#1B5E20;text-align:center;padding:4px 2px">${totalGlobal.toFixed(0)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>`
+    historialHTML = `<div class="card mb10">
+      <p class="bold sm mb8">📊 Historial de precipitaciones</p>
+      ${resumen}${extremos}${leyenda}${tabla}
+    </div>`
+  }
+
   return `
     ${segModo}
+    ${modo === 'historial' ? historialHTML : `
     ${selector}
     <div class="card mb10">
       <p class="bold sm mb2">${titulo_periodo}</p>
@@ -1401,7 +1509,8 @@ async function pgLluvias() {
     </div>
 
     <p class="sec">Registros (${filtradas.length})</p>
-    ${lista}`
+    ${lista}`}
+  `
 }
 
 async function eliminarLluvia(id) {
@@ -3010,7 +3119,7 @@ async function pgLotes() {
             <p style="font-size:.72rem;color:#888;margin-top:2px">${resumen}</p>
             ${catChips?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${catChips}</div>`:''}
           </div>
-          <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.65rem;flex-shrink:0">${pot?'En potrero':'Sin potrero'}</span>
+          <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.65rem;flex-shrink:0">${pot?'En '+pot.nombre:'Sin potrero'}</span>
         </div>
       </div>`
     }
@@ -3019,7 +3128,7 @@ async function pgLotes() {
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
             <p style="font-size:.9rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.nombre}</p>
-            <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.65rem;flex-shrink:0">${pot?'En potrero':'Sin potrero'}</span>
+            <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.65rem;flex-shrink:0">${pot?'En '+pot.nombre:'Sin potrero'}</span>
           </div>
           <p style="font-size:.72rem;color:#888;margin-top:3px">${resumen}</p>
           ${catChips?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${catChips}</div>`:''}
