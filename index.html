@@ -6085,25 +6085,51 @@ async function importarTodo(input) {
     }
 
     // ── LLUVIAS ────────────────────────────────────
+    // NOTA: La hoja tiene 2 filas de título antes de los encabezados reales (fila 3).
+    // Se usa {header:1, range:2} para leer en modo array desde fila 3,
+    // evitando que sheet_to_json use el título como clave de columna.
     const shLluv = wb.SheetNames.find(s => /LLUVIA/i.test(s))
     if (shLluv) {
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[shLluv], {raw:false, defval:''})
-        .filter(r => getCol(r,'Fecha (DD/MM/AAAA)','Fecha','fecha') && getCol(r,'Milímetros (mm)','mm','MM','Milimetros'))
-      let addedLl = 0
-      for (const row of rows) {
-        const fRaw = String(getCol(row,'Fecha (DD/MM/AAAA)','Fecha','fecha') || '').trim()
-        const mm   = parseFloat(String(getCol(row,'Milímetros (mm)','mm','MM','Milimetros') || '0').replace(',','.')) || 0
-        if (!fRaw || !mm) continue
-        const m = fRaw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
-        let fechaTs = Date.now()
+      const allRowsLl = XLSX.utils.sheet_to_json(wb.Sheets[shLluv], {header:1, range:2, raw:true, defval:''})
+      // allRowsLl[0] = fila de encabezados, allRowsLl[1+] = datos
+      // Columna 0 = Fecha, Columna 1 = mm, Columna 2 = Observación
+      const dataRowsLl = allRowsLl.slice(1).filter(r => r[0] && r[1])
+
+      // Convierte fecha: Date object (cellDates), serial Excel, o string
+      const parseFechaLluvia = (v) => {
+        if (!v) return null
+        if (v instanceof Date) {
+          // Date de cellDates:true — usar UTC para evitar desfase de zona horaria
+          return Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate())
+        }
+        const num = parseFloat(v)
+        if (!isNaN(num) && num > 40000 && num < 60000) {
+          return (num - 25569) * 86400000 // Serial Excel → timestamp JS
+        }
+        const s = String(v).trim()
+        // Formato DD/MM/AAAA o DD-MM-AAAA
+        const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
         if (m) {
           const y = m[3].length === 2 ? '20'+m[3] : m[3]
-          fechaTs = new Date(`${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T00:00:00`).getTime() || Date.now()
+          return Date.UTC(parseInt(y), parseInt(m[2])-1, parseInt(m[1]))
         }
-        await fsAdd('lluvias', {fecha:fechaTs, mm, obs: String(getCol(row,'Observación','Observacion','obs') || '').trim()})
+        const d = new Date(s); return isNaN(d.getTime()) ? null : d.getTime()
+      }
+
+      let addedLl = 0, dupLl = 0, errLl = 0
+      for (const row of dataRowsLl) {
+        const fechaTs = parseFechaLluvia(row[0])
+        const mm = parseFloat(String(row[1]).replace(',','.')) || 0
+        if (!fechaTs || !mm) { errLl++; continue }
+        const existe = await db.lluvias.where('fecha').equals(fechaTs).first()
+        if (existe) { dupLl++; continue }
+        const obsLl = String(row[2]||'').trim()
+        const recLl = {fecha:fechaTs, mm}
+        if (obsLl) recLl.obs = obsLl
+        await fsAdd('lluvias', recLl)
         addedLl++
       }
-      resumen.push(`🌧 Lluvias: ${addedLl} registros importados`)
+      resumen.push(`🌧 Lluvias: ${addedLl} registros importados${dupLl?' · '+dupLl+' ya existían':''}${errLl?' · '+errLl+' sin fecha válida':''}`)
     }
 
     if (!resumen.length) {
