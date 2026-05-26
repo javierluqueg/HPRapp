@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-002'
+const APP_VERSION = '20260526-003'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -439,6 +439,23 @@ function initFirebaseSync() {
       if (change.type === 'removed') continue
       const data = change.doc.data()
       if (data.clave) await setCfg(data.clave, data.valor)
+      // Propagar reset_ts a este dispositivo en tiempo real
+      if (data.clave === 'reset_ts' && data.valor) {
+        const serverResetTs = parseInt(data.valor) || 0
+        if (serverResetTs > _resetTs) {
+          _resetTs = serverResetTs
+          localStorage.setItem('hpr_reset_ts', String(_resetTs))
+          // Limpiar datos locales que son anteriores al reset del otro dispositivo
+          const tables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+          for (const t of tables) {
+            const rows = await db[t].toArray()
+            for (const row of rows) {
+              if ((row._ts || 0) < _resetTs) await db[t].delete(row.id)
+            }
+          }
+          scheduleRefresh()
+        }
+      }
     }
   })
   _unsubscribers.push(unsubCfg)
@@ -6842,6 +6859,14 @@ async function bootstrapFromFirebase(){
     for(const doc of cfgSnap.docs){
       const d=doc.data()
       if(d.clave) await setCfg(d.clave,d.valor)
+      // Sincronizar reset_ts a todos los dispositivos
+      if(d.clave === 'reset_ts' && d.valor) {
+        const serverResetTs = parseInt(d.valor) || 0
+        if(serverResetTs > _resetTs) {
+          _resetTs = serverResetTs
+          localStorage.setItem('hpr_reset_ts', String(_resetTs))
+        }
+      }
     }
   }catch(e){ console.warn('Bootstrap offline:',e.message) }
 }
@@ -6893,7 +6918,8 @@ async function checkAppVersion() {
     const m = html.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/)
     if (m && m[1] !== APP_VERSION) {
       console.log('Nueva versión detectada:', m[1], '— recargando...')
-      location.reload(true)
+      // Usar href con cache-bust en vez de reload(true) — más confiable en iOS
+      window.location.href = location.pathname + '?_v=' + Date.now()
     }
   } catch(e) { /* offline o error — no hacer nada */ }
 }
@@ -6918,9 +6944,12 @@ async function ejecutarResetear() {
     // 3. Borrar Dexie local (instantáneo)
     for (const t of tables) await db[t].clear()
 
-    // 4. Marcar timestamp de reset — persiste en localStorage para sobrevivir recargas
+    // 4. Marcar timestamp de reset — se guarda en Firestore para que TODOS los dispositivos lo respeten
     _resetTs = Date.now()
     localStorage.setItem('hpr_reset_ts', String(_resetTs))
+    try {
+      await fsdb.collection('config').doc('reset_ts').set({clave:'reset_ts', valor:String(_resetTs), _ts:_resetTs})
+    } catch(e) { console.warn('reset_ts Firestore:', e.message) }
 
     // 5. Reactivar sync DE INMEDIATO — docs viejos serán filtrados por _resetTs
     _syncActive = true
