@@ -6828,6 +6828,8 @@ async function bootstrapFromFirebase(){
         const d=doc.data()
         const localId=parseInt(doc.id)
         if(isNaN(localId)) continue
+        // Respetar filtro de reset — ignorar docs anteriores al último reseteo
+        if(_resetTs && (d._ts||0) < _resetTs) continue
         const {_id,_ts,...clean}=d
         try{
           const exists=await db[t].get(localId)
@@ -6898,7 +6900,7 @@ async function checkAppVersion() {
 
 // ── Resetear todos los datos ──────────────────────
 let _resetSnapshot = null  // Guarda copia para deshacer
-let _resetTs = 0           // Timestamp del último reset — filtra docs viejos en sync
+let _resetTs = parseInt(localStorage.getItem('hpr_reset_ts') || '0')  // Persiste entre recargas
 
 async function ejecutarResetear() {
   try {
@@ -6916,8 +6918,9 @@ async function ejecutarResetear() {
     // 3. Borrar Dexie local (instantáneo)
     for (const t of tables) await db[t].clear()
 
-    // 4. Marcar timestamp de reset — el listener ignorará docs con _ts anterior a este momento
+    // 4. Marcar timestamp de reset — persiste en localStorage para sobrevivir recargas
     _resetTs = Date.now()
+    localStorage.setItem('hpr_reset_ts', String(_resetTs))
 
     // 5. Reactivar sync DE INMEDIATO — docs viejos serán filtrados por _resetTs
     _syncActive = true
@@ -6944,6 +6947,9 @@ async function ejecutarResetear() {
         } catch(e) { console.warn('Reset bg:', t, e.message) }
       }
       await Promise.all(tables.map(t => borrarTabla(t)))
+      // Limpiar el filtro — Firestore ya no tiene docs viejos
+      _resetTs = 0
+      localStorage.removeItem('hpr_reset_ts')
       showToast('Nube limpiada ✅', 'ok', 2000)
     })()
 
