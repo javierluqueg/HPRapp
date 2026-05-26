@@ -165,6 +165,7 @@ button{cursor:pointer}
 .hpr-h{font-size:4rem;font-weight:900;color:#FF3D00;text-shadow:0 0 20px rgba(255,61,0,.5);font-family:'Arial Black',sans-serif}
 .hpr-p{font-size:4rem;font-weight:900;color:#FFD700;text-shadow:0 0 20px rgba(255,215,0,.5);font-family:'Arial Black',sans-serif}
 .hpr-r{font-size:4rem;font-weight:900;color:#29B6F6;text-shadow:0 0 20px rgba(41,182,246,.5);font-family:'Arial Black',sans-serif}
+@keyframes progress-anim{0%{width:0%;margin-left:0}50%{width:60%;margin-left:20%}100%{width:0%;margin-left:100%}}
 .hpr-app{font-size:1rem;color:rgba(255,255,255,.5);letter-spacing:.15em;text-transform:uppercase;margin-top:4px}
 .user-card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 18px;display:flex;align-items:center;gap:14px;cursor:pointer;margin-bottom:8px;width:100%;max-width:360px;-webkit-tap-highlight-color:transparent}
 .user-card:active{background:rgba(255,215,0,.1)}
@@ -343,7 +344,11 @@ async function fsAdd(table, obj) {
   const ts = Date.now()
   const id = await db[table].add({...obj, _ts: ts})
   _suppressRefreshUntil = Date.now() + 4000  // Suprimir refresh por 4s
-  fsdb.collection(table).doc(String(id)).set({...obj, _id: id, _ts: ts})
+  // Sanitizar: Firestore no acepta undefined — omitir campos con ese valor
+  const clean = Object.fromEntries(
+    Object.entries({...obj, _id: id, _ts: ts}).filter(([, v]) => v !== undefined)
+  )
+  fsdb.collection(table).doc(String(id)).set(clean)
     .then(()=>showSyncStatus('ok'))
     .catch(e=>{ showSyncStatus('off'); console.warn('fsAdd offline:', e.message) })
   return id
@@ -397,10 +402,19 @@ function initFirebaseSync() {
         if (!_syncActive) return
         let changed = false
         for (const change of snap.docChanges()) {
-          if (change.type === 'removed') continue
-          const data = change.doc.data()
           const localId = parseInt(change.doc.id)
           if (isNaN(localId)) continue
+          // Sincronizar eliminaciones de otros dispositivos
+          if (change.type === 'removed') {
+            try {
+              const exists = await db[table].get(localId)
+              if (exists) { await db[table].delete(localId); changed = true }
+            } catch(e) {}
+            continue
+          }
+          const data = change.doc.data()
+          // Ignorar documentos anteriores al último reset
+          if (_resetTs && (data._ts || 0) < _resetTs) continue
           try {
             const local = await db[table].get(localId)
             const {_id, _ts, ...clean} = data
@@ -435,7 +449,7 @@ function initFirebaseSync() {
 
 // ─── Push all local data to Firebase (first sync) ─
 async function pushAllToFirebase(showAlert=false) {
-  const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones']
+  const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones','lluvias']
   showSyncStatus('sync')
   let total=0,errors=0
   for(const t of tables){
@@ -1566,7 +1580,8 @@ async function saveRegistrarLluvia() {
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
   let lid
   try {
-    lid = await fsAdd('lluvias', {fecha, mm:mmVal, obs:obs||undefined})
+    const obsLluvia = obs ? obs.trim() : undefined
+    lid = await fsAdd('lluvias', {fecha, mm:mmVal, ...(obsLluvia && {obs:obsLluvia})})
   } catch(e) {
     showToast('Error al guardar','err', 4000)
     if (btn) { btn.disabled=false; btn.textContent='✓ Guardar' }
@@ -4446,13 +4461,28 @@ async function eliminarPotrero(id){
 // ═══════════════════════════════════════════════════
 
 async function renderRotacionesList() {
-  const rots = await db.rotaciones.where('activo').equals(1).toArray()
-  if (!rots.length) return `<div class="empty"><div class="eico">🔄</div><p>Sin rotaciones creadas</p>
+  const todasRots = await db.rotaciones.where('activo').equals(1).toArray()
+  if (!todasRots.length) return `<div class="empty"><div class="eico">🔄</div><p>Sin rotaciones creadas</p>
     <button class="btn btn-g mt12" style="max-width:240px;margin:12px auto 0" onclick="go('rotacion-nueva')">+ Nueva rotación</button></div>`
+
+  const _qRot = (_seg['rot_q']||'').toLowerCase().trim()
+  const rots = _qRot
+    ? todasRots.filter(r => r.nombre.toLowerCase().includes(_qRot) || (r.descripcion||'').toLowerCase().includes(_qRot))
+    : todasRots
+
+  const buscador = `<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+    <input id="rot-search" class="inp" placeholder="🔍 Buscar rotación…" value="${escH(_seg['rot_q']||'')}"
+      style="flex:1;padding:9px 12px;font-size:.85rem"
+      oninput="_seg['rot_q']=this.value;renderRotacionesList().then(h=>{const c=document.getElementById('rot-list');if(c)c.innerHTML=h||'<p class=\'xs gray\'>Sin resultados</p>'})">
+    ${_qRot?`<button class="btn btn-gray btn-sm" onclick="_seg['rot_q']='';go('rotaciones')">✕</button>`:''}
+  </div>
+  <div id="rot-list">`
+
   const pots = await db.potreros.where('activo').equals(1).toArray()
   const potMap = Object.fromEntries(pots.map(p=>[p.id,p]))
   const lotes = await db.lotes.where('activo').equals(1).toArray()
-  return rots.map(r => {
+
+  const lista = rots.length ? rots.map(r => {
     const pids = r.potreroIds || []
     const lotesRot = lotes.filter(l=>l.rotacionId===r.id)
     const chips = pids.map((pid,i) => {
@@ -4473,7 +4503,9 @@ async function renderRotacionesList() {
       + '<p class="bold" style="color:#388E3C">'+pids.length+'</p><p class="xs gray">potreros</p>'
       + (lotesRot.length?'<p class="bold mt8" style="color:#1565C0">'+lotesRot.length+'</p><p class="xs gray">lotes</p>':'')
       + '</div></div></div>'
-  }).join('')
+  }).join('') : '<p class="xs gray" style="text-align:center;padding:16px">Sin resultados para "'+escH(_qRot)+'"</p>'
+
+  return buscador + lista + '</div>'
 }
 
 async function pgRotacionNueva() {
@@ -5664,6 +5696,7 @@ async function pgConfig() {
     <div class="tab${tab==='usuarios'?' on':''}" style="${cfgTabStyle('usuarios')}" onclick="setTab('cfg','usuarios');go('config')">Usuarios</div>
     <div class="tab${tab==='backup'?' on':''}" style="${cfgTabStyle('backup')}" onclick="setTab('cfg','backup');go('config')">Backup</div>
     <div class="tab${tab==='excel'?' on':''}" style="${cfgTabStyle('excel')}" onclick="setTab('cfg','excel');go('config')">Excel</div>
+    <div class="tab${tab==='resetear'?' on':''}" style="${cfgTabStyle('resetear')}" onclick="setTab('cfg','resetear');go('config')">🗑 Resetear</div>
   </div>`
 
   if(tab==='finca'){
@@ -5723,17 +5756,100 @@ async function pgConfig() {
       <button class="btn btn-g mb8" onclick="subirAFirebase()">⬆ Subir TODO a Firebase</button>
       <button class="btn btn-gray btn-sm" onclick="probarFirebase()">🔍 Probar conexión</button>
     </div>
+
     <div class="card mb10">
-      <p class="bold mb8">📤 Exportar copia de seguridad</p>
-      <p class="sm gray mb12">Descarga todos los datos en un archivo JSON. Guárdalo en Google Drive, WhatsApp o correo.</p>
-      <button class="btn btn-g" onclick="exportarBackup()">Descargar backup JSON</button>
+      <p class="bold mb8">📤 Exportar / Guardar copia de seguridad</p>
+      <p class="sm gray mb10">Guarda en tu dispositivo, carpeta, WhatsApp, correo o Drive. En celular se abre el menú de compartir.</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <button class="btn btn-g" onclick="compartirArchivo('json')">
+          <span style="font-size:1.1rem">📋</span><br>
+          <span style="font-size:.78rem;font-weight:700">JSON</span><br>
+          <span style="font-size:.68rem;opacity:.85">Backup completo</span>
+        </button>
+        <button class="btn btn-g" onclick="compartirArchivo('excel')">
+          <span style="font-size:1.1rem">📊</span><br>
+          <span style="font-size:.78rem;font-weight:700">Excel</span><br>
+          <span style="font-size:.68rem;opacity:.85">Hojas de datos</span>
+        </button>
+        <button class="btn btn-g" onclick="compartirArchivo('pdf')">
+          <span style="font-size:1.1rem">📄</span><br>
+          <span style="font-size:.78rem;font-weight:700">PDF</span><br>
+          <span style="font-size:.68rem;opacity:.85">Resumen imprimible</span>
+        </button>
+        <button class="btn" style="background:#25D366;color:white" onclick="compartirWhatsApp()">
+          <span style="font-size:1.1rem">💬</span><br>
+          <span style="font-size:.78rem;font-weight:700">WhatsApp</span><br>
+          <span style="font-size:.68rem;opacity:.85">Resumen de texto</span>
+        </button>
+      </div>
+      <p class="xs gray">💡 JSON recomendado para restauración completa · Excel para compartir con terceros · PDF para imprimir</p>
     </div>
+
     <div class="card">
       <p class="bold mb8">📥 Restaurar copia de seguridad</p>
-      <p class="sm gray mb12"><span class="red bold">⚠️ Esto borrará todos los datos actuales.</span> Solo para restaurar un backup previo.</p>
+      <p class="sm gray mb12"><span class="red bold">⚠️ Esto borrará todos los datos actuales.</span> Solo para restaurar un backup JSON previo.</p>
       <input type="file" id="bkFile" accept=".json" style="display:none" onchange="importarBackup(this)">
       <button class="btn btn-out" onclick="$('bkFile').click()">Seleccionar archivo JSON</button>
     </div>`
+  // Resetear tab
+  if(tab==='resetear') {
+    const _resetStep = _seg['reset_step'] || 'inicio'
+    if (_resetStep === 'inicio') {
+      return tabs+`
+        <div class="card mb10" style="border:2.5px solid #B71C1C">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <span style="font-size:2rem">⚠️</span>
+            <div>
+              <p class="bold" style="color:#B71C1C">Resetear todos los datos</p>
+              <p class="xs gray">Borra animales, pesajes, labores, potreros, lotes, rotaciones y lluvias.<br><strong>No se borran:</strong> datos de la finca, metas ni usuarios.</p>
+            </div>
+          </div>
+          <p class="sm mb12">Antes de continuar, <strong>¿hiciste una copia de seguridad?</strong></p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-g" onclick="go('config',{tab:'backup'});setTab('cfg','backup')">📤 Ir a Backup primero</button>
+            <button class="btn btn-r" onclick="_seg['reset_step']='confirmar';go('config')">Continuar sin backup</button>
+          </div>
+        </div>`
+    }
+    if (_resetStep === 'confirmar') {
+      return tabs+`
+        <div class="card mb10" style="border:2.5px solid #B71C1C;background:#FFF8F8">
+          <p class="bold mb4" style="color:#B71C1C;font-size:1rem">🗑 Confirmación final</p>
+          <p class="sm mb12">Se borrarán <strong>todos los datos</strong> de la app. Tendrás la opción de <strong>deshacer</strong> si te arrepientes.</p>
+          <p class="sm bold mb16" style="color:#B71C1C">¿Estás absolutamente seguro?</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-r" onclick="ejecutarResetear()">🗑 Sí, borrar todo</button>
+            <button class="btn btn-gray" onclick="_seg['reset_step']='inicio';go('config')">Cancelar</button>
+          </div>
+        </div>`
+    }
+    if (_resetStep === 'borrando') {
+      return tabs+`
+        <div class="card mb10" style="border:2.5px solid #B71C1C;background:#FFF8F8;text-align:center;padding:24px 16px">
+          <div style="font-size:2rem;margin-bottom:12px">🗑</div>
+          <p class="bold mb8" style="color:#B71C1C">Borrando datos…</p>
+          <p class="sm gray mb4">Limpiando base de datos local y en la nube.</p>
+          <p class="xs gray">No cierres la app ni cambies de pantalla.</p>
+          <div style="margin-top:16px;height:4px;background:#fde;border-radius:4px;overflow:hidden">
+            <div style="height:100%;background:#B71C1C;border-radius:4px;animation:progress-anim 2s ease-in-out infinite"></div>
+          </div>
+        </div>`
+    }
+    if (_resetStep === 'hecho') {
+      return tabs+`
+        <div class="card mb10" style="border:2.5px solid #388E3C;background:#F1F8E9">
+          <p class="bold mb4" style="color:#388E3C">✅ Datos borrados</p>
+          <p class="sm mb12">Todos los datos han sido eliminados. Puedes importar tu información real desde Excel.</p>
+          <p class="xs gray mb12">⏳ El deshacer solo funciona mientras no cierres la sesión.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-g" onclick="_seg['reset_step']='inicio';setTab('cfg','excel');go('config')">📥 Ir a Importar Excel</button>
+            <button class="btn btn-r" id="btnUndo" onclick="deshacerResetear()">↩ Deshacer — restaurar todo</button>
+          </div>
+        </div>`
+    }
+  }
+
   // Excel tab
   return tabs+`
     <div class="card mb10">
@@ -5976,107 +6092,116 @@ async function importarTodo(input) {
     await loadXLSX()
     const data = await file.arrayBuffer()
     const wb = XLSX.read(data, {type:'array', cellDates:true})
-    const sheets = wb.SheetNames.map(s => s.toUpperCase())
-
     let resumen = []
+    const quien = USER?.nombre || '—'
+    const ahora = Date.now()
+
+    // Helper: convierte fecha de cualquier tipo (Date obj, serial Excel, string DD/MM/AAAA)
+    const parseFecha = (v) => {
+      if (!v) return null
+      if (v instanceof Date) return Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate())
+      const num = parseFloat(v)
+      if (!isNaN(num) && num > 40000 && num < 60000) return (num - 25569) * 86400000
+      const s = String(v).trim()
+      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
+      if (m) { const y = m[3].length===2?'20'+m[3]:m[3]; return Date.UTC(parseInt(y),parseInt(m[2])-1,parseInt(m[1])) }
+      const d = new Date(s); return isNaN(d.getTime()) ? null : d.getTime()
+    }
+    // Helper: lee hoja como arrays desde fila 3 (range:2 salta título y subtítulo)
+    const readSheet = (sh, raw=true) =>
+      XLSX.utils.sheet_to_json(wb.Sheets[sh], {header:1, range:2, raw, defval:''})
+        .slice(1)  // slice(1) salta la fila de encabezados (fila 3), datos desde fila 4
 
     // ── LOTES ──────────────────────────────────────
-    const shLote = wb.SheetNames.find(s => /LOTES?/i.test(s))
+    const shLote = wb.SheetNames.find(s => /^LOTES?$/i.test(s.trim()))
     if (shLote) {
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[shLote], {raw:false, defval:''})
-        .filter(r => {
-          const n = String(getCol(r,'Nombre del Lote','Nombre','NOMBRE','nombre') || '').trim()
-          return n && !/^nombre/i.test(n)
-        })
-      let addedL = 0, dupL = 0
+      // Col 0: Nombre del Lote, Col 1: Descripción
+      const rows = readSheet(shLote, false).filter(r => r[0] && String(r[0]).trim())
+      let addedL=0, dupL=0
       for (const row of rows) {
-        const nombre = String(getCol(row,'Nombre del Lote','Nombre','nombre') || '').trim()
+        const nombre = String(row[0]).trim()
         if (!nombre) continue
-        const existe = await db.lotes.filter(l => l.nombre.trim().toLowerCase() === nombre.toLowerCase()).first()
+        const existe = await db.lotes.filter(l => l.nombre.trim().toLowerCase()===nombre.toLowerCase()).first()
         if (existe) { dupL++; continue }
-        await fsAdd('lotes', {nombre, descripcion: String(getCol(row,'Descripción','Descripcion','descripcion') || '').trim(), activo:1, creadoEn:Date.now()})
+        await fsAdd('lotes', {nombre, descripcion:String(row[1]||'').trim()||undefined, activo:1, creadoEn:ahora})
         addedL++
       }
-      resumen.push(`📂 Lotes: ${addedL} importados${dupL?' · '+dupL+' ya existían':''}`)
+      if (addedL||dupL) resumen.push(`📂 Lotes: ${addedL} importados${dupL?' · '+dupL+' ya existían':''}`)
     }
 
     // ── POTREROS ───────────────────────────────────
+    // Col 0:Nombre  1:Área  2:Estado  3:Desc  4:Pastos  5:Pendiente  6:FuenteAgua
     const shPot = wb.SheetNames.find(s => /POTREROS?/i.test(s))
     if (shPot) {
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[shPot], {raw:false, defval:''})
-        .filter(r => {
-          const n = String(getCol(r,'Nombre del Potrero','Nombre','nombre') || '').trim()
-          return n && !/^nombre/i.test(n)
-        })
-      let addedP = 0, dupP = 0
+      const rows = readSheet(shPot, false).filter(r => r[0] && String(r[0]).trim())
+      let addedP=0, dupP=0
       for (const row of rows) {
-        const nombre = String(getCol(row,'Nombre del Potrero','Nombre','nombre') || '').trim()
-        const areaHa = parseFloat(String(getCol(row,'Área (ha)','Area (ha)','Área','Area','areaHa') || '0').replace(',','.')) || 0
-        const estadoRaw = String(getCol(row,'Estado inicial','Estado','estado') || 'DISPONIBLE').trim().toUpperCase()
-        const estado = ['DISPONIBLE','OCUPADO','EN_DESCANSO'].includes(estadoRaw) ? estadoRaw : 'DISPONIBLE'
-        if (!nombre) continue
-        const existe = await db.potreros.where('activo').equals(1).filter(p => p.nombre.trim().toLowerCase() === nombre.toLowerCase()).first()
+        const nombre = String(row[0]).trim(); if (!nombre) continue
+        const existe = await db.potreros.where('activo').equals(1).filter(p=>p.nombre.trim().toLowerCase()===nombre.toLowerCase()).first()
         if (existe) { dupP++; continue }
-        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pendiente:'PLANO', pastos:'Pasto Nativo', fuenteAgua:'NINGUNA', observaciones:'', numAnimales:0})
+        const areaHa = parseFloat(String(row[1]).replace(',','.')) || 0
+        const estadoRaw = String(row[2]||'DISPONIBLE').trim().toUpperCase()
+        const estado = ['DISPONIBLE','OCUPADO','EN_DESCANSO'].includes(estadoRaw) ? estadoRaw : 'DISPONIBLE'
+        const pastos    = String(row[4]||'').trim() || 'Pasto Nativo'
+        const pendiente = String(row[5]||'').trim() || 'PLANO'
+        const fuente    = String(row[6]||'').trim() || 'NINGUNA'
+        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pastos, pendiente, fuenteAgua:fuente, observaciones:String(row[3]||'').trim()||undefined, numAnimales:0})
         addedP++
       }
       resumen.push(`🌿 Potreros: ${addedP} importados${dupP?' · '+dupP+' ya existían':''}`)
     }
 
     // ── ANIMALES ───────────────────────────────────
+    // Col 0:Arete  1:Nombre  2:Cat  3:Raza  4:Color  5:Peso  6:FechaIngreso  7:Procedencia  8:Lote  9:Desc  10:PrecioCompra
     const shAnim = wb.SheetNames.find(s => /ANIMALES?/i.test(s))
     if (shAnim) {
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[shAnim], {raw:false, defval:''})
-        .filter(r => {
-          const a = String(getCol(r,'Arete','arete','ARETE') || '').trim()
-          return a && !/^arete/i.test(a)
-        })
-      // Construir mapa de lotes por nombre para asignación
+      const esAreteValido = v => {
+        const s = String(v||'').trim()
+        return s.length > 0 && s.length < 30 && !/^[⚠•\-\*]/.test(s) && !/^(la |el |esto |•|importante)/i.test(s)
+      }
+      const rows = readSheet(shAnim, true).filter(r => r[0] && esAreteValido(r[0]))
+      // Reconstruir mapa de lotes (incluye los recién importados)
       const todosLotes = await db.lotes.toArray()
       const loteMap = {}
-      for (const l of todosLotes) loteMap[l.nombre.trim().toLowerCase()] = l.id
+      todosLotes.forEach(l => loteMap[l.nombre.trim().toLowerCase()] = l.id)
 
-      let addedA = 0, dupA = 0, sinAreteA = 0
-      const quien = USER?.nombre || '—', ahora = Date.now()
+      // Auto-crear lotes que aparecen en ANIMALES pero no existen todavía
+      const lotesEnAnimales = new Set()
       for (const row of rows) {
-        const arete = String(getCol(row,'Arete','ARETE','arete','Arete / Número') || '').trim()
-        if (!arete || arete === '0') { sinAreteA++; continue }
+        const ln = String(row[8]||'').trim()
+        if (ln) lotesEnAnimales.add(ln)
+      }
+      for (const ln of lotesEnAnimales) {
+        if (!loteMap[ln.toLowerCase()]) {
+          const id = await fsAdd('lotes', {nombre:ln, activo:1, creadoEn:ahora})
+          loteMap[ln.toLowerCase()] = id
+        }
+      }
+
+      let addedA=0, dupA=0, sinArete=0
+      for (const row of rows) {
+        const arete = String(row[0]||'').trim()
+        if (!arete) { sinArete++; continue }
         const existe = await db.animales.where('arete').equals(arete).first()
         if (existe) { dupA++; continue }
 
-        const catRaw = String(getCol(row,'Categoría','Categoria','CATEGORIA','categoria') || '').trim()
-        const cat = Object.keys(CAT).find(k => k === catRaw)
-          || Object.keys(CAT).find(k => CAT[k] === catRaw)
-          || 'HC'
-
-        const pesoRaw = getCol(row,'Peso Inicial (kg)','Peso inicial (kg)','Peso (kg)','Peso','peso','pesoInicial')
-        const pesoIni = parseFloat(String(pesoRaw).replace(',','.')) || 0
-
-        const fRaw = getCol(row,'Fecha Ingreso (DD/MM/AAAA)','Fecha Ingreso','Fecha ingreso','fechaIngreso','Fecha')
-        let fechaTs = ahora
-        if (fRaw) {
-          // Intentar parsear DD/MM/AAAA
-          const m = String(fRaw).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
-          if (m) {
-            const y = m[3].length === 2 ? '20'+m[3] : m[3]
-            fechaTs = new Date(`${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T00:00:00`).getTime() || ahora
-          } else {
-            const d = new Date(fRaw); if (!isNaN(d.getTime())) fechaTs = d.getTime()
-          }
-        }
-
-        const nombre     = String(getCol(row,'Nombre','NOMBRE','nombre') || '').trim()
-        const raza       = String(getCol(row,'Raza','RAZA','raza') || '').trim()
-        const color      = String(getCol(row,'Color','COLOR','color') || '').trim()
-        const desc       = String(getCol(row,'Descripción / Obs.','Descripcion','descripcion','Obs') || '').trim()
-        const proc       = String(getCol(row,'Procedencia','procedencia','Origen') || '').trim()
-        const loteNombre = String(getCol(row,'Nombre del Lote','Lote','lote') || '').trim().toLowerCase()
-        const loteId     = loteNombre ? (loteMap[loteNombre] || null) : null
+        const catRaw = String(row[2]||'').trim()
+        const cat = Object.keys(CAT).find(k=>k===catRaw) || Object.keys(CAT).find(k=>CAT[k]===catRaw) || 'HC'
+        const pesoIni   = parseFloat(String(row[5]||'0').replace(',','.')) || 0
+        const fechaTs   = parseFecha(row[6]) || ahora
+        const loteNom   = String(row[8]||'').trim().toLowerCase()
+        const loteId    = loteNom ? (loteMap[loteNom]||null) : null
+        const precioKg  = parseFloat(String(row[10]||'0').replace(',','.')) || undefined
 
         const id = await fsAdd('animales', {
-          arete, nombre, categoria:cat, raza, color, pesoInicial:pesoIni,
-          descripcion:desc, procedencia:proc, estadoSanitario:'SANO', activo:1,
-          fechaIngreso:fechaTs, loteId, fechaLote:loteId?fechaTs:undefined,
+          arete, nombre:String(row[1]||'').trim()||undefined,
+          categoria:cat, raza:String(row[3]||'').trim(),
+          color:String(row[4]||'').trim()||undefined,
+          pesoInicial:pesoIni, descripcion:String(row[9]||'').trim()||undefined,
+          procedencia:String(row[7]||'').trim()||undefined,
+          estadoSanitario:'SANO', activo:1, fechaIngreso:fechaTs,
+          loteId, fechaLote:loteId?fechaTs:undefined,
+          precioCompra:precioKg,
           creadoPor:quien, creadoEn:ahora
         })
         if (pesoIni > 0) {
@@ -6085,55 +6210,120 @@ async function importarTodo(input) {
         }
         addedA++
       }
-      resumen.push(`🐄 Animales: ${addedA} importados${dupA?' · '+dupA+' ya existían':''}${sinAreteA?' · '+sinAreteA+' sin arete':''}`)
+      resumen.push(`🐄 Animales: ${addedA} importados${dupA?' · '+dupA+' ya existían':''}${sinArete?' · '+sinArete+' sin arete':''}`)
+    }
+
+    // ── PESAJES ────────────────────────────────────
+    // Col 0:Arete  1:Peso  2:Fecha  3:Obs
+    const shPes = wb.SheetNames.find(s => /PESAJES?/i.test(s))
+    if (shPes) {
+      const rows = readSheet(shPes, true).filter(r => r[0] && r[1])
+      const todosAnimalesPes = await db.animales.toArray()
+      const areteMap = {}
+      todosAnimalesPes.forEach(a => areteMap[String(a.arete).trim()] = a.id)
+      let addedPes=0, skipPes=0
+      for (const row of rows) {
+        const arete   = String(row[0]||'').trim()
+        const pesoKg  = parseFloat(String(row[1]).replace(',','.')) || 0
+        const fechaTs = parseFecha(row[2])
+        if (!arete || !pesoKg || !fechaTs) { skipPes++; continue }
+        const animalId = areteMap[arete]; if (!animalId) { skipPes++; continue }
+        const dup = await db.pesajes.where('animalId').equals(animalId).filter(p=>p.fecha===fechaTs&&p.pesoKg===pesoKg).first()
+        if (dup) { skipPes++; continue }
+        const obs = String(row[3]||'').trim()
+        await fsAdd('pesajes', {animalId, fecha:fechaTs, pesoKg, metodo:'BASCULA', cc:3, ...(obs&&{obs}), registradoPor:quien, registradoEn:ahora})
+        addedPes++
+      }
+      if (addedPes||skipPes) resumen.push(`⚖️ Pesajes: ${addedPes} importados${skipPes?' · '+skipPes+' omitidos':''}`)
+    }
+
+    // ── LABORES LOTES ──────────────────────────────
+    // Col 0:Lote  1:Tipo  2:Producto  3:Dosis  4:Fecha  5:Obs
+    const shLabL = wb.SheetNames.find(s => /LABORES?_LOTES?/i.test(s))
+    if (shLabL) {
+      const rows = readSheet(shLabL, true).filter(r => r[0] && r[1] && r[4])
+      const todosLotesLL = await db.lotes.where('activo').equals(1).toArray()
+      const loteMapLL = {}; todosLotesLL.forEach(l=>loteMapLL[l.nombre.trim().toLowerCase()]=l.id)
+      let addedLL=0, skipLL=0
+      for (const row of rows) {
+        const loteNom = String(row[0]||'').trim(); if (!loteNom) { skipLL++; continue }
+        const tipo    = String(row[1]||'').trim().toUpperCase()
+        const fechaTs = parseFecha(row[4]); if (!fechaTs) { skipLL++; continue }
+        const loteId  = loteMapLL[loteNom.toLowerCase()]; if (!loteId) { skipLL++; continue }
+        const animalesLote = await db.animales.where('loteId').equals(loteId).toArray()
+        const producto = String(row[2]||'').trim()||undefined
+        const dosis    = String(row[3]||'').trim()||undefined
+        const obs      = String(row[5]||'').trim()||undefined
+        for (const animal of animalesLote) {
+          const dup = await db.labores.where('animalId').equals(animal.id).filter(l=>l.fecha===fechaTs&&l.tipo===tipo).first()
+          if (!dup) await fsAdd('labores',{animalId:animal.id,fecha:fechaTs,tipo,producto,dosis,obs,registradoPor:quien,registradoEn:ahora})
+        }
+        addedLL++
+      }
+      if (addedLL||skipLL) resumen.push(`💉 Labores lotes: ${addedLL} importadas${skipLL?' · '+skipLL+' omitidas':''}`)
+    }
+
+    // ── LABORES POTREROS ───────────────────────────
+    // Col 0:Potrero  1:Tipo  2:Producto  3:Dosis  4:Fecha  5:Obs
+    const shLabP = wb.SheetNames.find(s => /LABORES?_POTREROS?/i.test(s))
+    if (shLabP) {
+      const rows = readSheet(shLabP, true).filter(r => r[0] && r[1] && r[4])
+      const todosPotLP = await db.potreros.where('activo').equals(1).toArray()
+      const potMapLP = {}; todosPotLP.forEach(p=>potMapLP[p.nombre.trim().toLowerCase()]=p.id)
+      let addedLP=0, skipLP=0
+      for (const row of rows) {
+        const potNom  = String(row[0]||'').trim(); if (!potNom) { skipLP++; continue }
+        const tipo    = String(row[1]||'').trim().toUpperCase()
+        const fechaTs = parseFecha(row[4]); if (!fechaTs) { skipLP++; continue }
+        const potId   = potMapLP[potNom.toLowerCase()]; if (!potId) { skipLP++; continue }
+        const dup = await db.laboresPotrero.where('potreroId').equals(potId).filter(l=>l.fecha===fechaTs&&l.tipo===tipo).first()
+        if (dup) { skipLP++; continue }
+        const producto = String(row[2]||'').trim()||undefined
+        const dosis    = String(row[3]||'').trim()||undefined
+        const obs      = String(row[5]||'').trim()||undefined
+        await fsAdd('laboresPotrero',{potreroId:potId,tipo,producto,dosis,fecha:fechaTs,obs,registradoPor:quien,registradoEn:ahora})
+        addedLP++
+      }
+      if (addedLP||skipLP) resumen.push(`🌿 Labores potreros: ${addedLP} importadas${skipLP?' · '+skipLP+' omitidas':''}`)
+    }
+
+    // ── ROTACIONES ─────────────────────────────────
+    // Col 0:Nombre  1:Potreros(coma)  2:Desc
+    const shRot = wb.SheetNames.find(s => /ROTACION/i.test(s))
+    if (shRot) {
+      const rows = readSheet(shRot, false).filter(r => r[0] && r[1])
+      const todosPotRot = await db.potreros.where('activo').equals(1).toArray()
+      const potMapRot = {}; todosPotRot.forEach(p=>potMapRot[p.nombre.trim().toLowerCase()]=p.id)
+      let addedRot=0, skipRot=0
+      for (const row of rows) {
+        const nombre = String(row[0]).trim(); if (!nombre) { skipRot++; continue }
+        const dup = await db.rotaciones.filter(r=>r.nombre.trim().toLowerCase()===nombre.toLowerCase()&&r.activo===1).first()
+        if (dup) { skipRot++; continue }
+        const potNombres = String(row[1]).split(',').map(s=>s.trim()).filter(Boolean)
+        const potreroIds = potNombres.map(n=>potMapRot[n.toLowerCase()]).filter(Boolean)
+        const desc = String(row[2]||'').trim()||undefined
+        await fsAdd('rotaciones',{nombre,descripcion:desc,potreroIds,activo:1,creadoEn:ahora})
+        addedRot++
+      }
+      if (addedRot||skipRot) resumen.push(`🔄 Rotaciones: ${addedRot} importadas${skipRot?' · '+skipRot+' omitidas':''}`)
     }
 
     // ── LLUVIAS ────────────────────────────────────
-    // NOTA: La hoja tiene 2 filas de título antes de los encabezados reales (fila 3).
-    // Se usa {header:1, range:2} para leer en modo array desde fila 3,
-    // evitando que sheet_to_json use el título como clave de columna.
+    // Col 0:Fecha  1:mm  2:Obs
     const shLluv = wb.SheetNames.find(s => /LLUVIA/i.test(s))
     if (shLluv) {
-      const allRowsLl = XLSX.utils.sheet_to_json(wb.Sheets[shLluv], {header:1, range:2, raw:true, defval:''})
-      // allRowsLl[0] = fila de encabezados, allRowsLl[1+] = datos
-      // Columna 0 = Fecha, Columna 1 = mm, Columna 2 = Observación
-      const dataRowsLl = allRowsLl.slice(1).filter(r => r[0] && r[1])
-
-      // Convierte fecha: Date object (cellDates), serial Excel, o string
-      const parseFechaLluvia = (v) => {
-        if (!v) return null
-        if (v instanceof Date) {
-          // Date de cellDates:true — usar UTC para evitar desfase de zona horaria
-          return Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate())
-        }
-        const num = parseFloat(v)
-        if (!isNaN(num) && num > 40000 && num < 60000) {
-          return (num - 25569) * 86400000 // Serial Excel → timestamp JS
-        }
-        const s = String(v).trim()
-        // Formato DD/MM/AAAA o DD-MM-AAAA
-        const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
-        if (m) {
-          const y = m[3].length === 2 ? '20'+m[3] : m[3]
-          return Date.UTC(parseInt(y), parseInt(m[2])-1, parseInt(m[1]))
-        }
-        const d = new Date(s); return isNaN(d.getTime()) ? null : d.getTime()
-      }
-
-      let addedLl = 0, dupLl = 0, errLl = 0
-      for (const row of dataRowsLl) {
-        const fechaTs = parseFechaLluvia(row[0])
-        const mm = parseFloat(String(row[1]).replace(',','.')) || 0
+      const rows = readSheet(shLluv, true).filter(r => r[0] && r[1])
+      let addedLl=0, dupLl=0, errLl=0
+      for (const row of rows) {
+        const fechaTs = parseFecha(row[0]); const mm = parseFloat(String(row[1]).replace(',','.')) || 0
         if (!fechaTs || !mm) { errLl++; continue }
         const existe = await db.lluvias.where('fecha').equals(fechaTs).first()
         if (existe) { dupLl++; continue }
-        const obsLl = String(row[2]||'').trim()
-        const recLl = {fecha:fechaTs, mm}
-        if (obsLl) recLl.obs = obsLl
-        await fsAdd('lluvias', recLl)
+        const obs = String(row[2]||'').trim()||undefined
+        await fsAdd('lluvias', {fecha:fechaTs, mm, ...(obs&&{obs})})
         addedLl++
       }
-      resumen.push(`🌧 Lluvias: ${addedLl} registros importados${dupLl?' · '+dupLl+' ya existían':''}${errLl?' · '+errLl+' sin fecha válida':''}`)
+      resumen.push(`🌧 Lluvias: ${addedLl} importadas${dupLl?' · '+dupLl+' ya existían':''}${errLl?' · '+errLl+' sin fecha':''}`)
     }
 
     if (!resumen.length) {
@@ -6356,6 +6546,214 @@ async function crearUsuario(){
   showToast(`Usuario "${n}" creado ✓`,'ok')
   go('config')
 }
+// ── Compartir / Guardar archivo ──────────────────
+async function compartirArchivo(tipo) {
+  try {
+    showToast('Preparando archivo...', 'ok', 2000)
+    let blob, filename
+    if (tipo === 'json') {
+      await setCfg('ultimo_backup', String(Date.now()))
+      fsdb.collection('config').doc('ultimo_backup').set({clave:'ultimo_backup', valor:String(Date.now()), _ts:Date.now()}).catch(()=>{})
+      const [animales,pesajes,labores,potreros,lotes,ciclos,lluvias,usuarios,config,laboresPotrero,rotaciones] = await Promise.all([
+        db.animales.toArray(),db.pesajes.toArray(),db.labores.toArray(),db.potreros.toArray(),
+        db.lotes.toArray(),db.ciclos.toArray(),db.lluvias.toArray(),db.usuarios.toArray(),db.config.toArray(),db.laboresPotrero.toArray(),db.rotaciones.toArray()
+      ])
+      const data = JSON.stringify({v:3,app:'HPRapp',ts:Date.now(),animales,pesajes,labores,potreros,lotes,ciclos,lluvias,usuarios,config,laboresPotrero,rotaciones},null,2)
+      blob = new Blob([data], {type:'application/json'})
+      filename = `HPRapp-backup-${new Date().toISOString().split('T')[0]}.json`
+    } else if (tipo === 'excel') {
+      // Reusar exportarExcel pero retornar blob en vez de descargar
+      blob = await generarExcelBlob()
+      filename = `HPRapp-datos-${new Date().toISOString().split('T')[0]}.xlsx`
+    } else if (tipo === 'pdf') {
+      blob = await generarPdfBlob()
+      filename = `HPRapp-reporte-${new Date().toISOString().split('T')[0]}.pdf`
+    }
+    if (!blob) return
+    // Intentar Web Share API (abre menú compartir en celular)
+    if (navigator.canShare && navigator.canShare({files:[new File([blob], filename)]})) {
+      try {
+        await navigator.share({files:[new File([blob], filename)], title:'HPRapp', text:'Copia de seguridad HPRapp'})
+        return
+      } catch(e) { if (e.name !== 'AbortError') console.warn('Share failed:', e.message) }
+    }
+    // Fallback: descarga directa (PC o celular sin Web Share)
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = filename
+    a.click()
+    setTimeout(()=>URL.revokeObjectURL(a.href), 5000)
+    showToast('Archivo descargado ✅')
+  } catch(e) { showToast('Error: ' + e.message, 'err', 4000) }
+}
+
+async function compartirWhatsApp() {
+  try {
+    const finca   = await getCfg('nombre_finca') || 'HPRapp'
+    const animales = await db.animales.where('activo').equals(1).toArray()
+    const lotes    = await db.lotes.where('activo').equals(1).toArray()
+    const potreros = await db.potreros.where('activo').equals(1).toArray()
+    const lluvias  = await db.lluvias.orderBy('fecha').toArray()
+    const ahora    = new Date()
+    const fd = (ts) => { const d=new Date(ts); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear() }
+
+    // Peso total
+    let pesoTotal = 0
+    for (const a of animales) {
+      const ult = await getPesoActual(a.id)
+      pesoTotal += (ult?.pesoKg || a.pesoInicial || 0)
+    }
+
+    // Lluvias último mes
+    const hace30 = Date.now() - 30*86400000
+    const lluvMes = lluvias.filter(l=>l.fecha>=hace30)
+    const mmMes   = lluvMes.reduce((s,l)=>s+l.mm,0)
+
+    const txt = [
+      `🌿 *${finca}* — Resumen HPRapp`,
+      `📅 ${fd(Date.now())}`,
+      ``,
+      `🐄 *Animales activos:* ${animales.length}`,
+      `⚖️ *Peso total:* ${pesoTotal.toFixed(0)} kg`,
+      `📂 *Lotes:* ${lotes.length}`,
+      `🌿 *Potreros:* ${potreros.length}`,
+      lluvMes.length ? `🌧 *Lluvia últimos 30 días:* ${mmMes.toFixed(0)} mm (${lluvMes.length} días)` : '',
+      ``,
+      `_Generado desde HPRapp_`
+    ].filter(l=>l!==null).join('\n')
+
+    const url = 'https://wa.me/?text=' + encodeURIComponent(txt)
+    window.open(url, '_blank')
+  } catch(e) { showToast('Error: ' + e.message, 'err', 4000) }
+}
+
+async function generarPdfBlob() {
+  const finca    = await getCfg('nombre_finca') || 'HPRapp'
+  const municipio= await getCfg('municipio') || ''
+  const animales = await db.animales.where('activo').equals(1).toArray()
+  const lotes    = await db.lotes.where('activo').equals(1).toArray()
+  const potreros = await db.potreros.where('activo').equals(1).toArray()
+  const lluvias  = await db.lluvias.orderBy('fecha').toArray()
+  const MESES    = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+  const fd = ts => { const d=new Date(ts); return d.getDate()+' '+MESES[d.getMonth()]+' '+d.getFullYear() }
+
+  // Calcular pesos
+  let pesoTotal=0, pesajes=[]
+  for (const a of animales) {
+    const ult = await getPesoActual(a.id)
+    const kg  = ult?.pesoKg || a.pesoInicial || 0
+    pesoTotal += kg
+    pesajes.push({...a, pesoActual:kg})
+  }
+  pesajes.sort((a,b)=>b.pesoActual-a.pesoActual)
+
+  const catCount={}
+  animales.forEach(a=>{catCount[a.categoria]=(catCount[a.categoria]||0)+1})
+
+  // Lluvias resumen
+  const hace30=Date.now()-30*86400000
+  const lluvMes=lluvias.filter(l=>l.fecha>=hace30)
+  const mmMes=lluvMes.reduce((s,l)=>s+l.mm,0)
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,sans-serif;font-size:11px;color:#222;padding:20px}
+    h1{font-size:18px;color:#1B5E20;margin-bottom:2px}
+    h2{font-size:13px;color:#2E7D32;margin:14px 0 6px;border-bottom:1.5px solid #A5D6A7;padding-bottom:3px}
+    .sub{color:#666;font-size:10px;margin-bottom:12px}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+    .kpi{background:#F1F8E9;border-radius:6px;padding:8px;text-align:center}
+    .kpi .val{font-size:20px;font-weight:800;color:#1B5E20}
+    .kpi .lbl{font-size:9px;color:#666;margin-top:2px}
+    table{width:100%;border-collapse:collapse;margin-bottom:10px}
+    th{background:#2E7D32;color:white;padding:5px 6px;text-align:left;font-size:10px}
+    td{padding:4px 6px;border-bottom:1px solid #E8F5E9;font-size:10px}
+    tr:nth-child(even) td{background:#F9FBE7}
+    .footer{margin-top:20px;font-size:9px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:8px}
+    @media print{body{padding:10px}}
+  </style></head><body>
+  <h1>🌿 ${finca}</h1>
+  <p class="sub">${municipio ? municipio+' · ' : ''}Reporte generado el ${fd(Date.now())}</p>
+
+  <h2>Resumen general</h2>
+  <div class="grid">
+    <div class="kpi"><div class="val">${animales.length}</div><div class="lbl">Animales activos</div></div>
+    <div class="kpi"><div class="val">${pesoTotal.toFixed(0)}</div><div class="lbl">kg totales</div></div>
+    <div class="kpi"><div class="val">${lotes.length}</div><div class="lbl">Lotes</div></div>
+    <div class="kpi"><div class="val">${potreros.length}</div><div class="lbl">Potreros</div></div>
+  </div>
+
+  <h2>Categorías</h2>
+  <table><thead><tr><th>Categoría</th><th>Cantidad</th></tr></thead><tbody>
+    ${Object.entries(catCount).map(([c,n])=>`<tr><td>${c}</td><td>${n}</td></tr>`).join('')}
+  </tbody></table>
+
+  <h2>Animales (top 20 por peso)</h2>
+  <table><thead><tr><th>Arete</th><th>Nombre</th><th>Cat.</th><th>Raza</th><th>Peso kg</th><th>Lote</th></tr></thead><tbody>
+    ${pesajes.slice(0,20).map(a=>{
+      const lote=lotes.find(l=>l.id===a.loteId)
+      return `<tr><td>${a.arete}</td><td>${a.nombre||'—'}</td><td>${a.categoria}</td><td>${a.raza||'—'}</td><td><b>${a.pesoActual.toFixed(0)}</b></td><td>${lote?.nombre||'—'}</td></tr>`
+    }).join('')}
+  </tbody></table>
+
+  <h2>Potreros</h2>
+  <table><thead><tr><th>Nombre</th><th>Área (ha)</th><th>Estado</th></tr></thead><tbody>
+    ${potreros.map(p=>`<tr><td>${p.nombre}</td><td>${p.areaHa||'—'}</td><td>${p.estado}</td></tr>`).join('')}
+  </tbody></table>
+
+  ${lluvias.length?`<h2>Lluvias — últimos 30 días</h2>
+  <div class="grid" style="grid-template-columns:repeat(2,1fr)">
+    <div class="kpi"><div class="val">${mmMes.toFixed(0)}</div><div class="lbl">mm acumulados</div></div>
+    <div class="kpi"><div class="val">${lluvMes.length}</div><div class="lbl">días con lluvia</div></div>
+  </div>`:''}
+
+  <div class="footer">HPRapp · ${fd(Date.now())} · Confidencial</div>
+  </body></html>`
+
+  // Abrir ventana de impresión para guardar como PDF
+  const win = window.open('', '_blank', 'width=800,height=900')
+  win.document.write(html)
+  win.document.close()
+  win.onload = () => { win.focus(); win.print() }
+
+  // Retornar null — el PDF se maneja via print dialog
+  return null
+}
+
+async function generarExcelBlob() {
+  await loadXLSX()
+  const [animales,pesajes,labores,potreros,lotes,ciclos,lluvias] = await Promise.all([
+    db.animales.toArray(),db.pesajes.toArray(),db.labores.toArray(),
+    db.potreros.toArray(),db.lotes.toArray(),db.ciclos.toArray(),db.lluvias.toArray()
+  ])
+  const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+  const fd = ts => { const d=new Date(ts); return d.getDate()+'/'+((d.getMonth()+1))+'/'+d.getFullYear() }
+  const wb = XLSX.utils.book_new()
+  const addSheet = (name, rows) => {
+    if(!rows.length) return
+    const ws = XLSX.utils.json_to_sheet(rows)
+    XLSX.utils.book_append_sheet(wb, ws, name)
+  }
+  addSheet('ANIMALES', animales.filter(a=>a.activo).map(a=>({
+    'Arete':a.arete,'Nombre':a.nombre||'','Categoría':a.categoria,'Raza':a.raza||'',
+    'Color':a.color||'','Peso Inicial':a.pesoInicial||0,
+    'Fecha Ingreso':a.fechaIngreso?fd(a.fechaIngreso):'','Lote':lotes.find(l=>l.id===a.loteId)?.nombre||'',
+    'Procedencia':a.procedencia||'','Observaciones':a.descripcion||''
+  })))
+  addSheet('PESAJES', pesajes.map(p=>({
+    'Arete':animales.find(a=>a.id===p.animalId)?.arete||p.animalId,
+    'Peso (kg)':p.pesoKg,'Fecha':fd(p.fecha),'Método':p.metodo||'','Obs':p.obs||''
+  })))
+  addSheet('POTREROS', potreros.filter(p=>p.activo).map(p=>({
+    'Nombre':p.nombre,'Área (ha)':p.areaHa||0,'Estado':p.estado,'Pastos':p.pastos||'','Pendiente':p.pendiente||'','Fuente Agua':p.fuenteAgua||''
+  })))
+  addSheet('LOTES', lotes.filter(l=>l.activo).map(l=>({'Nombre':l.nombre,'Descripción':l.descripcion||''})))
+  if(lluvias.length) addSheet('LLUVIAS', lluvias.map(l=>({'Fecha':fd(l.fecha),'mm':l.mm,'Obs':l.obs||''})))
+  const buf = XLSX.write(wb, {bookType:'xlsx', type:'array'})
+  return new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+}
+
 async function exportarBackup(){
   await setCfg('ultimo_backup', String(Date.now()))
   fsdb.collection('config').doc('ultimo_backup').set({clave:'ultimo_backup', valor:String(Date.now()), _ts:Date.now()}).catch(()=>{})
@@ -6422,7 +6820,7 @@ async function migrarNombresLote(){
 async function bootstrapFromFirebase(){
   try {
     // Pull ALL collections from Firebase to local Dexie
-    const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones']
+    const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones','lluvias']
     for(const t of tables){
       const snap=await fsdb.collection(t).get()
       if(snap.empty) continue
@@ -6496,6 +6894,86 @@ async function checkAppVersion() {
       location.reload(true)
     }
   } catch(e) { /* offline o error — no hacer nada */ }
+}
+
+// ── Resetear todos los datos ──────────────────────
+let _resetSnapshot = null  // Guarda copia para deshacer
+let _resetTs = 0           // Timestamp del último reset — filtra docs viejos en sync
+
+async function ejecutarResetear() {
+  try {
+    const tables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+
+    // 1. Snapshot para deshacer
+    _resetSnapshot = {}
+    for (const t of tables) _resetSnapshot[t] = await db[t].toArray()
+
+    // 2. Detener listeners temporalmente
+    _syncActive = false
+    _unsubscribers.forEach(u => u())
+    _unsubscribers = []
+
+    // 3. Borrar Dexie local (instantáneo)
+    for (const t of tables) await db[t].clear()
+
+    // 4. Marcar timestamp de reset — el listener ignorará docs con _ts anterior a este momento
+    _resetTs = Date.now()
+
+    // 5. Reactivar sync DE INMEDIATO — docs viejos serán filtrados por _resetTs
+    _syncActive = true
+    initFirebaseSync()
+
+    // 6. Mostrar éxito al instante
+    _seg['reset_step'] = 'hecho'
+    go('config')
+    showToast('Datos borrados ✅', 'ok', 3000)
+
+    // 7. Limpiar Firestore en segundo plano (no bloquea UI ni sync)
+    ;(async () => {
+      const borrarTabla = async (t) => {
+        try {
+          const snap = await fsdb.collection(t).get()
+          if (snap.empty) return
+          const viejos = snap.docs.filter(d => (d.data()._ts || 0) < _resetTs)
+          if (!viejos.length) return
+          for (let i = 0; i < viejos.length; i += 400) {
+            const batch = fsdb.batch()
+            viejos.slice(i, i + 400).forEach(doc => batch.delete(doc.ref))
+            await batch.commit()
+          }
+        } catch(e) { console.warn('Reset bg:', t, e.message) }
+      }
+      await Promise.all(tables.map(t => borrarTabla(t)))
+      showToast('Nube limpiada ✅', 'ok', 2000)
+    })()
+
+  } catch(e) {
+    _syncActive = true
+    initFirebaseSync()
+    showToast('Error al resetear: ' + e.message, 'err', 5000)
+  }
+}
+
+async function deshacerResetear() {
+  if (!_resetSnapshot) { showToast('No hay datos para restaurar','err'); return }
+  try {
+    const tables = Object.keys(_resetSnapshot)
+    for (const t of tables) {
+      for (const row of _resetSnapshot[t]) {
+        const {id, ...data} = row
+        try {
+          await db[t].put({...data, id})
+          await fsdb.collection(t).doc(String(id)).set({...data, _id:id, _ts:Date.now()})
+        } catch(e) {}
+      }
+    }
+    _resetSnapshot = null
+    _seg['reset_step'] = 'inicio'
+    showToast('Datos restaurados correctamente ✅', 'ok', 4000)
+    go('config')
+  } catch(e) {
+    showToast('Error al deshacer: ' + e.message, 'err', 5000)
+  }
 }
 
 async function init(){
