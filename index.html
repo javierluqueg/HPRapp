@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260526-009'
+const APP_VERSION = '20260526-010'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6848,53 +6848,54 @@ async function migrarNombresLote(){
 }
 async function bootstrapFromFirebase(){
   try {
-    // ── PRIMERO: leer reset_ts desde Dexie config (sin necesitar red) ──
-    const _dataTables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
-    try {
-      const localApplied = parseInt(localStorage.getItem('hpr_reset_applied') || '0') || 0
-      const cfgResetTs = await getCfg('reset_ts')
-      const dexieTs = parseInt(cfgResetTs || '0') || 0
-      const effectiveTs = Math.max(_resetTs, dexieTs)
-      if (effectiveTs > 0 && effectiveTs !== localApplied) {
-        _resetTs = effectiveTs
-        localStorage.setItem('hpr_reset_ts', String(_resetTs))
-        for (const t of _dataTables) {
-          try { await db[t].clear() } catch(e) {}
-        }
-        localStorage.setItem('hpr_reset_applied', String(effectiveTs))
-      }
-    } catch(e) { console.warn('reset_ts bootstrap:', e.message) }
-
-    // Pull ALL collections from Firebase to local Dexie
     const tables=['animales','pesajes','labores','potreros','lotes','ciclos','usuarios','laboresPotrero','rotaciones','lluvias']
-    for(const t of tables){
-      const snap=await fsdb.collection(t).get()
-      if(snap.empty) continue
-      for(const doc of snap.docs){
-        const d=doc.data()
-        const localId=parseInt(doc.id)
-        if(isNaN(localId)) continue
-        // Respetar filtro de reset — ignorar docs anteriores al último reseteo
-        if(_resetTs && (d._ts||0) < _resetTs) continue
-        const {_id,_ts,...clean}=d
-        try{
-          const exists=await db[t].get(localId)
-          if(!exists) await db[t].put({...clean,id:localId})
-        }catch(e){}
-      }
-    }
-    // Config
+    const dataTables=['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+
+    // 1. Config primero — necesitamos reset_ts antes de tocar datos
     const cfgSnap=await fsdb.collection('config').get()
     for(const doc of cfgSnap.docs){
       const d=doc.data()
       if(d.clave) await setCfg(d.clave,d.valor)
-      // Sincronizar reset_ts a todos los dispositivos
-      if(d.clave === 'reset_ts' && d.valor) {
-        const serverResetTs = parseInt(d.valor) || 0
-        if(serverResetTs > _resetTs) {
-          _resetTs = serverResetTs
-          localStorage.setItem('hpr_reset_ts', String(_resetTs))
+      if(d.clave==='reset_ts'&&d.valor){
+        const serverTs=parseInt(d.valor)||0
+        if(serverTs>_resetTs){
+          _resetTs=serverTs
+          localStorage.setItem('hpr_reset_ts',String(_resetTs))
         }
+      }
+    }
+
+    // 2. Aplicar reset si este dispositivo no lo ha procesado aún
+    const localApplied=parseInt(localStorage.getItem('hpr_reset_applied')||'0')||0
+    if(_resetTs>0&&_resetTs!==localApplied){
+      for(const t of dataTables){try{await db[t].clear()}catch(e){}}
+      localStorage.setItem('hpr_reset_applied',String(_resetTs))
+    }
+
+    // 3. Reconciliación completa — Firestore es fuente de verdad
+    // Borra del Dexie local lo que ya no existe en Firestore
+    for(const t of tables){
+      const snap=await fsdb.collection(t).get()
+      const fsIds=new Set(snap.docs.map(d=>parseInt(d.id)).filter(n=>!isNaN(n)))
+
+      // Borrar locales huérfanos (borrados en Firestore mientras este dispositivo estaba offline)
+      const localRows=await db[t].toArray()
+      for(const row of localRows){
+        if(!fsIds.has(row.id)) await db[t].delete(row.id).catch(()=>{})
+      }
+
+      // Agregar/actualizar desde Firestore
+      for(const doc of snap.docs){
+        const d=doc.data()
+        const localId=parseInt(doc.id)
+        if(isNaN(localId)) continue
+        if(_resetTs&&(d._ts||0)<_resetTs) continue
+        const {_id,_ts,...clean}=d
+        try{
+          const exists=await db[t].get(localId)
+          if(!exists||(d._ts||0)>(exists._ts||0))
+            await db[t].put({...clean,id:localId,_ts:d._ts||0})
+        }catch(e){}
       }
     }
   }catch(e){ console.warn('Bootstrap offline:',e.message) }
