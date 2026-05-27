@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-007'
+const APP_VERSION = '20260527-008'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6146,7 +6146,39 @@ function findSheet(wb,...names){
 
 async function importarTodo(input) {
   const file = input.files[0]; if (!file) return
+
+  // Mostrar overlay de progreso
+  const _showProg = (pct, label) => {
+    let ov = document.getElementById('import-progress-ov')
+    if (!ov) {
+      ov = document.createElement('div')
+      ov.id = 'import-progress-ov'
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center'
+      ov.innerHTML = `<div style="background:white;border-radius:18px;padding:28px 24px;width:88%;max-width:360px;text-align:center">
+        <div style="font-size:2rem;margin-bottom:10px">📥</div>
+        <p style="font-weight:800;color:#1B5E20;margin-bottom:6px;font-size:1rem">Importando datos…</p>
+        <p id="imp-label" style="font-size:.82rem;color:#666;margin-bottom:14px;min-height:18px"></p>
+        <div style="height:10px;background:#E8F5E9;border-radius:10px;overflow:hidden;margin-bottom:10px">
+          <div id="imp-bar" style="height:100%;width:0%;background:#2E7D32;border-radius:10px;transition:width .25s ease"></div>
+        </div>
+        <p id="imp-pct" style="font-size:1.6rem;font-weight:800;color:#2E7D32">0%</p>
+      </div>`
+      document.body.appendChild(ov)
+    }
+    const bar = document.getElementById('imp-bar')
+    const lbl = document.getElementById('imp-label')
+    const pctEl = document.getElementById('imp-pct')
+    if (bar) bar.style.width = pct + '%'
+    if (lbl) lbl.textContent = label
+    if (pctEl) pctEl.textContent = pct + '%'
+  }
+  const _hideProg = () => {
+    const ov = document.getElementById('import-progress-ov')
+    if (ov) ov.remove()
+  }
+
   try {
+    _showProg(2, 'Leyendo archivo…')
     await loadXLSX()
     const data = await file.arrayBuffer()
     const wb = XLSX.read(data, {type:'array', cellDates:true})
@@ -6170,6 +6202,7 @@ async function importarTodo(input) {
       XLSX.utils.sheet_to_json(wb.Sheets[sh], {header:1, range:2, raw, defval:''})
         .slice(1)  // slice(1) salta la fila de encabezados (fila 3), datos desde fila 4
 
+    _showProg(10, 'Importando lotes…')
     // ── LOTES ──────────────────────────────────────
     const shLote = wb.SheetNames.find(s => /^LOTES?$/i.test(s.trim()))
     if (shLote) {
@@ -6189,6 +6222,7 @@ async function importarTodo(input) {
       if (addedL||dupL) resumen.push(`📂 Lotes: ${addedL} importados${dupL?' · '+dupL+' ya existían':''}`)
     }
 
+    _showProg(22, 'Importando potreros…')
     // ── POTREROS ───────────────────────────────────
     // Col 0:Nombre  1:Área  2:Estado  3:Desc  4:Pastos  5:Pendiente  6:FuenteAgua
     const shPot = wb.SheetNames.find(s => /POTREROS?/i.test(s))
@@ -6211,6 +6245,7 @@ async function importarTodo(input) {
       resumen.push(`🌿 Potreros: ${addedP} importados${dupP?' · '+dupP+' ya existían':''}`)
     }
 
+    _showProg(35, 'Importando animales…')
     // ── ANIMALES ───────────────────────────────────
     // Col 0:Arete  1:Nombre  2:Cat  3:Raza  4:Color  5:Peso  6:FechaIngreso  7:Procedencia  8:Lote  9:Desc  10:PrecioCompra
     const shAnim = wb.SheetNames.find(s => /ANIMALES?/i.test(s))
@@ -6279,6 +6314,7 @@ async function importarTodo(input) {
       resumen.push(`🐄 Animales: ${addedA} importados${dupA?' · '+dupA+' ya existían':''}${sinArete?' · '+sinArete+' sin arete':''}`)
     }
 
+    _showProg(55, 'Importando pesajes…')
     // ── PESAJES ────────────────────────────────────
     // Col 0:Arete  1:Peso  2:Fecha  3:Obs
     const shPes = wb.SheetNames.find(s => /PESAJES?/i.test(s))
@@ -6303,6 +6339,7 @@ async function importarTodo(input) {
       if (addedPes||skipPes) resumen.push(`⚖️ Pesajes: ${addedPes} importados${skipPes?' · '+skipPes+' omitidos':''}`)
     }
 
+    _showProg(65, 'Importando labores de lotes…')
     // ── LABORES LOTES ──────────────────────────────
     // Col 0:Lote  1:Tipo  2:Producto  3:Dosis  4:Fecha  5:Obs
     const shLabL = wb.SheetNames.find(s => /LABORES?_LOTES?/i.test(s))
@@ -6329,6 +6366,7 @@ async function importarTodo(input) {
       if (addedLL||skipLL) resumen.push(`💉 Labores lotes: ${addedLL} importadas${skipLL?' · '+skipLL+' omitidas':''}`)
     }
 
+    _showProg(75, 'Importando labores de potreros…')
     // ── LABORES POTREROS ───────────────────────────
     // Col 0:Potrero  1:Tipo  2:Producto  3:Dosis  4:Fecha  5:Obs
     const shLabP = wb.SheetNames.find(s => /LABORES?_POTREROS?/i.test(s))
@@ -6353,6 +6391,7 @@ async function importarTodo(input) {
       if (addedLP||skipLP) resumen.push(`🌿 Labores potreros: ${addedLP} importadas${skipLP?' · '+skipLP+' omitidas':''}`)
     }
 
+    _showProg(82, 'Importando rotaciones…')
     // ── ROTACIONES ─────────────────────────────────
     // Col 0:Nombre  1:Potreros(coma)  2:Desc
     const shRot = wb.SheetNames.find(s => /ROTACION/i.test(s))
@@ -6374,6 +6413,7 @@ async function importarTodo(input) {
       if (addedRot||skipRot) resumen.push(`🔄 Rotaciones: ${addedRot} importadas${skipRot?' · '+skipRot+' omitidas':''}`)
     }
 
+    _showProg(90, 'Importando lluvias…')
     // ── LLUVIAS ────────────────────────────────────
     // Col 0:Fecha  1:mm  2:Obs
     const shLluv = wb.SheetNames.find(s => /LLUVIA/i.test(s))
@@ -6392,6 +6432,10 @@ async function importarTodo(input) {
       resumen.push(`🌧 Lluvias: ${addedLl} importadas${dupLl?' · '+dupLl+' ya existían':''}${errLl?' · '+errLl+' sin fecha':''}`)
     }
 
+    _showProg(100, 'Finalizando…')
+    await new Promise(r => setTimeout(r, 400))
+    _hideProg()
+
     if (!resumen.length) {
       alert('No se encontraron hojas reconocidas.\nAsegúrese de usar el archivo HPRapp_Tablas_Importacion.xlsx')
     } else {
@@ -6406,7 +6450,7 @@ async function importarTodo(input) {
     }
     input.value = ''
     go('config')
-  } catch(e) { alert('Error al importar: ' + e.message); input.value = '' }
+  } catch(e) { _hideProg(); alert('Error al importar: ' + e.message); input.value = '' }
 }
 
 async function importarExcel(input){
