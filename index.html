@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-006'
+const APP_VERSION = '20260527-007'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -5866,15 +5866,18 @@ async function pgConfig() {
         </div>`
     }
     if (_resetStep === 'borrando') {
+      const _prog = _seg['reset_progress'] || {paso:0, total:0, label:'Iniciando…'}
+      const pct = _prog.total > 0 ? Math.round((_prog.paso / _prog.total) * 100) : 0
       return tabs+`
         <div class="card mb10" style="border:2.5px solid #B71C1C;background:#FFF8F8;text-align:center;padding:24px 16px">
           <div style="font-size:2rem;margin-bottom:12px">🗑</div>
           <p class="bold mb8" style="color:#B71C1C">Borrando datos…</p>
-          <p class="sm gray mb4">Limpiando base de datos local y en la nube.</p>
-          <p class="xs gray">No cierres la app ni cambies de pantalla.</p>
-          <div style="margin-top:16px;height:4px;background:#fde;border-radius:4px;overflow:hidden">
-            <div style="height:100%;background:#B71C1C;border-radius:4px;animation:progress-anim 2s ease-in-out infinite"></div>
+          <p class="sm gray mb8">${_prog.label}</p>
+          <div style="margin:0 auto 8px;width:100%;height:10px;background:#fde;border-radius:10px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:#B71C1C;border-radius:10px;transition:width .3s ease"></div>
           </div>
+          <p style="font-size:1.4rem;font-weight:800;color:#B71C1C;margin-bottom:4px">${pct}%</p>
+          <p class="xs gray">No cierres la app ni cambies de pantalla.</p>
         </div>`
     }
     if (_resetStep === 'hecho') {
@@ -7038,21 +7041,36 @@ async function ejecutarResetear() {
     _seg['reset_step'] = 'borrando'
     go('config')
 
-    // 5. Borrar Firestore SINCRONO — paralelo por tabla, garantizado antes de continuar
-    let totalBorrados = 0
-    const borrarTabla = async (t) => {
+    // 5. Borrar Firestore con progreso real
+    // Primero contar total de documentos
+    _seg['reset_progress'] = {paso:0, total:0, label:'Contando documentos…'}
+    go('config')
+    let totalDocs = 0
+    const snapsPrevios = {}
+    for (const t of tables) {
       try {
         const snap = await fsdb.collection(t).get()
-        if (snap.empty) return
-        for (let i = 0; i < snap.docs.length; i += 400) {
-          const batch = fsdb.batch()
-          snap.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref))
-          await batch.commit()
-          totalBorrados += Math.min(400, snap.docs.length - i)
-        }
-      } catch(e) { console.warn('Reset Firestore:', t, e.message) }
+        snapsPrevios[t] = snap
+        totalDocs += snap.size
+      } catch(e) { snapsPrevios[t] = null }
     }
-    await Promise.all(tables.map(t => borrarTabla(t)))
+    let borrados = 0
+    _seg['reset_progress'] = {paso:0, total:totalDocs, label:'Borrando documentos…'}
+    go('config')
+    const borrarTabla = async (t) => {
+      const snap = snapsPrevios[t]
+      if (!snap || snap.empty) return
+      for (let i = 0; i < snap.docs.length; i += 400) {
+        const batch = fsdb.batch()
+        snap.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref))
+        await batch.commit()
+        borrados += Math.min(400, snap.docs.length - i)
+        _seg['reset_progress'] = {paso:borrados, total:totalDocs, label:`Borrando ${t}…`}
+        go('config')
+      }
+    }
+    // Borrar secuencialmente para que el progreso sea preciso
+    for (const t of tables) await borrarTabla(t)
 
     // 6. Guardar reset_ts en Firestore y Dexie para que otros dispositivos lo detecten
     _resetTs = Date.now()
