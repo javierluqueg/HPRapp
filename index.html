@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-002'
+const APP_VERSION = '20260527-003'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -460,11 +460,22 @@ async function initFirebaseSync() {
         if (serverResetTs > 0 && serverResetTs !== localApplied) {
           _resetTs = serverResetTs
           localStorage.setItem('hpr_reset_ts', String(_resetTs))
+          localStorage.setItem('hpr_reset_applied', String(serverResetTs))
           const _rt = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
           await Promise.all(_rt.map(t => db[t].clear().catch(()=>{})))
-          localStorage.setItem('hpr_reset_applied', String(serverResetTs))
           showToast('🔄 Sincronizando datos nuevos...', 'ok', 3000)
-          // Reiniciar listeners para obtener snapshot fresco con _resetTs activo
+          setTimeout(() => initFirebaseSync(), 500)
+        }
+      }
+      if (data.clave === 'data_version' && data.valor) {
+        const serverDV = data.valor
+        const localDV  = localStorage.getItem('hpr_data_version') || ''
+        if (serverDV && serverDV !== localDV) {
+          // Hay datos nuevos en Firestore — limpiar Dexie y recargar
+          localStorage.setItem('hpr_data_version', serverDV)
+          const _rt = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
+          await Promise.all(_rt.map(t => db[t].clear().catch(()=>{})))
+          showToast('🔄 Cargando datos actualizados...', 'ok', 3000)
           setTimeout(() => initFirebaseSync(), 500)
         }
       }
@@ -6373,6 +6384,13 @@ async function importarTodo(input) {
     if (!resumen.length) {
       alert('No se encontraron hojas reconocidas.\nAsegúrese de usar el archivo HPRapp_Tablas_Importacion.xlsx')
     } else {
+      // Actualizar data_version para que otros dispositivos detecten datos nuevos
+      const _dv = String(Date.now())
+      localStorage.setItem('hpr_data_version', _dv)
+      try {
+        await fsdb.collection('config').doc('data_version').set({clave:'data_version', valor:_dv, _ts:parseInt(_dv)})
+        await setCfg('data_version', _dv)
+      } catch(e) {}
       alert('✅ Importación completada:\n\n' + resumen.join('\n'))
     }
     input.value = ''
@@ -6885,11 +6903,15 @@ async function bootstrapFromFirebase(){
       if(ts>_resetTs){_resetTs=ts;localStorage.setItem('hpr_reset_ts',String(ts))}
     }
 
-    // ── 2. Aplicar reset si corresponde ──
+    // ── 2. Aplicar reset y/o data_version si corresponde ──
     const localApplied = parseInt(localStorage.getItem('hpr_reset_applied')||'0')||0
-    if(_resetTs>0 && _resetTs!==localApplied){
+    const serverDV = await getCfg('data_version') || ''
+    const localDV  = localStorage.getItem('hpr_data_version') || ''
+    const needsClear = (_resetTs>0 && _resetTs!==localApplied) || (serverDV && serverDV!==localDV)
+    if(needsClear){
       for(const t of dataTables){try{await db[t].clear()}catch(e){}}
-      localStorage.setItem('hpr_reset_applied',String(_resetTs))
+      if(_resetTs>0) localStorage.setItem('hpr_reset_applied',String(_resetTs))
+      if(serverDV)   localStorage.setItem('hpr_data_version',serverDV)
     }
 
     // ── 3. Solo cargar desde Firestore si Dexie está vacío ──
@@ -7026,11 +7048,15 @@ async function ejecutarResetear() {
 
     // 6. Guardar reset_ts en Firestore y Dexie para que otros dispositivos lo detecten
     _resetTs = Date.now()
-    localStorage.setItem('hpr_reset_ts', String(_resetTs))
-    localStorage.setItem('hpr_reset_applied', String(_resetTs))
+    const _dataVersion = String(_resetTs)
+    localStorage.setItem('hpr_reset_ts', _dataVersion)
+    localStorage.setItem('hpr_reset_applied', _dataVersion)
+    localStorage.setItem('hpr_data_version', _dataVersion)
     try {
-      await fsdb.collection('config').doc('reset_ts').set({clave:'reset_ts', valor:String(_resetTs), _ts:_resetTs})
-      await setCfg('reset_ts', String(_resetTs))
+      await fsdb.collection('config').doc('reset_ts').set({clave:'reset_ts', valor:_dataVersion, _ts:_resetTs})
+      await fsdb.collection('config').doc('data_version').set({clave:'data_version', valor:_dataVersion, _ts:_resetTs})
+      await setCfg('reset_ts', _dataVersion)
+      await setCfg('data_version', _dataVersion)
     } catch(e) {}
 
     // 7. Reactivar sync — Firestore ya está limpio
