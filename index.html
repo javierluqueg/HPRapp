@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-003'
+const APP_VERSION = '20260527-004'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -33,7 +33,7 @@ button{cursor:pointer}
 #hdrAct{flex-shrink:0}
 
 /* Main */
-#pg{padding:14px;padding-bottom:calc(90px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto}
+#pg{padding:14px;padding-bottom:calc(90px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto;overflow-y:auto;-webkit-overflow-scrolling:touch}
 
 /* Nav */
 #nav{position:fixed;bottom:0;left:0;right:0;background:rgba(10,20,10,.82);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom)}
@@ -65,7 +65,7 @@ button{cursor:pointer}
 /* Inputs */
 .field{margin-bottom:13px}
 .field label{display:block;font-size:.8rem;color:#555;margin-bottom:5px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
-.inp{width:100%;background:#f8f8f8;border:1.5px solid #e0e0e0;border-radius:10px;padding:13px 14px;font-size:1rem;outline:none;transition:border-color .2s;-webkit-appearance:none}
+.inp{width:100%;background:#f8f8f8;border:1.5px solid #e0e0e0;border-radius:10px;padding:13px 14px;font-size:16px;outline:none;transition:border-color .2s;-webkit-appearance:none}
 .inp:focus{border-color:#1565C0;background:white}
 .inp-wrap{position:relative}
 .inp-wrap .inp{padding-right:50px}
@@ -166,7 +166,7 @@ button{cursor:pointer}
 .hpr-p{font-size:4rem;font-weight:900;color:#FFD700;text-shadow:0 0 20px rgba(255,215,0,.5);font-family:'Arial Black',sans-serif}
 .hpr-r{font-size:4rem;font-weight:900;color:#29B6F6;text-shadow:0 0 20px rgba(41,182,246,.5);font-family:'Arial Black',sans-serif}
 @keyframes progress-anim{0%{width:0%;margin-left:0}50%{width:60%;margin-left:20%}100%{width:0%;margin-left:100%}}
-.hpr-app{font-size:1rem;color:rgba(255,255,255,.5);letter-spacing:.15em;text-transform:uppercase;margin-top:4px}
+.hpr-app{font-size:1rem;touch-action:pan-y;color:rgba(255,255,255,.5);letter-spacing:.15em;text-transform:uppercase;margin-top:4px}
 .user-card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 18px;display:flex;align-items:center;gap:14px;cursor:pointer;margin-bottom:8px;width:100%;max-width:360px;-webkit-tap-highlight-color:transparent}
 .user-card:active{background:rgba(255,215,0,.1)}
 .avatar{width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#FF6B35,#FFD700);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1.2rem;color:#1a1a2e;flex-shrink:0}
