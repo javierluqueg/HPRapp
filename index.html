@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-001'
+const APP_VERSION = '20260527-002'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -7085,14 +7085,15 @@ async function init(){
     await migrarNombresLote()
     let ok=await getCfg('setup_ok')
     if(!ok){
-      // Fallback: leer setup_ok directamente de Firestore si Dexie está vacío
+      // Dexie no tiene setup_ok — leer TODA la config de Firestore y guardar localmente
       try{
-        const doc=await fsdb.collection('config').doc('setup_ok').get()
-        if(doc.exists&&doc.data().valor==='true'){
-          ok='true'
-          await setCfg('setup_ok','true')
+        const cfgSnap=await fsdb.collection('config').get()
+        for(const doc of cfgSnap.docs){
+          const d=doc.data()
+          if(d.clave&&d.valor!==undefined) await setCfg(d.clave,d.valor)
         }
-      }catch(e){}
+        ok=await getCfg('setup_ok')
+      }catch(e){ console.warn('setup_ok fallback:',e.message) }
     }
     await go(ok?'login':'setup')
     // Verificar actualizaciones en segundo plano (no bloquea el inicio)
