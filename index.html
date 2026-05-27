@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-012'
+const APP_VERSION = '20260527-013'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -7470,12 +7470,12 @@ async function deshacerResetear() {
 
 async function init(){
   try{
-    $('pg').innerHTML=`<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px">${logoHPR(56)}<p style="color:#888;font-size:.85rem;margin-top:8px">Iniciando...</p></div>`
     try {
-      $('pg').innerHTML=`<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px">${logoHPR(56)}<p style="color:#888;font-size:.85rem;margin-top:8px">Sincronizando datos...</p></div>`
+      // Pantalla de carga VISIBLE con fondo sólido
+      $('pg').innerHTML=`<div style="position:fixed;inset:0;background:#0a1628;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;z-index:999">${logoHPR(56)}<p style="color:#aaa;font-size:.85rem;margin-top:8px">Sincronizando datos...</p><div style="width:40px;height:3px;background:#1B5E20;border-radius:2px;overflow:hidden;margin-top:4px"><div style="height:100%;background:#4CAF50;border-radius:2px;animation:progress-anim 1.5s ease-in-out infinite"></div></div></div>`
       await Promise.race([
         bootstrapFromFirebase(),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),30000))
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),8000))
       ])
     } catch(e) {
       console.warn('Bootstrap omitido:', e.message)
