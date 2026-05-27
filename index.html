@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-008'
+const APP_VERSION = '20260527-010'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -187,6 +187,9 @@ button{cursor:pointer}
 </head>
 <body>
 
+<div id="offline-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#E65100;color:white;text-align:center;padding:7px 12px;font-size:.78rem;font-weight:700">
+  📡 Sin conexión — trabajando offline. Los cambios se sincronizarán al recuperar señal.
+</div>
 <header id="hdr" hidden>
   <button id="btnBack">&#8592;</button>
   <h1 id="hdrTitle"></h1>
@@ -206,6 +209,12 @@ button{cursor:pointer}
 </nav>
 
 <div id="ov"><div id="sheet"></div></div>
+<div id="app-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;align-items:center;justify-content:center;padding:20px">
+  <div style="background:white;border-radius:18px;padding:24px 20px;width:100%;max-width:340px;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+    <p id="app-modal-msg" style="font-size:.95rem;color:#222;margin-bottom:20px;line-height:1.5;white-space:pre-line"></p>
+    <div id="app-modal-btns" style="display:flex;gap:10px;justify-content:flex-end"></div>
+  </div>
+</div>
 <div id="pwaBanner" style="display:none;position:fixed;bottom:calc(72px + env(safe-area-inset-bottom));left:12px;right:12px;z-index:350;background:linear-gradient(135deg,#1a3a1a,#0f3460);border-radius:16px;padding:14px 16px;box-shadow:0 4px 24px rgba(0,0,0,.4);max-width:616px;margin:0 auto">
   <div style="display:flex;align-items:center;gap:12px">
     <span style="font-size:2rem;flex-shrink:0">🌿</span>
@@ -280,7 +289,7 @@ async function trazar(accion, entidad, entidadId, datos={}) {
       accion, entidad, entidadId: String(entidadId),
       datos,
       usuario: USER?.nombre || '—',
-      usuarioId: USER?.id ? String(USER.id) : null,
+      usuarioId: USER?.id ? String(USER?.id) : null,
       rol: USER?.rol || '—',
       fecha: Date.now(),
       fechaISO: new Date().toISOString()
@@ -702,6 +711,36 @@ function semPrioridad(p, diasOcup, diasDesc) {
   return -1  // Disponibles al final
 }
 
+// ── Modales nativos reemplazados ────────────────
+function _appModal(msg, btns) {
+  return new Promise(resolve => {
+    const m = document.getElementById('app-modal')
+    const msgEl = document.getElementById('app-modal-msg')
+    const btnsEl = document.getElementById('app-modal-btns')
+    if (!m || !msgEl || !btnsEl) { resolve(btns.length===1); return }
+    msgEl.textContent = msg
+    btnsEl.innerHTML = ''
+    btns.forEach(({label, style, val}) => {
+      const btn = document.createElement('button')
+      btn.textContent = label
+      btn.className = 'btn btn-sm ' + (style||'btn-gray')
+      btn.style.cssText = 'min-width:80px;padding:10px 16px'
+      btn.onclick = () => { m.style.display='none'; resolve(val) }
+      btnsEl.appendChild(btn)
+    })
+    m.style.display = 'flex'
+  })
+}
+function showAlert(msg) {
+  return _appModal(msg, [{label:'Aceptar', style:'btn-g', val:true}])
+}
+function showConfirm(msg) {
+  return _appModal(msg, [
+    {label:'Cancelar', style:'btn-gray', val:false},
+    {label:'Confirmar', style:'btn-r', val:true}
+  ])
+}
+
 function showSheet(html) { const sh=$('sheet'),ov=$('ov'); if(sh)sh.innerHTML=html; if(ov)ov.classList.add('show') }
 function closeSheet() { const ov=$('ov'); if(ov)ov.classList.remove('show') }
 
@@ -985,7 +1024,7 @@ async function doLogin(pin) {
   if(ph===_loginUser.pinHash){
     USER=_loginUser; _loginUser=null; _syncActive=true; initFirebaseSync()
     // Mostrar bienvenida solo la primera vez por usuario en este dispositivo
-    const key = 'bienvenida_' + USER.id
+    const key = 'bienvenida_' + USER?.id
     const visto = localStorage.getItem(key)
     if (!visto) {
       go('bienvenida')
@@ -1057,7 +1096,7 @@ async function pgBienvenida() {
 }
 
 function cerrarBienvenida() {
-  if (USER) localStorage.setItem('bienvenida_' + USER.id, '1')
+  if (USER) localStorage.setItem('bienvenida_' + USER?.id, '1')
   go('dashboard')
 }
 
@@ -1190,7 +1229,7 @@ async function pgDashboard() {
           <div>
             <p style="font-size:.8rem;color:rgba(255,255,255,.7);text-transform:capitalize;margin-bottom:4px">${new Date().toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long'})}</p>
             <p style="font-size:1.35rem;font-weight:800;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.4)">${nombre||'Mi Finca'}</p>
-            ${USER?`<p style="font-size:.78rem;color:rgba(255,255,255,.6);margin-top:4px">👤 ${USER.nombre} · ${USER.rol}</p>`:''}
+            ${USER?`<p style="font-size:.78rem;color:rgba(255,255,255,.6);margin-top:4px">👤 ${USER?.nombre} · ${USER?.rol}</p>`:''}
           </div>
           <button onclick="logOut()" style="background:rgba(0,0,0,.3);backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.8);border-radius:8px;padding:7px 11px;font-size:.78rem;flex-shrink:0">Salir</button>
         </div>
@@ -1572,7 +1611,7 @@ async function pgLluvias() {
 }
 
 async function eliminarLluvia(id) {
-  if (!confirm('¿Eliminar este registro de lluvia?')) return
+  if (!await showConfirm('¿Eliminar este registro de lluvia?')) return
   try {
     await fsDelete('lluvias', id)
     showToast('Registro eliminado')
@@ -3233,7 +3272,7 @@ async function eliminarLotesSeleccionados(){
   if(!ids.length) return
   const lotes=await Promise.all(ids.map(id=>db.lotes.get(id)))
   const nombres=lotes.map(l=>l?.nombre||'').filter(Boolean).join(', ')
-  if(!confirm(`¿Eliminar los siguientes lotes?\n\n${nombres}\n\nLos animales asignados quedarán sin lote.`)) return
+  if(!await showConfirm(`¿Eliminar los siguientes lotes?\n\n${nombres}\n\nLos animales asignados quedarán sin lote.`)) return
   // Snapshot completo antes de modificar
   const snapshots=[]
   for(const id of ids){
@@ -3571,7 +3610,7 @@ async function eliminarLote(id){
   const l=await db.lotes.get(id)
   const anis=await db.animales.where({activo:1,loteId:id}).toArray()
   const msg=`¿Eliminar el lote "${l?.nombre}"?${anis.length?`\n\n${anis.length} animal(es) quedarán sin lote.`:''}`
-  if(!confirm(msg)) return
+  if(!await showConfirm(msg)) return
   const ciclo=await db.ciclos.where({loteId:id,activo:1}).first()
   const snapshotAnis=anis.map(a=>({id:a.id,loteId:a.loteId,fechaLote:a.fechaLote}))
   for(const a of anis) await fsUpdate('animales',a.id,{loteId:undefined,fechaLote:undefined})
@@ -4156,7 +4195,7 @@ async function saveIngresarLote(loteId) {
   closeSheet(); go('lote-ficha',{id:loteId})
 }
 async function sacarLoteDelPotrero(loteId,cicloId,potreroId) {
-  if(!confirm('¿Confirmar salida del lote del potrero?')) return
+  if(!await showConfirm('¿Confirmar salida del lote del potrero?')) return
   const dias=diasDesde((await db.ciclos.get(cicloId)).fechaEntrada)
   await fsUpdate('ciclos',cicloId,{activo:0,fechaSalida:Date.now(),diasOcupacion:dias})
   await fsUpdate('potreros',potreroId,{estado:'EN_DESCANSO',numAnimales:0,loteActual:undefined,fechaSalida:Date.now()})
@@ -4286,7 +4325,7 @@ async function saveAgregarAnimal(){
     const loteDestino=await db.lotes.get(_aniLoteId)
     const lista=traslados.map(a=>`• ${a.arete}${a.nombre?' ('+a.nombre+')':''} — actualmente en "${a._loteNombre}"`).join('\n')
     const msg=`⚠ TRASLADO\n${traslados.length} animal${traslados.length>1?'es':''} en otro lote se moverán a "${loteDestino?.nombre||'este lote'}".\n\n${lista}\n\n¿Confirmar traslado?`
-    if(!confirm(msg)) return
+    if(!await showConfirm(msg)) return
   }
   const btn=$('aa-btn')
   if(btn){btn.disabled=true;btn.textContent='Agregando…'}
@@ -4472,7 +4511,7 @@ async function eliminarPotrerosSel(){
     return
   }
   const nombres=pots.map(p=>p?.nombre||'').filter(Boolean).join(', ')
-  if(!confirm(`¿Eliminar los siguientes potreros?\n\n${nombres}`)) return
+  if(!await showConfirm(`¿Eliminar los siguientes potreros?\n\n${nombres}`)) return
   for(const id of ids){
     await db.ciclos.where('potreroId').equals(id).modify({activo:0})
     await fsUpdate('potreros',id,{activo:0})
@@ -4487,7 +4526,7 @@ async function eliminarPotrerosSel(){
 async function eliminarPotrero(id){
   const p=await db.potreros.get(id)
   if(p?.estado==='OCUPADO'){showToast('No se puede eliminar un potrero ocupado. Saca el lote primero.','err',5000);return}
-  if(!confirm(`¿Eliminar el potrero "${p?.nombre}"?`)) return
+  if(!await showConfirm(`¿Eliminar el potrero "${p?.nombre}"?`)) return
   await db.ciclos.where('potreroId').equals(id).modify({activo:0})
   await fsUpdate('potreros',id,{activo:0})
   pushUndo(`Potrero "${p?.nombre}" eliminado`, async()=>{
@@ -4731,7 +4770,7 @@ async function moverPotreroRot(rotId, idx, dir) {
   go('rotacion-ficha',{id:rotId})
 }
 async function quitarPotreroRot(rotId, potId) {
-  if(!confirm('¿Quitar este potrero de la rotación?')) return
+  if(!await showConfirm('¿Quitar este potrero de la rotación?')) return
   const r = await db.rotaciones.get(rotId)
   const prev = r?.potreroIds||[]
   const ids = prev.filter(id=>id!==potId)
@@ -4743,7 +4782,7 @@ async function eliminarRotacion(id) {
   const r = await db.rotaciones.get(id)
   const lotes = await db.lotes.where('activo').equals(1).filter(l=>l.rotacionId===id).toArray()
   const msg = '¿Eliminar la rotación "'+r?.nombre+'"?'+(lotes.length?'\n\n'+lotes.length+' lote(s) perderán su rotación asignada.':'')
-  if(!confirm(msg)) return
+  if(!await showConfirm(msg)) return
   for(const l of lotes) await fsUpdate('lotes',l.id,{rotacionId:undefined,rotacionIdx:undefined})
   await fsUpdate('rotaciones',id,{activo:0})
   pushUndo('Rotación "'+r?.nombre+'" eliminada', async()=>{
@@ -5243,7 +5282,7 @@ async function guardarFechaIngreso(potreroId, cicloId) {
   go('potrero-ficha', {id: potreroId})
 }
 async function forzarDisponible(potreroId, cicloId) {
-  if (!confirm('¿Marcar este potrero como Disponible?\n\nSe eliminará el ciclo activo (si existe). Úsalo solo si el estado es incorrecto.')) return
+  if (!await showConfirm('¿Marcar este potrero como Disponible?\n\nSe eliminará el ciclo activo (si existe). Úsalo solo si el estado es incorrecto.')) return
   try {
     if (cicloId) {
       await fsUpdate('ciclos', cicloId, {activo:0, fechaSalida:Date.now(), _huerfano:true})
@@ -5461,7 +5500,7 @@ async function recuperarLaboresFirebase(potreroId) {
 }
 
 async function eliminarLaborPotrero(laborId, potreroId) {
-  if (!confirm('¿Eliminar este registro de labor?')) return
+  if (!await showConfirm('¿Eliminar este registro de labor?')) return
   try {
     await db.laboresPotrero.delete(laborId)
     fsdb.collection('laboresPotrero').doc(String(laborId)).delete().catch(()=>{})
@@ -5614,129 +5653,412 @@ async function setEstadoPotrero(id,estado) {
 // VENTAS
 // ═══════════════════════════════════════════════════
 async function pgVentas() {
-  const vendidos = (await db.animales.where('activo').equals(0).toArray()).filter(a => a.causaBaja === 'Venta')
-  if (!vendidos.length) return `<div class="empty"><div class="eico">💰</div>
-    <p>Sin ventas registradas</p>
-    <p class="xs gray mt8">Cuando des de baja un animal por "Venta" aparecerá aquí.</p></div>`
+  $('hdrTitle').textContent = '💰 Ventas'
+  $('hdrAct').innerHTML = `<button class="btn btn-sm btn-g" onclick="openRegistrarVenta()">+ Venta</button>`
 
-  // Ordenar por fecha de baja desc
-  vendidos.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
+  const modo = _seg['ven_modo'] || 'mes'
+  const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+  const fmt = v => '$'+Math.round(v).toLocaleString('es-CO')
+  const fd  = ts => { const d=new Date(ts); return d.getDate()+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear() }
+  const now = new Date()
 
-  // KPIs globales
-  let totalValor=0, totalCosto=0, totalGanPeso=0, nConPrecio=0, nConCosto=0
-  for (const a of vendidos) {
-    if (a.valorVenta)   { totalValor += a.valorVenta;   nConPrecio++ }
-    if (a.precioPorKg && a.pesoInicial) {
-      totalCosto += a.precioPorKg * a.pesoInicial; nConCosto++
-    }
-    if (a.pesoVenta && a.pesoInicial) totalGanPeso += (a.pesoVenta - a.pesoInicial)
+  // Selector de período
+  const selMes   = _seg['ven_mes']  ?? now.getMonth()
+  const selAnio  = _seg['ven_anio'] ?? now.getFullYear()
+  const anios    = []
+  for (let y=now.getFullYear(); y>=now.getFullYear()-5; y--) anios.push(y)
+
+  const segModo = `<div class="seg mb10">
+    <button class="${modo==='mes'?'on':''}"  onclick="_seg['ven_modo']='mes';go('ventas')">Mes</button>
+    <button class="${modo==='anio'?'on':''}" onclick="_seg['ven_modo']='anio';go('ventas')">Año</button>
+    <button class="${modo==='todo'?'on':''}" onclick="_seg['ven_modo']='todo';go('ventas')">Todo</button>
+  </div>`
+
+  let selector = ''
+  if (modo === 'mes') {
+    selector = `<div style="display:flex;gap:8px;margin-bottom:12px">
+      <select class="inp" style="flex:1" onchange="_seg['ven_mes']=parseInt(this.value);go('ventas')">
+        ${MESES.map((m,i)=>`<option value="${i}" ${i===selMes?'selected':''}>${m}</option>`).join('')}
+      </select>
+      <select class="inp" style="width:90px" onchange="_seg['ven_anio']=parseInt(this.value);go('ventas')">
+        ${anios.map(y=>`<option value="${y}" ${y===selAnio?'selected':''}>${y}</option>`).join('')}
+      </select>
+    </div>`
+  } else if (modo === 'anio') {
+    selector = `<div style="margin-bottom:12px">
+      <select class="inp" style="width:100px" onchange="_seg['ven_anio']=parseInt(this.value);go('ventas')">
+        ${anios.map(y=>`<option value="${y}" ${y===selAnio?'selected':''}>${y}</option>`).join('')}
+      </select>
+    </div>`
+  }
+
+  // Obtener todos los vendidos y filtrar
+  const todos = (await db.animales.where('activo').equals(0).toArray()).filter(a => a.causaBaja === 'Venta')
+  const filtrados = todos.filter(a => {
+    if (!a.fechaBaja) return modo === 'todo'
+    const d = new Date(a.fechaBaja)
+    if (modo === 'mes')  return d.getMonth()===selMes && d.getFullYear()===selAnio
+    if (modo === 'anio') return d.getFullYear()===selAnio
+    return true
+  })
+  filtrados.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
+
+  if (!filtrados.length) {
+    return segModo + selector + `<div class="empty">
+      <div class="eico">💰</div>
+      <p>Sin ventas en este período</p>
+      <p class="xs gray mt8">Usa el botón <strong>+ Venta</strong> para registrar.</p>
+    </div>`
+  }
+
+  // KPIs del período
+  let totalValor=0, totalCosto=0, totalGanPeso=0, nV=0, nC=0
+  for (const a of filtrados) {
+    if (a.valorVenta)   { totalValor += a.valorVenta; nV++ }
+    if (a.precioPorKg && a.pesoInicial) { totalCosto += a.precioPorKg*a.pesoInicial; nC++ }
+    if (a.pesoVenta && a.pesoInicial)   totalGanPeso += (a.pesoVenta - a.pesoInicial)
   }
   const utilidad = totalValor - totalCosto
   const rentPct  = totalCosto > 0 ? (utilidad/totalCosto*100) : null
-
-  const fmt = v => '$'+Math.round(v).toLocaleString('es-CO')
   const colU = utilidad >= 0 ? '#2E7D32' : '#C62828'
-  const colR = rentPct === null ? '#888' : rentPct >= 0 ? '#2E7D32' : '#C62828'
 
   const kpis = `<div class="card card-dark mb12">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:10px">
       <div style="text-align:center">
-        <p style="font-size:1.2rem;font-weight:800">${vendidos.length}</p>
+        <p style="font-size:1.4rem;font-weight:800">${filtrados.length}</p>
         <p class="sub xs">Animales vendidos</p>
       </div>
       <div style="text-align:center">
-        <p style="font-size:1.2rem;font-weight:800">${totalGanPeso>=0?'+':''}${totalGanPeso.toFixed(0)} kg</p>
+        <p style="font-size:1.4rem;font-weight:800">${totalGanPeso>=0?'+':''}${totalGanPeso.toFixed(0)} kg</p>
         <p class="sub xs">Ganancia de peso</p>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center">
-      <div><p style="font-weight:700;font-size:.95rem">${nConPrecio?fmt(totalValor):'—'}</p><p class="sub xs">Total ventas</p></div>
-      <div><p style="font-weight:700;font-size:.95rem">${nConCosto?fmt(totalCosto):'—'}</p><p class="sub xs">Costo total</p></div>
-      <div><p style="font-weight:800;font-size:.95rem;color:${colU}">${nConPrecio&&nConCosto?(utilidad>=0?'+':'')+fmt(utilidad):'—'}</p><p class="sub xs">Utilidad</p></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center">
+      <div><p style="font-weight:700;font-size:.9rem">${nV?fmt(totalValor):'—'}</p><p class="sub xs">Ventas</p></div>
+      <div><p style="font-weight:700;font-size:.9rem">${nC?fmt(totalCosto):'—'}</p><p class="sub xs">Costo</p></div>
+      <div><p style="font-weight:800;font-size:.9rem;color:${colU}">${nV&&nC?(utilidad>=0?'+':'')+fmt(utilidad):'—'}</p><p class="sub xs">Utilidad</p></div>
     </div>
     ${rentPct!==null?`<div style="text-align:center;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.15)">
-      <p style="font-size:1.1rem;font-weight:800;color:${colR}">${rentPct>=0?'+':''}${rentPct.toFixed(1)}% rentabilidad</p>
+      <p style="font-size:1.1rem;font-weight:800;color:${rentPct>=0?'#A5D6A7':'#EF9A9A'}">${rentPct>=0?'+':''}${rentPct.toFixed(1)}% rentabilidad</p>
     </div>`:''}
   </div>`
 
-  // Agrupar por mes
+  // Botones export
+  const exportBtns = `<div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn btn-sm btn-gray" style="flex:1" onclick="exportarVentasPDF()">📄 PDF</button>
+    <button class="btn btn-sm btn-gray" style="flex:1" onclick="exportarVentasExcel()">📊 Excel</button>
+  </div>`
+
+  // Lista agrupada por mes
   const grupos = {}
-  for (const a of vendidos) {
+  for (const a of filtrados) {
     const d = a.fechaBaja ? new Date(a.fechaBaja) : null
-    const key = d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` : 'Sin fecha'
-    const label = d ? d.toLocaleDateString('es-CO',{month:'long',year:'numeric'}) : 'Sin fecha'
+    const key = d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` : '0000-00'
+    const label = d ? `${MESES[d.getMonth()]} ${d.getFullYear()}` : 'Sin fecha'
     if (!grupos[key]) grupos[key] = {label, items:[]}
     grupos[key].items.push(a)
   }
 
-  let cards = ''
+  let lista = ''
   for (const key of Object.keys(grupos).sort().reverse()) {
     const g = grupos[key]
-    let gValor=0, gCosto=0, gN=g.items.length
+    let gValor=0, gCosto=0
     const rows = g.items.map(a => {
-      const pesoE = a.pesoInicial||0
-      const pesoS = a.pesoVenta||pesoE
-      const ganPeso = pesoS - pesoE
-      const valV = a.valorVenta||0
-      const valC = (a.precioPorKg||0)*(a.pesoInicial||0)
-      const util = valV && valC ? valV - valC : null
+      const pesoE = a.pesoInicial||0, pesoS = a.pesoVenta||pesoE
+      const ganP  = pesoS - pesoE
+      const valV  = a.valorVenta||0
+      const valC  = (a.precioPorKg||0)*(a.pesoInicial||0)
+      const util  = valV && valC ? valV - valC : null
       if (valV) gValor += valV
       if (valC) gCosto += valC
-      const colGan = ganPeso >= 0 ? '#2E7D32' : '#C62828'
-      const colUtil = !util ? '#888' : util>=0 ? '#2E7D32' : '#C62828'
+      const colG = ganP>=0?'#2E7D32':'#C62828'
+      const colU2 = !util?'#888':util>=0?'#2E7D32':'#C62828'
       return `<div style="padding:11px 0;border-bottom:1px solid #f4f4f4">
-        <div class="row-b" style="margin-bottom:5px">
+        <div class="row-b mb6">
           <div>
             <span class="bold sm">${a.arete}${a.nombre?' — '+a.nombre:''}</span>
-            <span class="badge bg-gray xs" style="margin-left:6px">${CAT[a.categoria]||a.categoria||'—'}</span>
+            <span class="badge bg-gray xs ml6">${CAT[a.categoria]||a.categoria}</span>
           </div>
-          <span class="xs gray">${a.fechaBaja?new Date(a.fechaBaja).toLocaleDateString('es-CO',{day:'2-digit',month:'short'}):''}</span>
+          <span class="xs gray">${a.fechaBaja?fd(a.fechaBaja):''}</span>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center;margin-bottom:6px">
           <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.75rem;font-weight:700">${pesoE} kg</p><p style="font-size:.6rem;color:#aaa">Entrada</p>
+            <p style="font-size:.72rem;font-weight:700">${pesoE} kg</p><p style="font-size:.6rem;color:#aaa">Entrada</p>
           </div>
           <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.75rem;font-weight:700">${pesoS} kg</p><p style="font-size:.6rem;color:#aaa">Salida</p>
+            <p style="font-size:.72rem;font-weight:700">${pesoS} kg</p><p style="font-size:.6rem;color:#aaa">Salida</p>
           </div>
           <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.75rem;font-weight:700;color:${colGan}">${ganPeso>=0?'+':''}${ganPeso} kg</p><p style="font-size:.6rem;color:#aaa">Δ Peso</p>
+            <p style="font-size:.72rem;font-weight:700;color:${colG}">${ganP>=0?'+':''}${ganP} kg</p><p style="font-size:.6rem;color:#aaa">Δ Peso</p>
           </div>
           <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.75rem;font-weight:700;color:${colUtil}">${util!==null?(util>=0?'+':'')+fmt(util):'—'}</p><p style="font-size:.6rem;color:#aaa">Utilidad</p>
+            <p style="font-size:.72rem;font-weight:800;color:${colU2}">${util!==null?(util>=0?'+':'')+fmt(util):'—'}</p><p style="font-size:.6rem;color:#aaa">Utilidad</p>
           </div>
         </div>
-        ${a.precioVentaKg?`<p class="xs gray mt6">Precio venta: <strong>$${a.precioVentaKg.toLocaleString('es-CO')}/kg</strong>${a.precioPorKg?' · Compra: <strong>$'+a.precioPorKg.toLocaleString('es-CO')+'/kg</strong>':''}${a.comprador?' · '+a.comprador:''}</p>`:''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${a.precioVentaKg?`<span class="xs gray">💰 Venta: <strong>$${a.precioVentaKg.toLocaleString('es-CO')}/kg</strong></span>`:''}
+          ${a.precioPorKg?`<span class="xs gray">🛒 Compra: <strong>$${a.precioPorKg.toLocaleString('es-CO')}/kg</strong></span>`:''}
+          ${a.comprador?`<span class="xs gray">👤 ${a.comprador}</span>`:''}
+        </div>
       </div>`
     }).join('')
-    const gUtil = gValor && gCosto ? gValor-gCosto : null
-    cards += `<p class="sec" style="text-transform:capitalize">${g.label}</p>
+    const gUtil = gValor&&gCosto ? gValor-gCosto : null
+    const colGU = !gUtil?'#888':gUtil>=0?'#2E7D32':'#C62828'
+    lista += `<p class="sec" style="text-transform:capitalize">${g.label}</p>
     <div class="card mb8">
-      <div class="row-b mb10">
-        <span class="xs gray">${gN} animal${gN>1?'es':''}</span>
+      <div class="row-b mb8">
+        <span class="xs gray">${g.items.length} animal${g.items.length>1?'es':''}</span>
         <div style="text-align:right">
           ${gValor?`<p class="xs bold" style="color:#1565C0">${fmt(gValor)} venta</p>`:''}
-          ${gUtil!==null?`<p class="xs bold" style="color:${gUtil>=0?'#2E7D32':'#C62828'}">${gUtil>=0?'+':''}${fmt(gUtil)} utilidad</p>`:''}
+          ${gUtil!==null?`<p class="xs bold" style="color:${colGU}">${gUtil>=0?'+':''}${fmt(gUtil)} utilidad</p>`:''}
         </div>
       </div>
       ${rows}
     </div>`
   }
 
-  return kpis + cards
+  return segModo + selector + kpis + exportBtns + lista
 }
 
+async function openRegistrarVenta() {
+  const activos = await db.animales.where('activo').equals(1).toArray()
+  if (!activos.length) { showToast('No hay animales activos','err'); return }
+  const hoy = new Date().toISOString().split('T')[0]
+  const lotes = await db.lotes.where('activo').equals(1).toArray()
+  const loteMap = Object.fromEntries(lotes.map(l=>[l.id, l.nombre]))
+
+  // Agrupar por lote
+  const porLote = {}
+  for (const a of activos.sort((x,y)=>x.arete.localeCompare(y.arete))) {
+    const lnom = a.loteId ? (loteMap[a.loteId]||'Sin lote') : 'Sin lote'
+    if (!porLote[lnom]) porLote[lnom] = []
+    porLote[lnom].push(a)
+  }
+  const opts = Object.entries(porLote).map(([lnom,aans])=>
+    `<optgroup label="${lnom}">${aans.map(a=>`<option value="${a.id}">${a.arete}${a.nombre?' — '+a.nombre:''}</option>`).join('')}</optgroup>`
+  ).join('')
+
+  showSheet(`
+    <div class="sh-title">💰 Registrar Venta<button class="sh-x" onclick="closeSheet()">✕</button></div>
+    <div class="field"><label>Animal *</label>
+      <select id="rv-animal" class="inp" onchange="updatePesoVenta(this.value)">${opts}</select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field"><label>Fecha venta *</label>
+        <input id="rv-fecha" class="inp" type="date" value="${hoy}"></div>
+      <div class="field"><label>Peso venta (kg) *</label>
+        <input id="rv-peso" class="inp" type="number" min="0" step="0.1" placeholder="kg"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field"><label>Precio/kg ($) *</label>
+        <input id="rv-pxkg" class="inp" type="number" min="0" step="1" placeholder="$/kg" oninput="calcTotalVenta()"></div>
+      <div class="field"><label>Total venta ($)</label>
+        <input id="rv-total" class="inp" type="number" min="0" step="1" placeholder="$" oninput="calcPxkgVenta()"></div>
+    </div>
+    <div id="rv-util-preview" style="background:#F1F8E9;border-radius:10px;padding:10px 12px;margin-bottom:12px;display:none">
+      <p class="xs bold" style="color:#2E7D32">Vista previa utilidad</p>
+      <p id="rv-util-txt" class="sm bold" style="color:#1B5E20"></p>
+    </div>
+    <div class="field"><label>Comprador</label>
+      <input id="rv-comprador" class="inp" placeholder="Nombre del comprador (opcional)"></div>
+    <div class="field"><label>Observaciones</label>
+      <input id="rv-obs" class="inp" placeholder="Opcional…"></div>
+    <div class="btn-row">
+      <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
+      <button class="btn btn-g" id="rv-btn" onclick="guardarVenta()">✓ Registrar venta</button>
+    </div>`)
+
+  // Pre-cargar peso del animal seleccionado
+  const firstId = activos[0]?.id
+  if (firstId) updatePesoVenta(firstId)
+}
+
+async function updatePesoVenta(animalId) {
+  const a = await db.animales.get(parseInt(animalId))
+  if (!a) return
+  const ult = await getPesoActual(a.id)
+  const peso = ult?.pesoKg || a.pesoInicial || 0
+  const inp = document.getElementById('rv-peso')
+  if (inp && !inp.value) inp.value = peso
+  calcTotalVenta()
+}
+
+function calcTotalVenta() {
+  const pxkg  = parseFloat(document.getElementById('rv-pxkg')?.value||0)
+  const peso  = parseFloat(document.getElementById('rv-peso')?.value||0)
+  const totalEl = document.getElementById('rv-total')
+  if (pxkg && peso && totalEl) totalEl.value = Math.round(pxkg * peso)
+  _previewUtilVenta()
+}
+
+function calcPxkgVenta() {
+  const total = parseFloat(document.getElementById('rv-total')?.value||0)
+  const peso  = parseFloat(document.getElementById('rv-peso')?.value||0)
+  const pxkgEl = document.getElementById('rv-pxkg')
+  if (total && peso && pxkgEl) pxkgEl.value = Math.round(total/peso)
+  _previewUtilVenta()
+}
+
+async function _previewUtilVenta() {
+  const animalId = parseInt(document.getElementById('rv-animal')?.value||0)
+  const total = parseFloat(document.getElementById('rv-total')?.value||0)
+  const prev  = document.getElementById('rv-util-preview')
+  const txt   = document.getElementById('rv-util-txt')
+  if (!prev || !txt) return
+  if (!animalId || !total) { prev.style.display='none'; return }
+  const a = await db.animales.get(animalId)
+  if (!a || !a.precioPorKg || !a.pesoInicial) { prev.style.display='none'; return }
+  const costo = a.precioPorKg * a.pesoInicial
+  const util  = total - costo
+  const pct   = (util/costo*100).toFixed(1)
+  prev.style.display = 'block'
+  prev.style.background = util>=0 ? '#F1F8E9' : '#FFEBEE'
+  txt.style.color = util>=0 ? '#1B5E20' : '#B71C1C'
+  txt.textContent = `${util>=0?'+':''}$${Math.round(util).toLocaleString('es-CO')} (${util>=0?'+':''}${pct}%) · Costo compra: $${Math.round(costo).toLocaleString('es-CO')}`
+}
+
+async function guardarVenta() {
+  const animalId  = parseInt(document.getElementById('rv-animal')?.value||0)
+  const fechaStr  = document.getElementById('rv-fecha')?.value
+  const pesoVenta = parseFloat(document.getElementById('rv-peso')?.value||0)
+  const pxkg      = parseFloat(document.getElementById('rv-pxkg')?.value||0)
+  const total     = parseFloat(document.getElementById('rv-total')?.value||0)
+  const comprador = document.getElementById('rv-comprador')?.value?.trim()||''
+  const obs       = document.getElementById('rv-obs')?.value?.trim()||''
+
+  if (!animalId)  { showToast('Selecciona un animal','err'); return }
+  if (!fechaStr)  { showToast('Indica la fecha de venta','err'); return }
+  if (!pesoVenta) { showToast('Indica el peso al vender','err'); return }
+  if (!pxkg && !total) { showToast('Indica el precio de venta','err'); return }
+
+  const fechaBaja = new Date(fechaStr+'T00:00:00').getTime()
+  const valorVenta = total || Math.round(pxkg * pesoVenta)
+  const precioVentaKg = pxkg || Math.round(total / pesoVenta)
+
+  const btn = document.getElementById('rv-btn')
+  if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
+
+  try {
+    await fsUpdate('animales', animalId, {
+      activo:0, causaBaja:'Venta', fechaBaja,
+      pesoVenta, valorVenta, precioVentaKg,
+      comprador: comprador||undefined,
+      obsBaja: obs||undefined,
+      loteId: undefined, fechaLote: undefined
+    })
+    closeSheet()
+    showToast('✅ Venta registrada','ok',3000)
+    go('ventas')
+  } catch(e) {
+    showToast('Error: '+e.message,'err',4000)
+    if (btn) { btn.disabled=false; btn.textContent='✓ Registrar venta' }
+  }
+}
+
+async function exportarVentasPDF() {
+  const modo   = _seg['ven_modo']||'todo'
+  const selMes = _seg['ven_mes'] ?? new Date().getMonth()
+  const selAnio= _seg['ven_anio']?? new Date().getFullYear()
+  const MESES  = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+  const finca  = await getCfg('nombre_finca')||'HPRapp'
+  const todos  = (await db.animales.where('activo').equals(0).toArray()).filter(a=>a.causaBaja==='Venta')
+  const lista  = todos.filter(a=>{
+    if (!a.fechaBaja) return modo==='todo'
+    const d=new Date(a.fechaBaja)
+    if (modo==='mes') return d.getMonth()===selMes&&d.getFullYear()===selAnio
+    if (modo==='anio') return d.getFullYear()===selAnio
+    return true
+  }).sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
+
+  const titulo = modo==='mes' ? `${MESES[selMes]} ${selAnio}` : modo==='anio' ? String(selAnio) : 'Histórico'
+  const fd = ts => { const d=new Date(ts); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear() }
+  const fmt= v => '$'+Math.round(v).toLocaleString('es-CO')
+
+  let totalV=0,totalC=0,totalP=0
+  lista.forEach(a=>{if(a.valorVenta)totalV+=a.valorVenta;if(a.precioPorKg&&a.pesoInicial)totalC+=a.precioPorKg*a.pesoInicial;if(a.pesoVenta&&a.pesoInicial)totalP+=a.pesoVenta-a.pesoInicial})
+  const util=totalV-totalC; const pct=totalC>0?(util/totalC*100):null
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:11px;color:#222;padding:20px}
+  h1{font-size:17px;color:#1B5E20;margin-bottom:2px}h2{font-size:12px;color:#2E7D32;margin:12px 0 5px;border-bottom:1.5px solid #A5D6A7;padding-bottom:3px}
+  .sub{color:#666;font-size:10px;margin-bottom:10px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+  .kpi{background:#F1F8E9;border-radius:6px;padding:8px;text-align:center}.kpi .val{font-size:16px;font-weight:800;color:#1B5E20}.kpi .lbl{font-size:9px;color:#666;margin-top:2px}
+  table{width:100%;border-collapse:collapse;margin-bottom:10px}th{background:#2E7D32;color:white;padding:5px 6px;text-align:left;font-size:10px}
+  td{padding:4px 6px;border-bottom:1px solid #E8F5E9;font-size:10px}tr:nth-child(even) td{background:#F9FBE7}
+  .footer{margin-top:16px;font-size:9px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:8px}
+  @media print{body{padding:10px}}</style></head><body>
+  <h1>💰 ${finca} — Reporte de Ventas</h1>
+  <p class="sub">${titulo} · Generado el ${fd(Date.now())}</p>
+  <div class="grid">
+    <div class="kpi"><div class="val">${lista.length}</div><div class="lbl">Vendidos</div></div>
+    <div class="kpi"><div class="val">${totalV?fmt(totalV):'—'}</div><div class="lbl">Total ventas</div></div>
+    <div class="kpi" style="background:${util>=0?'#F1F8E9':'#FFEBEE'}"><div class="val" style="color:${util>=0?'#1B5E20':'#B71C1C'}">${totalV&&totalC?(util>=0?'+':'')+fmt(util):'—'}</div><div class="lbl">Utilidad</div></div>
+    <div class="kpi"><div class="val">${pct!==null?(pct>=0?'+':'')+pct.toFixed(1)+'%':'—'}</div><div class="lbl">Rentabilidad</div></div>
+  </div>
+  <h2>Detalle de ventas</h2>
+  <table><thead><tr><th>Arete</th><th>Categoría</th><th>Fecha</th><th>Peso entrada</th><th>Peso salida</th><th>Δ Peso</th><th>Costo compra</th><th>Valor venta</th><th>Utilidad</th><th>Comprador</th></tr></thead><tbody>
+  ${lista.map(a=>{
+    const costo=(a.precioPorKg||0)*(a.pesoInicial||0)
+    const util2=a.valorVenta&&costo?a.valorVenta-costo:null
+    return `<tr><td><b>${a.arete}</b>${a.nombre?' — '+a.nombre:''}</td><td>${CAT[a.categoria]||a.categoria}</td><td>${a.fechaBaja?fd(a.fechaBaja):'—'}</td><td>${a.pesoInicial||'—'} kg</td><td>${a.pesoVenta||'—'} kg</td><td style="color:${(a.pesoVenta||0)-(a.pesoInicial||0)>=0?'#2E7D32':'#C62828'}">${a.pesoVenta&&a.pesoInicial?(((a.pesoVenta-a.pesoInicial)>=0?'+':'')+((a.pesoVenta-a.pesoInicial)).toFixed(0)+' kg'):'—'}</td><td>${costo?fmt(costo):'—'}</td><td style="color:#1565C0">${a.valorVenta?fmt(a.valorVenta):'—'}</td><td style="color:${util2===null?'#888':util2>=0?'#2E7D32':'#C62828'};font-weight:700">${util2!==null?(util2>=0?'+':'')+fmt(util2):'—'}</td><td>${a.comprador||'—'}</td></tr>`
+  }).join('')}
+  </tbody></table>
+  <div class="footer">HPRapp · ${finca} · ${fd(Date.now())} · Confidencial</div>
+  </body></html>`
+
+  const win=window.open('','_blank','width=900,height=700')
+  win.document.write(html); win.document.close()
+  win.onload=()=>{win.focus();win.print()}
+}
+
+async function exportarVentasExcel() {
+  await loadXLSX()
+  const modo   = _seg['ven_modo']||'todo'
+  const selMes = _seg['ven_mes'] ?? new Date().getMonth()
+  const selAnio= _seg['ven_anio']?? new Date().getFullYear()
+  const todos  = (await db.animales.where('activo').equals(0).toArray()).filter(a=>a.causaBaja==='Venta')
+  const lista  = todos.filter(a=>{
+    if (!a.fechaBaja) return modo==='todo'
+    const d=new Date(a.fechaBaja)
+    if (modo==='mes') return d.getMonth()===selMes&&d.getFullYear()===selAnio
+    if (modo==='anio') return d.getFullYear()===selAnio
+    return true
+  }).sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
+
+  const fd = ts => { const d=new Date(ts); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear() }
+  const wb = XLSX.utils.book_new()
+  const rows = lista.map(a=>({
+    'Arete':a.arete,'Nombre':a.nombre||'','Categoría':CAT[a.categoria]||a.categoria,
+    'Fecha Venta':a.fechaBaja?fd(a.fechaBaja):'',
+    'Peso Entrada (kg)':a.pesoInicial||0,'Peso Salida (kg)':a.pesoVenta||0,
+    'Δ Peso (kg)':((a.pesoVenta||0)-(a.pesoInicial||0)),
+    'Precio Compra $/kg':a.precioPorKg||0,'Costo Total Compra':(a.precioPorKg||0)*(a.pesoInicial||0),
+    'Precio Venta $/kg':a.precioVentaKg||0,'Valor Total Venta':a.valorVenta||0,
+    'Utilidad':a.valorVenta&&a.precioPorKg&&a.pesoInicial?a.valorVenta-(a.precioPorKg*a.pesoInicial):'',
+    'Comprador':a.comprador||''
+  }))
+  const ws = XLSX.utils.json_to_sheet(rows)
+  XLSX.utils.book_append_sheet(wb, ws, 'Ventas')
+  const buf = XLSX.write(wb,{bookType:'xlsx',type:'array'})
+  const blob = new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+  const fname = `HPRapp-Ventas-${new Date().toISOString().split('T')[0]}.xlsx`
+  if (navigator.canShare&&navigator.canShare({files:[new File([blob],fname)]})){
+    try{await navigator.share({files:[new File([blob],fname)],title:'Ventas HPRapp'});return}catch(e){if(e.name==='AbortError')return}
+  }
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fname; a.click()
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000)
+}
 
 async function pgConfig() {
   const tab=_tab['cfg']||'finca'
   const cfgTabStyle = t => `font-size:.92rem;font-weight:700;${tab===t?'color:#E65100;border-bottom-color:#E65100':'color:#aaa'}`
-  const tabs=`<div class="tabs" style="overflow:hidden">
-    <div class="tab${tab==='finca'?' on':''}" style="${cfgTabStyle('finca')}" onclick="setTab('cfg','finca');go('config')">Finca</div>
-    <div class="tab${tab==='metas'?' on':''}" style="${cfgTabStyle('metas')}" onclick="setTab('cfg','metas');go('config')">Metas</div>
-    <div class="tab${tab==='usuarios'?' on':''}" style="${cfgTabStyle('usuarios')}" onclick="setTab('cfg','usuarios');go('config')">Usuarios</div>
-    <div class="tab${tab==='backup'?' on':''}" style="${cfgTabStyle('backup')}" onclick="setTab('cfg','backup');go('config')">Backup</div>
-    <div class="tab${tab==='excel'?' on':''}" style="${cfgTabStyle('excel')}" onclick="setTab('cfg','excel');go('config')">Excel</div>
-    <div class="tab${tab==='resetear'?' on':''}" style="${cfgTabStyle('resetear')}" onclick="setTab('cfg','resetear');go('config')">🗑 Resetear</div>
+  const tabs=`<div class="tabs" style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;flex-wrap:nowrap">
+    <div class="tab${tab==='finca'?' on':''}" style="${cfgTabStyle('finca')};white-space:nowrap" onclick="setTab('cfg','finca');go('config')">Finca</div>
+    <div class="tab${tab==='metas'?' on':''}" style="${cfgTabStyle('metas')};white-space:nowrap" onclick="setTab('cfg','metas');go('config')">Metas</div>
+    <div class="tab${tab==='usuarios'?' on':''}" style="${cfgTabStyle('usuarios')};white-space:nowrap" onclick="setTab('cfg','usuarios');go('config')">Usuarios</div>
+    <div class="tab${tab==='backup'?' on':''}" style="${cfgTabStyle('backup')};white-space:nowrap" onclick="setTab('cfg','backup');go('config')">Backup</div>
+    <div class="tab${tab==='excel'?' on':''}" style="${cfgTabStyle('excel')};white-space:nowrap" onclick="setTab('cfg','excel');go('config')">Excel</div>
+    <div class="tab${tab==='resetear'?' on':''}" style="${cfgTabStyle('resetear')};white-space:nowrap;color:#B71C1C" onclick="setTab('cfg','resetear');go('config')">🗑 Resetear</div>
   </div>`
 
   if(tab==='finca'){
@@ -5975,11 +6297,11 @@ async function guardarEditarUsuario(id,puedeEditarRol,esYo) {
     if(btn){btn.disabled=false;btn.textContent='Guardar cambios'}
     return
   }
-  if(id===USER?.id){USER.nombre=n;if(updates.rol)USER.rol=updates.rol}
+  if(id===USER?.id){USER?.nombre=n;if(updates.rol)USER?.rol=updates.rol}
   closeSheet(); go('config')
 }
 async function resetearPin(id) {
-  if(!confirm('¿Resetear el PIN de este usuario?\nDeberá crear uno nuevo la próxima vez que ingrese.')) return
+  if(!await showConfirm('¿Resetear el PIN de este usuario?\nDeberá crear uno nuevo la próxima vez que ingrese.')) return
   await fsUpdate('usuarios',id,{pinHash:null,pinReseteadoPor:USER?.nombre||'—',pinReseteadoEn:Date.now()})
   closeSheet(); go('config')
 }
@@ -6034,8 +6356,8 @@ async function diagnosticoFirestore(){
       if(!snap.empty) results.push(t+': '+snap.size)
     }
     const msg = results.length ? results.join(' | ') : 'Firestore vacío'
-    alert('📊 Firestore:\n\n'+msg+'\n\nDexie local:\nAnimales: '+(await db.animales.count()))
-  } catch(e){ alert('Error: '+e.message) }
+    await showAlert('📊 Firestore:\n\n'+msg+'\n\nDexie local:\nAnimales: '+(await db.animales.count()))
+  } catch(e){ await showAlert('Error: '+e.message) }
 }
 
 async function probarFirebase(){
@@ -6118,7 +6440,7 @@ async function exportarExcel(){
     }
 
     XLSX.writeFile(wb,`HPRapp-${new Date().toISOString().split('T')[0]}.xlsx`)
-  }catch(e){alert('Error al exportar: '+e.message)}
+  }catch(e){await showAlert('Error al exportar: '+e.message)}
 }
 
 // Busca un valor en la fila probando múltiples nombres de columna (sin distinguir mayúsculas)
@@ -6437,7 +6759,7 @@ async function importarTodo(input) {
     _hideProg()
 
     if (!resumen.length) {
-      alert('No se encontraron hojas reconocidas.\nAsegúrese de usar el archivo HPRapp_Tablas_Importacion.xlsx')
+      await showAlert('No se encontraron hojas reconocidas.\nAsegúrese de usar el archivo HPRapp_Tablas_Importacion.xlsx')
     } else {
       // Actualizar data_version para que otros dispositivos detecten datos nuevos
       const _dv = String(Date.now())
@@ -6446,11 +6768,11 @@ async function importarTodo(input) {
         await fsdb.collection('config').doc('data_version').set({clave:'data_version', valor:_dv, _ts:parseInt(_dv)})
         await setCfg('data_version', _dv)
       } catch(e) {}
-      alert('✅ Importación completada:\n\n' + resumen.join('\n'))
+      await showAlert('✅ Importación completada:\n\n' + resumen.join('\n'))
     }
     input.value = ''
     go('config')
-  } catch(e) { _hideProg(); alert('Error al importar: ' + e.message); input.value = '' }
+  } catch(e) { _hideProg(); await showAlert('Error al importar: ' + e.message); input.value = '' }
 }
 
 async function importarExcel(input){
@@ -6465,12 +6787,12 @@ async function importarExcel(input){
       ||wb.SheetNames[0]
 
     const rows=XLSX.utils.sheet_to_json(wb.Sheets[shAnimal],{raw:false,defval:''})
-    if(!rows.length){alert('El archivo no contiene datos o está vacío.');input.value='';return}
+    if(!rows.length){await showAlert('El archivo no contiene datos o está vacío.');input.value='';return}
 
     // Vista previa: mostrar primeras columnas detectadas
     const colsDetectadas=Object.keys(rows[0])
     const preview=`Hoja detectada: "${shAnimal}"\nColumnas encontradas: ${colsDetectadas.join(', ')}\n\nSe importarán ${rows.length} filas.\n¿Continuar?`
-    if(!confirm(preview)){input.value='';return}
+    if(!await showConfirm(preview)){input.value='';return}
 
     let added=0, omitidos=0, sinArete=0
     for(const row of rows){
@@ -6525,9 +6847,9 @@ async function importarExcel(input){
     let msg=`✓ ${added} animales importados`
     if(omitidos) msg+=`\n⏭ ${omitidos} ya existían (arete duplicado)`
     if(sinArete) msg+=`\n⚠ ${sinArete} filas sin arete (ignoradas)`
-    alert(msg)
+    await showAlert(msg)
     input.value='';go('config')
-  }catch(e){alert('Error al importar: '+e.message);input.value=''}
+  }catch(e){await showAlert('Error al importar: '+e.message);input.value=''}
 }
 
 
@@ -6539,7 +6861,7 @@ async function importarPotreros(input){
     const wb=XLSX.read(data,{type:'array',cellDates:true})
     const shPot=findSheet(wb,'Potreros_Rotacion','Potreros','POTREROS','Potrero','Rotacion','Rotación','N_Rotacion','Predios')||wb.SheetNames[0]
     const allRows=XLSX.utils.sheet_to_json(wb.Sheets[shPot],{header:1,defval:''})
-    if(!allRows.length){alert('Sin datos.');input.value='';return}
+    if(!allRows.length){await showAlert('Sin datos.');input.value='';return}
     let headerIdx=0
     for(let i=0;i<Math.min(6,allRows.length);i++){
       if(allRows[i].filter(c=>typeof c==='string'&&c.trim().length>1).length>=2){headerIdx=i;break}
@@ -6547,18 +6869,18 @@ async function importarPotreros(input){
     const headers=allRows[headerIdx].map(h=>(h||'').toString().trim())
     const rows=allRows.slice(headerIdx+1).map(row=>{const o={};headers.forEach((h,i)=>{o[h]=row[i]??''});return o})
       .filter(r=>Object.values(r).some(v=>v!==''&&v!==null))
-    if(!rows.length){alert('No hay filas válidas.');input.value='';return}
+    if(!rows.length){await showAlert('No hay filas válidas.');input.value='';return}
     const norm=s=>s.toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\s_\(\)\/]/g,'')
     const colNombre=headers.find(h=>/nombre|potrero|n.?rotac/i.test(h))
     const colArea=headers.find(h=>{const n=norm(h);return n==='area'||n==='areaha'||/\bha\b/.test(n)||/hect/.test(n)||/area/.test(n)})
-    if(!colNombre||!colArea){alert('Columnas no detectadas.\nDetectadas: '+headers.filter(h=>h).join(', '));input.value='';return}
+    if(!colNombre||!colArea){await showAlert('Columnas no detectadas.\nDetectadas: '+headers.filter(h=>h).join(', '));input.value='';return}
     const validas=rows.filter(r=>{
       const nom=(r[colNombre]||'').toString().trim()
       const ar=(r[colArea]||'').toString().trim()
       return nom&&!/^total/i.test(nom)&&ar&&ar.toLowerCase()!=='verificar'&&!isNaN(parseFloat(ar.replace(',','.')))
     })
-    if(!validas.length){alert('Sin filas válidas.');input.value='';return}
-    if(!confirm(`Hoja: "${shPot}"\nPotreros a importar: ${validas.length}\nPrimeros 5: ${validas.slice(0,5).map(r=>r[colNombre]).join(', ')}\n\n¿Confirmar?`)){input.value='';return}
+    if(!validas.length){await showAlert('Sin filas válidas.');input.value='';return}
+    if(!await showConfirm(`Hoja: "${shPot}"\nPotreros a importar: ${validas.length}\nPrimeros 5: ${validas.slice(0,5).map(r=>r[colNombre]).join(', ')}\n\n¿Confirmar?`)){input.value='';return}
     let added=0,dup=0
     for(const row of validas){
       const nombre=(row[colNombre]||'').toString().trim()
@@ -6571,8 +6893,8 @@ async function importarPotreros(input){
     }
     let msg=`✓ ${added} potreros importados`
     if(dup) msg+=`\n⏭ ${dup} ya existían`
-    alert(msg); input.value=''; go('config')
-  }catch(e){alert('Error: '+e.message);input.value=''}
+    await showAlert(msg); input.value=''; go('config')
+  }catch(e){await showAlert('Error: '+e.message);input.value=''}
 }
 
 async function descargarPlantilla(){
@@ -6593,7 +6915,7 @@ async function descargarPlantilla(){
     XLSX.utils.sheet_add_aoa(ws,[[''],['Categorías válidas: '+catEjemplos]],{origin:-1})
     XLSX.utils.book_append_sheet(wb,ws,'Animales')
     XLSX.writeFile(wb,'HPRapp-plantilla-importacion.xlsx')
-  }catch(e){alert('Error: '+e.message)}
+  }catch(e){await showAlert('Error: '+e.message)}
 }
 
 function cfgFincaChanged() {
@@ -6623,7 +6945,7 @@ async function saveCfgMetas(){
     showToast('Meta GDP guardada')
   }catch(e){ showToast('Error al guardar','err') }
 }
-async function eliminarUsuario(id){if(!confirm('¿Eliminar usuario?'))return;try{await fsUpdate('usuarios',id,{activo:0})}catch(e){showToast('Error al eliminar','err',4000);return}go('config')}
+async function eliminarUsuario(id){if(!await showConfirm('¿Eliminar usuario?'))return;try{await fsUpdate('usuarios',id,{activo:0})}catch(e){showToast('Error al eliminar','err',4000);return}go('config')}
 async function openNuevoUsuario(){
   showSheet(`<div class="sh-title">Nuevo usuario<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <div class="field"><label>Nombre *</label><input id="nu-n" class="inp" placeholder="Nombre completo"></div>
@@ -6886,7 +7208,7 @@ async function exportarBackup(){
 }
 async function importarBackup(input){
   const file=input.files[0];if(!file)return
-  if(!confirm('⚠️ Esto borrará TODOS los datos actuales. ¿Continuar?')){input.value='';return}
+  if(!await showConfirm('⚠️ Esto borrará TODOS los datos actuales. ¿Continuar?')){input.value='';return}
   try{
     const d=JSON.parse(await file.text())
     await db.transaction('rw',[db.animales,db.pesajes,db.labores,db.potreros,db.lotes,db.ciclos,db.lluvias,db.usuarios,db.config,db.laboresPotrero,db.rotaciones],async()=>{
@@ -6902,8 +7224,8 @@ async function importarBackup(input){
       await db.laboresPotrero.clear();  await db.laboresPotrero.bulkAdd(d.laboresPotrero||[])
       await db.rotaciones.clear();      await db.rotaciones.bulkAdd(d.rotaciones||[])
     })
-    alert('✓ Datos restaurados'); location.reload()
-  }catch(e){alert('Error al importar: '+e.message)}
+    await showAlert('✓ Datos restaurados'); location.reload()
+  }catch(e){await showAlert('Error al importar: '+e.message)}
   input.value=''
 }
 
@@ -7199,6 +7521,61 @@ async function init(){
   }
 }
 init()
+
+// ── Indicador offline ────────────────────────
+function updateOfflineBanner() {
+  const b = document.getElementById('offline-banner')
+  if (!b) return
+  if (navigator.onLine) {
+    b.style.display = 'none'
+    document.getElementById('hdr').style.marginTop = ''
+    document.getElementById('pg').style.paddingTop = ''
+  } else {
+    b.style.display = 'block'
+    document.getElementById('hdr').style.marginTop = '34px'
+  }
+}
+window.addEventListener('online',  () => { updateOfflineBanner(); showToast('✅ Conexión restaurada','ok',3000) })
+window.addEventListener('offline', () => { updateOfflineBanner(); showToast('📡 Sin conexión — modo offline','err',4000) })
+updateOfflineBanner()
+
+// ── Pull to refresh ──────────────────────────
+;(()=>{
+  let _ptStart = 0, _ptActive = false
+  const IND = document.createElement('div')
+  IND.id = 'ptr-ind'
+  IND.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%) translateY(-60px);background:white;border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.18);transition:transform .2s;z-index:500;font-size:1.2rem;pointer-events:none'
+  IND.textContent = '↓'
+  document.body.appendChild(IND)
+
+  document.getElementById('pg').addEventListener('touchstart', e => {
+    if (document.getElementById('pg').scrollTop === 0) {
+      _ptStart = e.touches[0].clientY
+      _ptActive = true
+    }
+  }, {passive:true})
+
+  document.getElementById('pg').addEventListener('touchmove', e => {
+    if (!_ptActive) return
+    const dist = Math.min(e.touches[0].clientY - _ptStart, 90)
+    if (dist > 10) {
+      IND.style.transform = `translateX(-50%) translateY(${Math.min(dist-10,50)}px)`
+      IND.textContent = dist > 60 ? '↻' : '↓'
+    }
+  }, {passive:true})
+
+  document.getElementById('pg').addEventListener('touchend', e => {
+    if (!_ptActive) return
+    _ptActive = false
+    const dist = e.changedTouches[0].clientY - _ptStart
+    IND.style.transform = 'translateX(-50%) translateY(-60px)'
+    IND.textContent = '↓'
+    if (dist > 60) {
+      showToast('Actualizando…','ok',1500)
+      setTimeout(() => go(PAGE, PARAMS), 300)
+    }
+  }, {passive:true})
+})()
 </script>
 </body>
 </html>
