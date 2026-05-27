@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-004'
+const APP_VERSION = '20260527-005'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6174,8 +6174,10 @@ async function importarTodo(input) {
       const rows = readSheet(shLote, false).filter(r => r[0] && String(r[0]).trim())
       let addedL=0, dupL=0
       for (const row of rows) {
-        const nombre = String(row[0]).trim()
-        if (!nombre) continue
+        const raw = String(row[0]).trim()
+        if (!raw) continue
+        // Si es solo un número o "11", convertir a "LOTE 11"
+        const nombre = /^\d+$/.test(raw) ? 'LOTE ' + raw : /^lote\s/i.test(raw) ? raw.toUpperCase() : raw
         const existe = await db.lotes.filter(l => l.nombre.trim().toLowerCase()===nombre.toLowerCase()).first()
         if (existe) { dupL++; continue }
         await fsAdd('lotes', {nombre, descripcion:String(row[1]||'').trim()||undefined, activo:1, creadoEn:ahora})
@@ -6227,9 +6229,10 @@ async function importarTodo(input) {
         if (ln) lotesEnAnimales.add(ln)
       }
       for (const ln of lotesEnAnimales) {
-        if (!loteMap[ln.toLowerCase()]) {
-          const id = await fsAdd('lotes', {nombre:ln, activo:1, creadoEn:ahora})
-          loteMap[ln.toLowerCase()] = id
+        const lnNorm = /^\d+$/.test(ln) ? 'LOTE '+ln : /^lote\s/i.test(ln) ? ln.toUpperCase() : ln
+        if (!loteMap[lnNorm.toLowerCase()]) {
+          const id = await fsAdd('lotes', {nombre:lnNorm, activo:1, creadoEn:ahora})
+          loteMap[lnNorm.toLowerCase()] = id
         }
       }
 
@@ -6244,7 +6247,9 @@ async function importarTodo(input) {
         const cat = Object.keys(CAT).find(k=>k===catRaw) || Object.keys(CAT).find(k=>CAT[k]===catRaw) || 'HC'
         const pesoIni   = parseFloat(String(row[5]||'0').replace(',','.')) || 0
         const fechaTs   = parseFecha(row[6]) || ahora
-        const loteNom   = String(row[8]||'').trim().toLowerCase()
+        const loteRaw   = String(row[8]||'').trim()
+        // Si es solo número, convertir a "LOTE N"
+        const loteNom   = loteRaw ? (/^\d+$/.test(loteRaw) ? 'LOTE '+loteRaw : /^lote\s/i.test(loteRaw) ? loteRaw.toUpperCase() : loteRaw).toLowerCase() : ''
         const loteId    = loteNom ? (loteMap[loteNom]||null) : null
         const precioKg  = parseFloat(String(row[10]||'0').replace(',','.')) || undefined
 
