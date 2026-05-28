@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-016'
+const APP_VERSION = '20260527-017'
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -6284,7 +6284,7 @@ async function guardarEditarUsuario(id,puedeEditarRol,esYo) {
     if(btn){btn.disabled=false;btn.textContent='Guardar cambios'}
     return
   }
-  if(id===USER?.id){USER?.nombre=n;if(updates.rol)USER?.rol=updates.rol}
+  if(id===USER?.id){if(USER){USER.nombre=n;if(updates.rol)USER.rol=updates.rol}}
   closeSheet(); go('config')
 }
 async function resetearPin(id) {
