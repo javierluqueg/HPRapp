@@ -1206,12 +1206,12 @@ async function pgDashboard() {
     }
     lotesHtml+=`<div class="row-b" style="padding:6px 0;border-bottom:1px solid #f0f0f0">
       <span class="sm">${l.nombre}</span>
-      <span class="sm bold">${aLote.length} anim · <span class="green">${pLote.toFixed(0)} kg</span></span>
+      <span class="sm bold">${aLote.length} anim · <span class="green">${Math.round(pLote).toLocaleString('es-CO')} kg</span></span>
     </div>`
   }
   for(const [lid,gan] of Object.entries(gLoteMap)){
     const l=loteMap2[parseInt(lid)]
-    gLoteHtml+=`<div class="row-b" style="padding:3px 0"><span class="xs">${l?.nombre||'—'}</span><span class="xs bold green">+${gan.toFixed(0)} kg</span></div>`
+    gLoteHtml+=`<div class="row-b" style="padding:3px 0"><span class="xs">${l?.nombre||'—'}</span><span class="xs bold green">+${Math.round(gan).toLocaleString('es-CO')} kg</span></div>`
   }
 
   const kgHaPeriodo=gananciaFinca>0?(gananciaFinca/area).toFixed(1):'0'
@@ -1286,7 +1286,7 @@ async function pgDashboard() {
           <input type="date" class="inp" style="padding:7px 10px;font-size:.82rem" value="${dHasta}" onchange="_seg['dp_hasta']=this.value;go('dashboard')">
         </div>
       </div>`:''}
-      <div class="row-b mb4"><span class="sm gray">Ganancia total finca</span><span class="sm bold ${gananciaFinca>0?'green':'gray'}">${gananciaFinca>0?'+':''}${gananciaFinca.toFixed(0)} kg</span></div>
+      <div class="row-b mb4"><span class="sm gray">Ganancia total finca</span><span class="sm bold ${gananciaFinca>0?'green':'gray'}">${gananciaFinca>0?'+':''}${Math.round(gananciaFinca).toLocaleString('es-CO')} kg</span></div>
       ${gananciaFinca>0?`<div class="row-b mb4"><span class="sm gray">Rendimiento período</span><span class="sm bold blue">${kgHaPeriodo} kg/ha</span></div>`:''}
       ${gLoteHtml?`<p class="xs gray" style="margin-top:6px;margin-bottom:4px">Por lote:</p>${gLoteHtml}`:''}
       ${!gananciaFinca?`<p class="xs gray">Sin pesajes en el período · Ingrese pesajes para ver kg/ha</p>`:''}
@@ -2349,8 +2349,8 @@ async function openProdSeleccionados() {
     <div class="card card-dark mb12">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;text-align:center;gap:8px">
         <div><p style="font-size:1.3rem;font-weight:800">${n}</p><p class="sub xs">Animales</p></div>
-        <div><p style="font-size:1.3rem;font-weight:800">${totalPeso.toFixed(0)} kg</p><p class="sub xs">Peso total</p></div>
-        <div><p style="font-size:1.3rem;font-weight:800">${pesoProm.toFixed(0)} kg</p><p class="sub xs">Peso prom.</p></div>
+        <div><p style="font-size:1.3rem;font-weight:800">${Math.round(totalPeso).toLocaleString('es-CO')} kg</p><p class="sub xs">Peso total</p></div>
+        <div><p style="font-size:1.3rem;font-weight:800">${Math.round(pesoProm).toLocaleString('es-CO')} kg</p><p class="sub xs">Peso prom.</p></div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
@@ -3214,7 +3214,7 @@ async function pgLotes() {
     const catCount={}
     aLote.forEach(a=>{const c=a.categoria||'?';catCount[c]=(catCount[c]||0)+1})
     const catChips=catOrden.filter(k=>catCount[k]).map(k=>`<span style="font-size:.67rem;background:#EEF2FF;color:#3949AB;border-radius:4px;padding:1px 5px;font-weight:700">${k}:${catCount[k]}</span>`).join(' ')
-    const resumen=`<span style="font-weight:700;color:#1a1a1a">${aLote.length}</span> anim · <span style="color:#388E3C;font-weight:700">${pesoLote.toFixed(0)} kg</span>${pot?' · 🌿 '+pot.nombre:''}`
+    const resumen=`<span style="font-weight:700;color:#1a1a1a">${aLote.length}</span> anim · <span style="color:#388E3C;font-weight:700">${Math.round(pesoLote).toLocaleString('es-CO')} kg</span>${pot?' · 🌿 '+pot.nombre:''}`
     const busqData=`${l.nombre} ${pot?.nombre||''}`.toLowerCase()
     if(_loteSelMode){
       return `<div class="card border-l4 lote-card ${sel?'bl-red':'bl-blue'}" data-busq="${busqData}" style="cursor:pointer;padding:9px 12px;margin-bottom:5px;${sel?'background:#FFF5F5':''}" onclick="toggleLoteSel(${l.id})">
@@ -3800,7 +3800,7 @@ function _prodRotResHTML(prod) {
       + '<p class="xs gray">'+s.pot.areaHa+' ha · '+s.ciclosVal+' ciclo'+(s.ciclosVal!==1?'s':'')+'</p></div>'
       + '<div style="text-align:right">'
       + '<p style="font-weight:700;font-size:.9rem;color:'+c+'">'+(s.kgHaProm!==null?s.kgHaProm.toFixed(1)+' kg/ha':'—')+'</p>'
-      + (s.ganPot?'<p class="xs gray">'+(s.ganPot>=0?'+':'')+s.ganPot.toFixed(0)+' kg</p>':'')
+      + (s.ganPot?'<p class="xs gray">'+(s.ganPot>=0?'+':'')+Math.round(s.ganPot).toLocaleString('es-CO')+' kg</p>':'')
       + '</div></div>'
   }
   return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
@@ -3953,7 +3953,7 @@ async function pgLoteFicha({id}) {
     <div class="row-b" style="margin-bottom:10px">
       <div>
         <p class="sub">${animales.length} animal${animales.length!==1?'es':''} en el lote</p>
-        <p style="font-size:1.5rem;font-weight:700;margin-top:2px">${pesoTotal.toFixed(0)} kg</p>
+        <p style="font-size:1.5rem;font-weight:700;margin-top:2px">${Math.round(pesoTotal).toLocaleString('es-CO')} kg</p>
         <p class="sub xs" style="margin-top:3px">Último pesaje: ${ultimoPesajeLoteTs?ffd(ultimoPesajeLoteTs):'Sin pesajes'}</p>
         ${gdpProm!==null?`<p class="sub xs">GDP prom: ${gdpProm} g/día</p>`:''}
       </div>
@@ -3978,7 +3978,7 @@ async function pgLoteFicha({id}) {
   <div class="card mb12">
     <p class="bold sm mb8">📈 Rendimiento del lote</p>
     <div class="seg" style="margin-bottom:8px">${lfSegBtns}</div>
-    <div class="row-b"><span class="sm gray">Ganancia en período</span><span class="sm bold ${gananciaLote>0?'green':'gray'}">${gananciaLote>0?'+':''}${gananciaLote.toFixed(0)} kg</span></div>
+    <div class="row-b"><span class="sm gray">Ganancia en período</span><span class="sm bold ${gananciaLote>0?'green':'gray'}">${gananciaLote>0?'+':''}${Math.round(gananciaLote).toLocaleString('es-CO')} kg</span></div>
     ${!gananciaLote?'<p class="xs gray mt8">Sin pesajes en el período</p>':''}
   </div>`
 
@@ -5739,7 +5739,7 @@ async function pgVentas() {
         <p class="sub xs">Animales vendidos</p>
       </div>
       <div style="text-align:center">
-        <p style="font-size:1.4rem;font-weight:800">${totalGanPeso>=0?'+':''}${totalGanPeso.toFixed(0)} kg</p>
+        <p style="font-size:1.4rem;font-weight:800">${totalGanPeso>=0?'+':''}${Math.round(totalGanPeso).toLocaleString('es-CO')} kg</p>
         <p class="sub xs">Ganancia de peso</p>
       </div>
     </div>
@@ -6010,7 +6010,7 @@ async function exportarVentasPDF() {
   ${lista.map(a=>{
     const costo=(a.precioPorKg||0)*(a.pesoInicial||0)
     const util2=a.valorVenta&&costo?a.valorVenta-costo:null
-    return `<tr><td><b>${a.arete}</b>${a.nombre?' — '+a.nombre:''}</td><td>${CAT[a.categoria]||a.categoria}</td><td>${a.fechaBaja?fd(a.fechaBaja):'—'}</td><td>${a.pesoInicial||'—'} kg</td><td>${a.pesoVenta||'—'} kg</td><td style="color:${(a.pesoVenta||0)-(a.pesoInicial||0)>=0?'#2E7D32':'#C62828'}">${a.pesoVenta&&a.pesoInicial?(((a.pesoVenta-a.pesoInicial)>=0?'+':'')+((a.pesoVenta-a.pesoInicial)).toFixed(0)+' kg'):'—'}</td><td>${costo?fmt(costo):'—'}</td><td style="color:#1565C0">${a.valorVenta?fmt(a.valorVenta):'—'}</td><td style="color:${util2===null?'#888':util2>=0?'#2E7D32':'#C62828'};font-weight:700">${util2!==null?(util2>=0?'+':'')+fmt(util2):'—'}</td><td>${a.comprador||'—'}</td></tr>`
+    return `<tr><td><b>${a.arete}</b>${a.nombre?' — '+a.nombre:''}</td><td>${CAT[a.categoria]||a.categoria}</td><td>${a.fechaBaja?fd(a.fechaBaja):'—'}</td><td>${a.pesoInicial||'—'} kg</td><td>${a.pesoVenta||'—'} kg</td><td style="color:${(a.pesoVenta||0)-(a.pesoInicial||0)>=0?'#2E7D32':'#C62828'}">${a.pesoVenta&&a.pesoInicial?(((a.pesoVenta-a.pesoInicial)>=0?'+':'')+Math.round(a.pesoVenta-a.pesoInicial).toLocaleString('es-CO')+' kg'):'—'}</td><td>${costo?fmt(costo):'—'}</td><td style="color:#1565C0">${a.valorVenta?fmt(a.valorVenta):'—'}</td><td style="color:${util2===null?'#888':util2>=0?'#2E7D32':'#C62828'};font-weight:700">${util2!==null?(util2>=0?'+':'')+fmt(util2):'—'}</td><td>${a.comprador||'—'}</td></tr>`
   }).join('')}
   </tbody></table>
   <div class="footer">HPRapp · ${finca} · ${fd(Date.now())} · Confidencial</div>
@@ -7076,7 +7076,7 @@ async function compartirWhatsApp() {
       `📅 ${fd(Date.now())}`,
       ``,
       `🐄 *Animales activos:* ${animales.length}`,
-      `⚖️ *Peso total:* ${pesoTotal.toFixed(0)} kg`,
+      `⚖️ *Peso total:* ${Math.round(pesoTotal).toLocaleString('es-CO')} kg`,
       `📂 *Lotes:* ${lotes.length}`,
       `🌿 *Potreros:* ${potreros.length}`,
       lluvMes.length ? `🌧 *Lluvia últimos 30 días:* ${mmMes.toFixed(0)} mm (${lluvMes.length} días)` : '',
