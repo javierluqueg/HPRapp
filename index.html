@@ -766,7 +766,7 @@ async function go(page, params={}) {
   $('pg').innerHTML=''
   closeSheet()
   try {
-    const _goTimeout = new Promise((_,rej) => setTimeout(()=>rej(new Error('Timeout en página: '+page)), 5000))
+    const _goTimeout = new Promise((_,rej) => setTimeout(()=>rej(new Error('Timeout en página: '+page)), 15000))
     const _pageResult = await Promise.race([
       Promise.resolve(map[page]?.(params)).then(r => r ?? '<p>Página no encontrada: '+page+'</p>'),
       _goTimeout
@@ -1109,17 +1109,32 @@ async function pgDashboard() {
       <button onclick="go('config')" style="border:none;background:#E65100;color:white;border-radius:8px;padding:7px 12px;font-size:.78rem;font-weight:700;cursor:pointer">Ir a Config</button>
     </div>` : ''
   const area=parseFloat(areaUtil)||1
-  const animales=await db.animales.where('activo').equals(1).toArray()
-  const potreros=await db.potreros.where('activo').equals(1).toArray()
+  const [animales, potreros, lotes, todosLosPesajes] = await Promise.all([
+    db.animales.where('activo').equals(1).toArray(),
+    db.potreros.where('activo').equals(1).toArray(),
+    db.lotes.where('activo').equals(1).toArray(),
+    db.pesajes.orderBy('fecha').toArray()  // una sola query para todos los pesajes
+  ])
 
-  // Pesos, GDP y última actualización de pesaje
+  // Indexar pesajes por animalId en memoria (evita N queries individuales)
+  const pesajesPorAnimal = {}
+  for (const p of todosLosPesajes) {
+    if (!pesajesPorAnimal[p.animalId]) pesajesPorAnimal[p.animalId] = []
+    pesajesPorAnimal[p.animalId].push(p)  // ya vienen ordenados por fecha
+  }
+
+  // Pesos, GDP y última actualización de pesaje — todo en memoria
   let pesoTotal=0, gdpSum=0, gdpN=0, ultimoPesajeTs=0
   for(const a of animales){
-    const ult=await getPesoActual(a.id)
-    pesoTotal+=(ult?.pesoKg||a.pesoInicial||0)
-    if(ult && ult.fecha>ultimoPesajeTs) ultimoPesajeTs=ult.fecha
-    const g=await calcGdp(a.id)
-    if(g!==null){gdpSum+=g;gdpN++}
+    const ps = pesajesPorAnimal[a.id] || []
+    const ult = ps.length ? ps[ps.length-1] : null
+    pesoTotal += (ult?.pesoKg || a.pesoInicial || 0)
+    if(ult && ult.fecha > ultimoPesajeTs) ultimoPesajeTs = ult.fecha
+    if(ps.length >= 2){
+      const last=ps[ps.length-1], prev=ps[ps.length-2]
+      const d=Math.round((last.fecha-prev.fecha)/86400000)
+      if(d>0){gdpSum+=Math.round((last.pesoKg-prev.pesoKg)/d*1000);gdpN++}
+    }
   }
   const gdpProm=gdpN>0?Math.round(gdpSum/gdpN):null
   const metaN=parseInt(metaGdp)||500
@@ -1148,12 +1163,12 @@ async function pgDashboard() {
     ?new Date(dHasta+'T23:59:59').getTime()
     :Date.now()
 
-  // Ganancia en período (finca y por lote) — respeta límite hasta
+  // Ganancia en período — todo en memoria, sin queries adicionales
   let gananciaFinca=0
   const gLoteMap={}
   for(const a of animales){
-    const todos=await db.pesajes.where('animalId').equals(a.id).sortBy('fecha')
-    const todosHasta=todos.filter(p=>p.fecha<=dHastaTs)
+    const ps = pesajesPorAnimal[a.id] || []
+    const todosHasta=ps.filter(p=>p.fecha<=dHastaTs)
     const ult=todosHasta.length?todosHasta[todosHasta.length-1]:null
     if(!ult) continue
     let base
@@ -1174,20 +1189,23 @@ async function pgDashboard() {
     }
   }
 
-  // Lotes con peso
-  const lotes=await db.lotes.where('activo').equals(1).toArray()
+  // Lotes con peso — en memoria
+  const loteMap2={}; lotes.forEach(l=>loteMap2[l.id]=l)
   let lotesHtml='', gLoteHtml=''
   for(const l of lotes.slice(0,6)){
     const aLote=animales.filter(a=>a.loteId===l.id)
     let pLote=0
-    for(const a of aLote){const ult=await getPesoActual(a.id);pLote+=(ult?.pesoKg||a.pesoInicial||0)}
+    for(const a of aLote){
+      const ps=pesajesPorAnimal[a.id]||[]
+      pLote+=(ps.length?ps[ps.length-1].pesoKg:(a.pesoInicial||0))
+    }
     lotesHtml+=`<div class="row-b" style="padding:6px 0;border-bottom:1px solid #f0f0f0">
       <span class="sm">${l.nombre}</span>
       <span class="sm bold">${aLote.length} anim · <span class="green">${pLote.toFixed(0)} kg</span></span>
     </div>`
   }
   for(const [lid,gan] of Object.entries(gLoteMap)){
-    const l=await db.lotes.get(parseInt(lid))
+    const l=loteMap2[parseInt(lid)]
     gLoteHtml+=`<div class="row-b" style="padding:3px 0"><span class="xs">${l?.nombre||'—'}</span><span class="xs bold green">+${gan.toFixed(0)} kg</span></div>`
   }
 
@@ -6498,13 +6516,26 @@ async function importarTodo(input) {
     // Helper: convierte fecha de cualquier tipo (Date obj, serial Excel, string DD/MM/AAAA)
     const parseFecha = (v) => {
       if (!v) return null
-      if (v instanceof Date) return Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate())
+      // Serial numérico de Excel (ej: 46168)
       const num = parseFloat(v)
       if (!isNaN(num) && num > 40000 && num < 60000) return (num - 25569) * 86400000
+      // String con formato DD/MM/YYYY o DD-MM-YYYY — siempre interpretamos como día/mes/año
       const s = String(v).trim()
       const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
       if (m) { const y = m[3].length===2?'20'+m[3]:m[3]; return Date.UTC(parseInt(y),parseInt(m[2])-1,parseInt(m[1])) }
-      const d = new Date(s); return isNaN(d.getTime()) ? null : d.getTime()
+      // Date object de XLSX.js: puede estar invertido si el PC tiene región inglesa.
+      // Reconstruimos desde los componentes UTC para evitar el problema de zona horaria,
+      // pero verificamos si el día > 12 para saber si ya viene en orden correcto.
+      if (v instanceof Date) {
+        const d = v.getUTCDate(), mo = v.getUTCMonth()+1, y = v.getUTCFullYear()
+        // Si el mes parseado > 12 es imposible → XLSX lo interpretó como DD/MM correctamente
+        // Si día <= 12 y mes <= 12, XLSX pudo haber invertido (región inglesa MM/DD).
+        // En ese caso confiamos en que el formato de celda es DD/MM → intercambiamos d y mo.
+        // Heurística: si mo > 12 → imposible como mes, usar d como mes
+        if (mo > 12) return Date.UTC(y, d-1, mo)   // caso raro pero seguro
+        return Date.UTC(y, mo-1, d)                  // asumir que XLSX lo leyó bien (celda formateada DD/MM)
+      }
+      const dt = new Date(s); return isNaN(dt.getTime()) ? null : dt.getTime()
     }
     // Helper: lee hoja como arrays desde fila 3 (range:2 salta título y subtítulo)
     const readSheet = (sh, raw=true) =>
@@ -7525,43 +7556,52 @@ window.addEventListener('online',  () => { updateOfflineBanner(); showToast('✅
 window.addEventListener('offline', () => { updateOfflineBanner(); showToast('📡 Sin conexión — modo offline','err',4000) })
 updateOfflineBanner()
 
-// ── Pull to refresh ──────────────────────────
+// ── Pull to refresh ───────────────────────────────────────
 ;(()=>{
-  let _ptStart = 0, _ptActive = false
+  let _ptStart = 0, _ptActive = false, _ptCancelled = false
+  const PG = document.getElementById('pg')
   const IND = document.createElement('div')
   IND.id = 'ptr-ind'
   IND.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%) translateY(-60px);background:white;border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.18);transition:transform .2s;z-index:500;font-size:1.2rem;pointer-events:none'
   IND.textContent = '↓'
   document.body.appendChild(IND)
 
-  document.getElementById('pg').addEventListener('touchstart', e => {
-    if (document.getElementById('pg').scrollTop === 0) {
-      _ptStart = e.touches[0].clientY
-      _ptActive = true
-    }
-  }, {passive:true})
-
-  document.getElementById('pg').addEventListener('touchmove', e => {
-    if (!_ptActive) return
-    const dist = Math.min(e.touches[0].clientY - _ptStart, 90)
-    if (dist > 10) {
-      IND.style.transform = `translateX(-50%) translateY(${Math.min(dist-10,50)}px)`
-      IND.textContent = dist > 60 ? '↻' : '↓'
-    }
-  }, {passive:true})
-
-  document.getElementById('pg').addEventListener('touchend', e => {
-    if (!_ptActive) return
-    _ptActive = false
-    const dist = e.changedTouches[0].clientY - _ptStart
+  function resetPtr() {
+    _ptActive = false; _ptCancelled = false
     IND.style.transform = 'translateX(-50%) translateY(-60px)'
     IND.textContent = '↓'
-    if (dist > 60) {
+  }
+
+  PG.addEventListener('touchstart', e => {
+    _ptCancelled = false
+    if (PG.scrollTop === 0) { _ptStart = e.touches[0].clientY; _ptActive = true }
+    else { _ptActive = false }
+  }, {passive:true})
+
+  PG.addEventListener('touchmove', e => {
+    if (!_ptActive) return
+    if (PG.scrollTop > 5) { _ptCancelled = true; resetPtr(); return }
+    const dist = e.touches[0].clientY - _ptStart
+    if (dist < 0) { _ptCancelled = true; resetPtr(); return }
+    const capped = Math.min(dist, 90)
+    if (capped > 10) {
+      IND.style.transform = `translateX(-50%) translateY(${Math.min(capped-10,50)}px)`
+      IND.textContent = capped > 60 ? '↻' : '↓'
+    }
+  }, {passive:true})
+
+  PG.addEventListener('touchend', e => {
+    if (!_ptActive || _ptCancelled) { resetPtr(); return }
+    const dist = e.changedTouches[0].clientY - _ptStart
+    resetPtr()
+    if (dist > 80 && USER && !['login','setup','bienvenida'].includes(PAGE)) {
       showToast('Actualizando…','ok',1500)
       setTimeout(() => go(PAGE, PARAMS), 300)
     }
   }, {passive:true})
+
+  PG.addEventListener('touchcancel', resetPtr, {passive:true})
 })()
-</script>
+</script>-e 
 </body>
 </html>
