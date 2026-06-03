@@ -590,7 +590,9 @@ const ESTADO_POT = {DISPONIBLE:'Disponible',OCUPADO:'Ocupado',EN_DESCANSO:'En de
 // ═══════════════════════════════════════════════════
 // ESTADO
 // ═══════════════════════════════════════════════════
-let PAGE='login', PARAMS={}, USER=null
+let PAGE='login', PARAMS={}
+// Recuperar USER de sessionStorage si el navegador suspendio y relanzo el contexto
+let USER = (() => { try { const u=sessionStorage.getItem('hpr_user'); return u?JSON.parse(u):null } catch(e){ return null } })()
 let _tab={}, _seg={}, _pinBuf='', _setupData={}
 let _loginUser=null
 let _pinStep='login', _pinFirst=''  // 'login' | 'crear1' | 'crear2'
@@ -994,6 +996,7 @@ async function pinCrear2(pin) {
   await fsUpdate('usuarios',_loginUser.id,{pinHash:ph,pinCreadoEn:Date.now()})
   _loginUser.pinHash=ph
   USER=_loginUser; _loginUser=null; _pinStep='login'; _pinFirst=''
+  try{sessionStorage.setItem('hpr_user',JSON.stringify(USER))}catch(e){}
   _syncActive=true; initFirebaseSync()
   go('dashboard')
 }
@@ -1009,7 +1012,9 @@ async function finSetup(pin) {
 async function doLogin(pin) {
   const ph=await hPin(pin)
   if(ph===_loginUser.pinHash){
-    USER=_loginUser; _loginUser=null; _syncActive=true; initFirebaseSync()
+    USER=_loginUser; _loginUser=null; _syncActive=true
+    try{sessionStorage.setItem('hpr_user',JSON.stringify(USER))}catch(e){}
+    initFirebaseSync()
     // Mostrar bienvenida solo la primera vez por usuario en este dispositivo
     const key = 'bienvenida_' + USER?.id
     const visto = localStorage.getItem(key)
@@ -1678,7 +1683,7 @@ async function saveRegistrarLluvia() {
   go('dashboard')
 }
 
-function logOut(){USER=null;_loginUser=null;go('login')}
+function logOut(){USER=null;_loginUser=null;try{sessionStorage.removeItem('hpr_user')}catch(e){};go('login')}
 
 // ═══════════════════════════════════════════════════
 // GANADO – LISTADO
@@ -7530,7 +7535,14 @@ async function init(){
         ok=await getCfg('setup_ok')
       }catch(e){ console.warn('setup_ok fallback:',e.message) }
     }
-    await go(ok?'login':'setup')
+    // Si USER sobrevivio en sessionStorage (navegador suspendido), reanudar sesion directamente
+    if (USER && ok) {
+      _syncActive = true
+      initFirebaseSync()
+      await go('dashboard')
+    } else {
+      await go(ok?'login':'setup')
+    }
     // Verificar actualizaciones en segundo plano (no bloquea el inicio)
     setTimeout(checkAppVersion, 3000)
   }catch(e){
