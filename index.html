@@ -11,7 +11,27 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260527-017'
+const APP_VERSION = '20260605-001'
+
+// ── Auto-reload para Safari PWA ──────────────────
+// Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
+// Si son distintos, recarga inmediatamente antes de que el usuario vea nada.
+;(function(){
+  // Solo correr una vez por sesión (evitar loop infinito)
+  if(sessionStorage.getItem('_vchk')) return
+  sessionStorage.setItem('_vchk','1')
+  fetch(location.pathname + '?_v=' + Date.now(), {cache:'no-store'})
+    .then(r=>r.text())
+    .then(html=>{
+      const m = html.match(/APP_VERSION = '([^']+)'/)
+      if(m && m[1] !== APP_VERSION){
+        sessionStorage.removeItem('_vchk')
+        location.replace(location.pathname + '?_reload=' + Date.now())
+      }
+    })
+    .catch(()=>{}) // offline — no hacer nada
+})()
+
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
@@ -1150,9 +1170,19 @@ async function pgDashboard() {
   const descanso=potreros.filter(p=>p.estado==='EN_DESCANSO').length
 
   // Resumen por categoría
+  const catOrdenDash = ['HC','MC','HL','ML','NV','VH','VP','T','MCB']
   const catCount={}
   animales.forEach(a=>catCount[a.categoria]=(catCount[a.categoria]||0)+1)
-  const catResumen=Object.entries(catCount).map(([c,n])=>`<span class="badge bg-gray" style="margin:2px">${CAT_SHORT[c]||c}: ${n}</span>`).join('')
+  const catColors = {HC:'#E8F5E9,#2E7D32',MC:'#E8F5E9,#1B5E20',HL:'#E3F2FD,#1565C0',ML:'#E3F2FD,#0D47A1',NV:'#F3E5F5,#6A1B9A',VH:'#FFF3E0,#E65100',VP:'#FCE4EC,#C62828',T:'#212121,white',MCB:'#263238,white'}
+  const catResumen = catOrdenDash.map(k => {
+    const [bg,fg] = (catColors[k]||'#F5F5F5,#555').split(',')
+    const n = catCount[k] || 0
+    const opacity = n === 0 ? 'opacity:.4;' : ''
+    return `<div style="${opacity}display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;background:${bg}"><span style="width:4px;height:32px;border-radius:3px;background:${fg};flex-shrink:0"></span><span style="flex:1;font-size:.82rem;font-weight:700;color:${fg}">${CAT[k]||k}</span><span style="font-size:1.3rem;font-weight:900;color:${fg};min-width:36px;text-align:right">${n}</span></div>`
+  }).join('')
+  const catExtra = Object.keys(catCount).filter(k=>!catOrdenDash.includes(k)).map(k =>
+    `<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;background:#F5F5F5"><span style="width:4px;height:32px;border-radius:3px;background:#999;flex-shrink:0"></span><span style="flex:1;font-size:.82rem;font-weight:700;color:#555">${CAT[k]||k}</span><span style="font-size:1.3rem;font-weight:900;color:#555;min-width:36px;text-align:right">${catCount[k]}</span></div>`
+  ).join('')
 
   // Período para rendimiento
   const dPeriodos=[{v:30,l:'30d'},{v:90,l:'90d'},{v:180,l:'6m'},{v:365,l:'1a'},{v:0,l:'Todo'},{v:-1,l:'📅 Fechas'}]
@@ -1298,7 +1328,11 @@ async function pgDashboard() {
       <div class="card kpi"><div class="v blue">${descanso}</div><div class="l">En<br>descanso</div></div>
     </div>
 
-    ${catResumen?`<div class="card mb8"><p class="sec" style="margin-top:0">Animales por categoría</p><div style="display:flex;flex-wrap:wrap;gap:4px">${catResumen}</div></div>`:''}
+    ${(catResumen||catExtra)?`<div class="card mb8">
+      <p class="sec" style="margin-top:0;margin-bottom:10px">🐄 Animales por categoría</p>
+      <div style="display:flex;flex-direction:column;gap:5px">${catResumen}${catExtra}</div>
+      <p class="xs gray" style="margin-top:8px;text-align:right">${animales.length} animales totales</p>
+    </div>`:''}
 
     <div class="card mb8">
       <div class="row-b" style="margin-bottom:10px">
@@ -1665,7 +1699,24 @@ async function saveRegistrarLluvia() {
   }
   const obs   = $('ll-obs')?.value?.trim() || ''
   const fecha = new Date(fechaStr+'T00:00:00').getTime()
-  const btn   = $('ll-btn')
+
+  // ── Verificar duplicado por día ──
+  const diaInicio = new Date(fechaStr+'T00:00:00').getTime()
+  const diaFin    = new Date(fechaStr+'T23:59:59').getTime()
+  const existente = await db.lluvias.where('fecha').between(diaInicio, diaFin, true, true).first()
+  if (existente) {
+    showToast(`Ya existe un registro para esa fecha (${existente.mm} mm)`, 'err', 4000)
+    return
+  }
+
+  // ── Confirmación antes de guardar ──
+  const MESES_C = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+  const dObj = new Date(fecha)
+  const fechaLabel = `${dObj.getDate()} ${MESES_C[dObj.getMonth()]} ${dObj.getFullYear()}`
+  const confirmado = await showConfirm(`¿Confirmar registro de lluvia?\n\n📅 Fecha: ${fechaLabel}\n🌧 Milímetros: ${mmVal} mm${obs ? '\n📝 ' + obs : ''}`)
+  if (!confirmado) return
+
+  const btn = $('ll-btn')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
   let lid
   try {
@@ -4571,7 +4622,7 @@ async function renderRotacionesList() {
   const potMap = Object.fromEntries(pots.map(p=>[p.id,p]))
   const lotes = await db.lotes.where('activo').equals(1).toArray()
 
-  const lista = rots.length ? rots.map(r => {
+  const lista = rots.length ? rots.map((r, rotIdx) => {
     const pids = r.potreroIds || []
     const lotesRot = lotes.filter(l=>l.rotacionId===r.id)
     const chips = pids.map((pid,i) => {
@@ -4581,18 +4632,8 @@ async function renderRotacionesList() {
         + '<span style="color:#bbb">'+(i+1)+'.</span> '+(p?escH(p.nombre):'—')
         + '<span style="color:'+col+';font-size:.6rem"> ●</span></span>'
     }).join('')
-    return '<div class="card border-l4 bl-green" style="cursor:pointer;margin-bottom:8px" onclick="go(\'rotacion-ficha\',{id:'+r.id+'})">'
-      + '<div class="row-b">'
-      + '<div style="flex:1;min-width:0">'
-      + '<p class="bold">'+escH(r.nombre)+'</p>'
-      + (r.descripcion?'<p class="xs gray mt4">'+escH(r.descripcion)+'</p>':'')
-      + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">'+(chips||'<span class="xs gray">Sin potreros asignados</span>')+'</div>'
-      + '</div>'
-      + '<div style="text-align:right;flex-shrink:0;margin-left:10px">'
-      + '<p class="bold" style="color:#388E3C">'+pids.length+'</p><p class="xs gray">potreros</p>'
-      + (lotesRot.length?'<p class="bold mt8" style="color:#1565C0">'+lotesRot.length+'</p><p class="xs gray">lotes</p>':'')
-      + '</div></div></div>'
-  }).join('') : '<p class="xs gray" style="text-align:center;padding:16px">Sin resultados para "'+escH(_qRot)+'"</p>'
+    const numBadge = '<span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;border-radius:50%;background:#388E3C;color:white;font-size:.7rem;font-weight:800;flex-shrink:0;margin-right:8px">'+(rotIdx+1)+'</span>'
+    return '<div class="card border-l4 bl-green" style="cursor:pointer;margin-bottom:8px" onclick="go(\'rotacion-ficha\',{id:'+r.id+'})">'      + '<div class="row-b">'      + '<div style="flex:1;min-width:0">'      + '<div style="display:flex;align-items:center;margin-bottom:2px">'+numBadge+'<p class="bold">'+escH(r.nombre)+'</p></div>'      + (r.descripcion?'<p class="xs gray mt4">'+escH(r.descripcion)+'</p>':'')      + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">'+(chips||'<span class="xs gray">Sin potreros asignados</span>')+'</div>'      + '</div>'      + '<div style="text-align:right;flex-shrink:0;margin-left:10px">'      + '<p class="bold" style="color:#388E3C">'+pids.length+'</p><p class="xs gray">potreros</p>'      + (lotesRot.length?'<p class="bold mt8" style="color:#1565C0">'+lotesRot.length+'</p><p class="xs gray">lotes</p>':'')      + '</div></div></div>'  }).join('') : '<p class="xs gray" style="text-align:center;padding:16px">Sin resultados para "'+escH(_qRot)+'"</p>'
 
   return buscador + lista + '</div>'
 }
@@ -6430,13 +6471,30 @@ async function exportarExcel(){
       'Nombre':l.nombre,'Descripción':l.descripcion||'','Fecha creación':fd(l.fechaCreacion)
     }))),'Lotes')
 
-    // Rotación ciclos
+    // Ciclos (ocupación y descanso)
+    const ahoraXLS = Date.now()
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ciclos.map(c=>{
       const pot=potreros.find(x=>x.id===c.potreroId)
-      return{'Potrero':pot?.nombre||'','Lote':c.nombreLote||'',
-        'N° animales':c.numAnimales||0,'Fecha entrada':fd(c.fechaEntrada),
-        'Fecha salida':fd(c.fechaSalida),'Días ocupación':c.diasOcupacion||''}
-    })),'Rotación')
+      // Días de ocupación: guardados en el ciclo, o calcular si sigue activo
+      const diasOcup = c.diasOcupacion
+        ? c.diasOcupacion
+        : (c.activo===1 && c.fechaEntrada ? Math.max(0,Math.round((ahoraXLS-c.fechaEntrada)/86400000)) : '')
+      // Días de descanso: desde la fecha de salida hasta hoy (solo si el potrero está EN_DESCANSO)
+      const pot2 = potreros.find(x=>x.id===c.potreroId)
+      const diasDesc = (!c.activo && c.fechaSalida && pot2?.estado==='EN_DESCANSO')
+        ? Math.max(0,Math.round((ahoraXLS-c.fechaSalida)/86400000))
+        : ''
+      return{
+        'Potrero':pot?.nombre||'',
+        'Lote':c.nombreLote||'',
+        'N° animales':c.numAnimales||0,
+        'Fecha entrada':fd(c.fechaEntrada),
+        'Fecha salida':fd(c.fechaSalida),
+        'Días ocupación':diasOcup,
+        'Días descanso':diasDesc,
+        'Estado ciclo':c.activo===1?'Activo':'Cerrado'
+      }
+    })),'Ciclos')
 
     // Lluvias
     if(lluvias.length){
@@ -6599,7 +6657,41 @@ async function importarTodo(input) {
         const s = String(v||'').trim()
         return s.length > 0 && s.length < 30 && !/^[⚠•\-\*]/.test(s) && !/^(la |el |esto |•|importante)/i.test(s)
       }
-      const rows = readSheet(shAnim, true).filter(r => r[0] && esAreteValido(r[0]))
+            const rows = readSheet(shAnim, true).filter(r => r[0] && esAreteValido(r[0]))
+
+      // --- NUEVO BLINDAJE: VALIDACIÓN ESTRICTA DE EXCEL ---
+      const aretesEnExcel = new Set();
+      const categoriasValidas = ['HC','MC','HL','ML','NV','VH','VP','T','MCB'];
+      
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const arete = String(row[0]||'').trim();
+        const catRaw = String(row[2]||'').trim().toUpperCase();
+        
+        // 1. Bloquear Aretes duplicados dentro del mismo Excel
+        if (aretesEnExcel.has(arete)) {
+          _hideProg();
+          alert(`🛑 CARGA DETENIDA: El arete "${arete}" está duplicado en el archivo Excel. Por favor, corrígelo y vuelve a intentarlo.`);
+          return; // Detiene toda la importación
+        }
+        aretesEnExcel.add(arete);
+        
+        // 2. Bloquear Categorías mal escritas
+        if (!categoriasValidas.includes(catRaw)) {
+          _hideProg();
+          alert(`🛑 CARGA DETENIDA: La categoría "${catRaw}" (Arete: ${arete}) no es válida. Usa únicamente: HC, MC, HL, ML, NV, VH, VP, T, MCB.`);
+          return;
+        }
+        
+        // 3. Bloquear Aretes que ya existen en la Base de Datos
+        const existeEnDB = await db.animales.where('arete').equals(arete).first();
+        if (existeEnDB) {
+          _hideProg();
+          alert(`🛑 CARGA DETENIDA: El arete "${arete}" ya está registrado en la base de datos de la aplicación. No se permiten duplicados.`);
+          return;
+        }
+      }
+      // --- FIN DEL BLINDAJE ---
       // Reconstruir mapa de lotes (incluye los recién importados)
       const todosLotes = await db.lotes.toArray()
       const loteMap = {}
