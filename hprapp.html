@@ -11,7 +11,27 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260604-019'
+const APP_VERSION = '20260605-001'
+
+// ── Auto-reload para Safari PWA ──────────────────
+// Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
+// Si son distintos, recarga inmediatamente antes de que el usuario vea nada.
+;(function(){
+  // Solo correr una vez por sesión (evitar loop infinito)
+  if(sessionStorage.getItem('_vchk')) return
+  sessionStorage.setItem('_vchk','1')
+  fetch(location.pathname + '?_v=' + Date.now(), {cache:'no-store'})
+    .then(r=>r.text())
+    .then(html=>{
+      const m = html.match(/APP_VERSION = '([^']+)'/)
+      if(m && m[1] !== APP_VERSION){
+        sessionStorage.removeItem('_vchk')
+        location.replace(location.pathname + '?_reload=' + Date.now())
+      }
+    })
+    .catch(()=>{}) // offline — no hacer nada
+})()
+
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
 document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
