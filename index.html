@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260605-003'
+const APP_VERSION = '20260605-004'
 
 // ── Auto-reload para Safari PWA ──────────────────
 // Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
@@ -6542,6 +6542,22 @@ async function exportarParaImportar(){
     ])
     XLSX.utils.book_append_sheet(wb, wsLluv, 'LLUVIAS')
 
+    // ── CICLOS ──
+    const ciclos = await db.ciclos.toArray()
+    const wsCiclos = XLSX.utils.aoa_to_sheet([
+      ['🔄 TABLA CICLOS — HPRapp'],
+      ['Ciclos de ocupación por potrero. Activo=1 significa que el lote sigue en el potrero (sin fecha de salida).'],
+      ['Potrero *','Lote *','N° Animales','Fecha Entrada (DD/MM/AAAA) *','Fecha Salida (DD/MM/AAAA)','Activo (1=Sí / 0=No)','Observación'],
+      ...ciclos
+        .sort((a,b)=>(a.fechaEntrada||0)-(b.fechaEntrada||0))
+        .map(c=>{
+          const potNom = potNomMap[c.potreroId]||''
+          const loteNom = loteNomMap[c.loteId]||c.nombreLote||''
+          return [potNom, loteNom, c.numAnimales||0, fd(c.fechaEntrada), fd(c.fechaSalida), c.activo===1?1:0, c.obs||'']
+        })
+    ])
+    XLSX.utils.book_append_sheet(wb, wsCiclos, 'CICLOS')
+
     const fecha = new Date().toISOString().split('T')[0]
     XLSX.writeFile(wb, `HPRapp-Exportacion-${fecha}.xlsx`)
     showToast('✅ Exportación lista','ok')
@@ -6993,6 +7009,40 @@ async function importarTodo(input) {
         addedLl++
       }
       resumen.push(`🌧 Lluvias: ${addedLl} importadas${dupLl?' · '+dupLl+' ya existían':''}${errLl?' · '+errLl+' sin fecha':''}`)
+    }
+
+    _showProg(93, 'Importando ciclos…')
+    // ── CICLOS ────────────────────────────────────
+    // Col 0:Potrero  1:Lote  2:NumAnimales  3:FechaEntrada  4:FechaSalida  5:Activo  6:Obs
+    const shCiclos = wb.SheetNames.find(s => /^CICLOS?$/i.test(s.trim()))
+    if (shCiclos) {
+      const rowsCiclos = readSheet(shCiclos, true).filter(r => r[0] && r[1])
+      const todosPotCic = await db.potreros.where('activo').equals(1).toArray()
+      const potMapCic = {}; todosPotCic.forEach(p=>potMapCic[p.nombre.trim().toLowerCase()]=p)
+      const todosLotesCic = await db.lotes.where('activo').equals(1).toArray()
+      const loteMapCic = {}; todosLotesCic.forEach(l=>loteMapCic[l.nombre.trim().toLowerCase()]=l)
+      let addedCic=0, skipCic=0
+      for (const row of rowsCiclos) {
+        const potNom  = String(row[0]||'').trim(); if (!potNom) { skipCic++; continue }
+        const loteNom = String(row[1]||'').trim(); if (!loteNom) { skipCic++; continue }
+        const pot  = potMapCic[potNom.toLowerCase()];  if (!pot)  { skipCic++; continue }
+        const lote = loteMapCic[loteNom.toLowerCase()]; if (!lote) { skipCic++; continue }
+        const fechaEntrada = parseFecha(row[3]); if (!fechaEntrada) { skipCic++; continue }
+        const fechaSalida  = parseFecha(row[4]) || undefined
+        const activo = parseInt(String(row[5]||'1')) === 1 ? 1 : 0
+        const numAnimales  = parseInt(String(row[2]||'0'))||0
+        const obs = String(row[6]||'').trim()||undefined
+        // Evitar duplicados: mismo potrero + lote + fechaEntrada
+        const dup = await db.ciclos.where({potreroId:pot.id,loteId:lote.id}).filter(c=>c.fechaEntrada===fechaEntrada).first()
+        if (dup) { skipCic++; continue }
+        await fsAdd('ciclos',{potreroId:pot.id,loteId:lote.id,nombreLote:lote.nombre,numAnimales,fechaEntrada,fechaSalida,activo,obs})
+        // Si ciclo activo → actualizar estado del potrero a OCUPADO
+        if (activo === 1) {
+          await fsUpdate('potreros', pot.id, {estado:'OCUPADO', numAnimales, loteActual:lote.id})
+        }
+        addedCic++
+      }
+      if (addedCic||skipCic) resumen.push(`🔄 Ciclos: ${addedCic} importados${skipCic?' · '+skipCic+' omitidos':''}`)
     }
 
     _showProg(100, 'Finalizando…')
