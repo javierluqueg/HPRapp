@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260605-002'
+const APP_VERSION = '20260605-003'
 
 // ── Auto-reload para Safari PWA ──────────────────
 // Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
@@ -6272,7 +6272,10 @@ async function pgConfig() {
     <div class="card mb10">
       <p class="bold mb8">📊 Exportar a Excel</p>
       <p class="sm gray mb12">Descarga todos los datos en hojas Excel: Animales, Pesajes, Labores, Potreros, Lotes, Rotación.</p>
-      <button class="btn btn-g" onclick="exportarExcel()">⬇ Descargar Excel completo</button>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn btn-g" onclick="exportarParaImportar()">📤 Exportar para importar</button>
+        <button class="btn btn-gray" onclick="exportarExcel()" style="font-size:.82rem">⬇ Excel completo (solo lectura)</button>
+      </div>
     </div>
 
     <div class="card mb10" style="border:2px solid #2E7D32">
@@ -6420,6 +6423,129 @@ async function probarFirebase(){
   } else {
     showToast('La sincronización ocurre automáticamente en segundo plano','info',4000)
   }
+}
+
+async function exportarParaImportar(){
+  try{
+    await loadXLSX()
+    const [animales,pesajes,labores,potreros,lotes,rotaciones,laboresPotrero,lluvias]=await Promise.all([
+      db.animales.where('activo').equals(1).toArray(),
+      db.pesajes.toArray(),
+      db.labores.toArray(),
+      db.potreros.where('activo').equals(1).toArray(),
+      db.lotes.where('activo').equals(1).toArray(),
+      db.rotaciones.where('activo').equals(1).toArray(),
+      db.laboresPotrero.toArray(),
+      db.lluvias.orderBy('fecha').toArray()
+    ])
+    const wb = XLSX.utils.book_new()
+    const fd = ts => ts ? ffd(ts) : ''
+
+    // ── LOTES ──
+    const wsLotes = XLSX.utils.aoa_to_sheet([
+      ['📂 TABLA LOTES — HPRapp'],
+      ['Registre los lotes antes de ingresar animales. El nombre debe ser exacto (ej: LOTE 10).'],
+      ['Nombre del Lote *','Descripción'],
+      ...lotes.map(l=>[l.nombre, l.descripcion||''])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsLotes, 'LOTES')
+
+    // ── POTREROS ──
+    const wsPotreros = XLSX.utils.aoa_to_sheet([
+      ['🌿 TABLA POTREROS — HPRapp'],
+      ['Registre aquí todos los potreros de la finca'],
+      ['Nombre del Potrero *','Área (ha) *','Estado inicial *','Descripción / Obs.','Composición Pastos (var % separados por coma)','Pendiente','Fuente de Agua'],
+      ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.observaciones||'', p.pastos||'', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA'])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsPotreros, 'POTREROS')
+
+    // ── ROTACIONES ──
+    const wsRot = XLSX.utils.aoa_to_sheet([
+      ['🔄 TABLA ROTACIONES — HPRapp'],
+      ['Registre las rotaciones. Los potreros deben coincidir con los nombres en POTREROS. Separe con coma.'],
+      ['Nombre de la Rotación *','Potreros en orden (separados por coma) *','Descripción'],
+      ...rotaciones.map(r=>{
+        const potNombres = (r.potreroIds||[]).map(pid=>{ const p=potreros.find(x=>x.id===pid); return p?p.nombre:'' }).filter(Boolean).join(',')
+        return [r.nombre, potNombres, r.descripcion||'']
+      })
+    ])
+    XLSX.utils.book_append_sheet(wb, wsRot, 'ROTACIONES')
+
+    // ── ANIMALES ──
+    // Construir mapa loteId→nombre
+    const loteNomMap = {}; lotes.forEach(l=>loteNomMap[l.id]=l.nombre)
+    const wsAnim = XLSX.utils.aoa_to_sheet([
+      ['🐄 TABLA ANIMALES — HPRapp'],
+      ['Registre aquí todos los animales. El Arete debe ser único por lote. Categoría y Lote deben coincidir con sus tablas.'],
+      ['Arete / Número *','Nombre','Categoría *','Raza *','Color','Peso Inicial (kg) *','Fecha Ingreso (DD/MM/AAAA) *','Procedencia','Nombre del Lote','Descripción / Obs.','Precio Compra ($/kg)'],
+      ...animales.map(a=>[
+        a.arete, a.nombre||'', a.categoria||'', a.raza||'', a.color||'',
+        a.pesoInicial||0, fd(a.fechaIngreso),
+        a.procedencia||'', loteNomMap[a.loteId]||'',
+        a.descripcion||'', a.precioCompra||''
+      ])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsAnim, 'ANIMALES')
+
+    // ── PESAJES ──
+    const animalMap = {}; animales.forEach(a=>animalMap[a.id]=a.arete)
+    const wsPes = XLSX.utils.aoa_to_sheet([
+      ['⚖️ TABLA PESAJES — HPRapp'],
+      ['Registre el historial de pesajes. El Arete debe coincidir con la columna Arete de ANIMALES.'],
+      ['Arete / Número *','Peso (kg) *','Fecha (DD/MM/AAAA) *','Observación'],
+      ...pesajes
+        .filter(p=>animalMap[p.animalId])
+        .sort((a,b)=>a.fecha-b.fecha)
+        .map(p=>[animalMap[p.animalId], p.pesoKg, fd(p.fecha), p.obs||''])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsPes, 'PESAJES')
+
+    // ── LABORES_LOTES ──
+    // Agrupar labores por lote: buscar animales del mismo lote con misma labor/fecha
+    const labLotesMap = {}
+    for(const l of labores){
+      const anim = animales.find(a=>a.id===l.animalId)
+      if(!anim||!anim.loteId) continue
+      const loteNom = loteNomMap[anim.loteId]||''
+      if(!loteNom) continue
+      const key = loteNom+'|'+l.tipo+'|'+l.fecha
+      if(!labLotesMap[key]) labLotesMap[key]={lote:loteNom,tipo:l.tipo,producto:l.producto||'',dosis:l.dosis||'',fecha:l.fecha,obs:l.obs||''}
+    }
+    const wsLabL = XLSX.utils.aoa_to_sheet([
+      ['💉 TABLA LABORES — HPRapp'],
+      ['Las labores se registran por LOTE. El nombre debe coincidir exactamente con la columna "Nombre del Lote" en ANIMALES.'],
+      ['Nombre del Lote *','Tipo de Labor *','Producto / Vacuna','Dosis','Fecha (DD/MM/AAAA) *','Observación'],
+      ...Object.values(labLotesMap)
+        .sort((a,b)=>a.fecha-b.fecha)
+        .map(l=>[l.lote, l.tipo, l.producto, l.dosis, fd(l.fecha), l.obs])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsLabL, 'LABORES_LOTES')
+
+    // ── LABORES_POTREROS ──
+    const potNomMap = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
+    const wsLabP = XLSX.utils.aoa_to_sheet([
+      ['🌿 TABLA LABORES POTREROS — HPRapp'],
+      ['Labores aplicadas a un potrero: fertilización, quema, renovación, etc. El nombre debe coincidir con POTREROS.'],
+      ['Nombre del Potrero *','Tipo de Labor *','Producto / Insumo','Cantidad / Dosis','Fecha (DD/MM/AAAA) *','Observación'],
+      ...laboresPotrero
+        .filter(l=>potNomMap[l.potreroId])
+        .sort((a,b)=>a.fecha-b.fecha)
+        .map(l=>[potNomMap[l.potreroId], l.tipo, l.producto||'', l.dosis||'', fd(l.fecha), l.obs||''])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsLabP, 'LABORES_POTREROS')
+
+    // ── LLUVIAS ──
+    const wsLluv = XLSX.utils.aoa_to_sheet([
+      ['🌧 TABLA LLUVIAS — HPRapp'],
+      ['Opcional — Registre las precipitaciones históricas de la finca'],
+      ...lluvias.map(l=>[fd(l.fecha), l.mm, l.obs||''])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsLluv, 'LLUVIAS')
+
+    const fecha = new Date().toISOString().split('T')[0]
+    XLSX.writeFile(wb, `HPRapp-Exportacion-${fecha}.xlsx`)
+    showToast('✅ Exportación lista','ok')
+  }catch(e){ await showAlert('Error al exportar: '+e.message) }
 }
 
 async function exportarExcel(){
