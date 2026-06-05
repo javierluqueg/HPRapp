@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260605-001'
+const APP_VERSION = '20260605-002'
 
 // ── Auto-reload para Safari PWA ──────────────────
 // Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
@@ -1173,7 +1173,7 @@ async function pgDashboard() {
   const catOrdenDash = ['HC','MC','HL','ML','NV','VH','VP','T','MCB']
   const catCount={}
   animales.forEach(a=>catCount[a.categoria]=(catCount[a.categoria]||0)+1)
-  const catColors = {HC:'#E8F5E9,#2E7D32',MC:'#E8F5E9,#1B5E20',HL:'#E3F2FD,#1565C0',ML:'#E3F2FD,#0D47A1',NV:'#F3E5F5,#6A1B9A',VH:'#FFF3E0,#E65100',VP:'#FCE4EC,#C62828',T:'#212121,white',MCB:'#263238,white'}
+  const catColors = {HC:'#E8F5E9,#2E7D32',MC:'#E8F5E9,#1B5E20',HL:'#E3F2FD,#1565C0',ML:'#E3F2FD,#0D47A1',NV:'#F3E5F5,#6A1B9A',VH:'#FFF3E0,#E65100',VP:'#FCE4EC,#C62828',T:'#FFFDE7,#F9A825',MCB:'#ECEFF1,#546E7A'}
   const catResumen = catOrdenDash.map(k => {
     const [bg,fg] = (catColors[k]||'#F5F5F5,#555').split(',')
     const n = catCount[k] || 0
