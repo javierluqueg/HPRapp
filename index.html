@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260605-006'
+const APP_VERSION = '20260605-007'
 
 // ── Auto-reload para Safari PWA ──────────────────
 // Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
@@ -1336,7 +1336,7 @@ async function pgDashboard() {
 
     <div class="card mb8">
       <div class="row-b" style="margin-bottom:10px">
-        <p class="sec" style="margin:0;cursor:pointer" onclick="go('lluvias')">🌧 Lluvias — últimos 30 días ›</p>
+        <p class="sec" style="margin:0;cursor:pointer;color:#1565C0;display:flex;align-items:center;gap:6px" onclick="go('lluvias')">🌧 Lluvias — últimos 30 días <span style="font-size:.85rem;background:#E3F2FD;color:#1565C0;border-radius:6px;padding:2px 8px;font-weight:700">Ver →</span></p>
         <button onclick="openRegistrarLluvia()" style="border:none;background:#1565C0;color:white;border-radius:8px;padding:6px 12px;font-size:.78rem;font-weight:700;cursor:pointer">+ Registrar</button>
       </div>
       <div class="g3 mb10">
