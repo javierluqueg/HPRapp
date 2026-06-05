@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260605-004'
+const APP_VERSION = '20260605-005'
 
 // ── Auto-reload para Safari PWA ──────────────────
 // Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
@@ -7499,9 +7499,12 @@ async function exportarBackup(){
 }
 async function importarBackup(input){
   const file=input.files[0];if(!file)return
-  if(!await showConfirm('⚠️ Esto borrará TODOS los datos actuales. ¿Continuar?')){input.value='';return}
+  if(!await showConfirm('⚠️ Esto borrará TODOS los datos actuales y restaurará desde el archivo. ¿Continuar?')){input.value='';return}
   try{
     const d=JSON.parse(await file.text())
+    if(!d.app||d.app!=='HPRapp'||!d.animales){await showAlert('❌ Archivo no válido. Usa un backup generado desde HPRapp.');input.value='';return}
+
+    // Restaurar Dexie
     await db.transaction('rw',[db.animales,db.pesajes,db.labores,db.potreros,db.lotes,db.ciclos,db.lluvias,db.usuarios,db.config,db.laboresPotrero,db.rotaciones],async()=>{
       await db.animales.clear();        await db.animales.bulkAdd(d.animales||[])
       await db.pesajes.clear();         await db.pesajes.bulkAdd(d.pesajes||[])
@@ -7515,8 +7518,33 @@ async function importarBackup(input){
       await db.laboresPotrero.clear();  await db.laboresPotrero.bulkAdd(d.laboresPotrero||[])
       await db.rotaciones.clear();      await db.rotaciones.bulkAdd(d.rotaciones||[])
     })
-    await showAlert('✓ Datos restaurados'); location.reload()
-  }catch(e){await showAlert('Error al importar: '+e.message)}
+
+    // ── Sincronizar todo a Firebase ──
+    // Marcar data_version nueva para que otros dispositivos detecten los datos restaurados
+    const _dv = String(Date.now())
+    localStorage.setItem('hpr_data_version', _dv)
+    localStorage.setItem('hpr_reset_applied', String(_resetTs||0))
+    try{
+      await fsdb.collection('config').doc('data_version').set({clave:'data_version',valor:_dv,_ts:parseInt(_dv)})
+      await setCfg('data_version',_dv)
+    }catch(e){}
+
+    // Subir todos los datos restaurados a Firebase
+    showToast('Sincronizando con la nube…','ok',60000)
+    const tablas=['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias','usuarios']
+    for(const t of tablas){
+      const rows=await db[t].toArray()
+      for(const row of rows){
+        const {id,...data}=row
+        try{
+          await fsdb.collection(t).doc(String(id)).set({...data,_ts:data._ts||Date.now()})
+        }catch(e){}
+      }
+    }
+
+    await showAlert(`✅ Restauración completa\n\n🐄 ${d.animales?.length||0} animales\n🌿 ${d.potreros?.length||0} potreros\n📂 ${d.lotes?.length||0} lotes\n⚖️ ${d.pesajes?.length||0} pesajes`)
+    location.reload()
+  }catch(e){await showAlert('Error al restaurar: '+e.message)}
   input.value=''
 }
 
