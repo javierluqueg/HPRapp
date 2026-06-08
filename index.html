@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260608-002'
+const APP_VERSION = '20260608-003'
 
 // ── Auto-reload para Safari PWA ──────────────────
 // Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
@@ -4488,11 +4488,12 @@ async function pgPotreros() {
     return { p, prio: semPrioridad(p, diasOcup, diasDesc) }
   }))
 
-  // Ordenar: mayor prioridad (rojo=2) arriba dentro de cada grupo
-  const ordenar = arr => arr.sort((a,b) => b.prio - a.prio).map(x => x.p)
+  // Ordenar: mayor días arriba dentro de cada grupo
+  const ordenarOcup = arr => arr.sort((a,b) => b.p._diasOcup - a.p._diasOcup).map(x => x.p)
+  const ordenarDesc = arr => arr.sort((a,b) => b.p._diasDesc - a.p._diasDesc).map(x => x.p)
 
-  const grOcup = ordenar(potsConPrio.filter(x => x.p.estado==='OCUPADO'||x.p.estado==='EN_MANEJO'))
-  const grDesc = ordenar(potsConPrio.filter(x => x.p.estado==='EN_DESCANSO'))
+  const grOcup = ordenarOcup(potsConPrio.filter(x => x.p.estado==='OCUPADO'||x.p.estado==='EN_MANEJO'))
+  const grDesc = ordenarDesc(potsConPrio.filter(x => x.p.estado==='EN_DESCANSO'))
   const grDisp = potsConPrio.filter(x => x.p.estado==='DISPONIBLE').map(x => x.p)
 
   const [cOcup,cDesc,cDisp]=await Promise.all([
@@ -4941,7 +4942,7 @@ async function openEditarPotrero(id){
     <div class="field"><label>Nombre *</label><input id="ep-n" class="inp" value="${escH(p.nombre)}"></div>
     <div class="inp-row">
       <div class="field"><label>Área (ha)</label>
-        <div class="inp-wrap"><input id="ep-a" class="inp" type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="${p.areaHa||''}"><span class="inp-suf">ha</span></div></div>
+        <div class="inp-wrap"><input id="ep-a" class="inp" type="number" inputmode="decimal" value="${p.areaHa||''}"><span class="inp-suf">ha</span></div></div>
       <div class="field"><label>Pendiente</label>
         <select id="ep-pend" class="inp">${mkOpts(PENDIENTE,p.pendiente)}</select></div>
     </div>
@@ -4963,7 +4964,7 @@ async function saveEditarPotrero(id){
   const btn=$('ep-btn')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   const pastosVal=_getPastosVal('ep-')
-  const areaHa=parseFloat(($('ep-a')?.value||'').replace(',','.'))||0
+  const areaHa=parseFloat($('ep-a')?.value)||0
   let prev
   try{
     prev=await db.potreros.get(id)
@@ -5079,7 +5080,7 @@ async function pgPotreroNuevo() {
       <input id="pn-n" class="inp" placeholder="Ej: Potrero 1, La Cañada…"></div>
     <div class="inp-row">
       <div class="field"><label>Área (ha) *</label>
-        <div class="inp-wrap"><input id="pn-a" class="inp" type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="0"><span class="inp-suf">ha</span></div></div>
+        <div class="inp-wrap"><input id="pn-a" class="inp" type="number" inputmode="decimal" placeholder="0"><span class="inp-suf">ha</span></div></div>
       <div class="field"><label>Pendiente</label>
         <select id="pn-pend" class="inp">${mkOpts(PENDIENTE)}</select></div>
     </div>
@@ -5095,7 +5096,7 @@ async function savePotrero() {
   if(!n){const f=$('pn-n');if(f){f.style.border='2px solid #C62828';f.focus()};showToast('El nombre es requerido','err');return}
   const existPot=await db.potreros.where('activo').equals(1).filter(p=>p.nombre.trim().toLowerCase()===n.toLowerCase()).first()
   if(existPot){showToast(`Ya existe "${existPot.nombre}". Usa otro nombre.`,'err',4000);return}
-  const a=parseFloat(($('pn-a')?.value||'').replace(',','.'))
+  const a=parseFloat($('pn-a')?.value)
   if(!a||a<=0){const f=$('pn-a');if(f){f.style.border='2px solid #C62828';f.focus()};showToast('El área debe ser mayor a 0','err');return}
   const total=_calcTotalPastos('pn-')
   if(total>100){showToast('La composición supera el 100%. Ajusta los porcentajes.','err',4000);return}
