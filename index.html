@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-005'
+const APP_VERSION = '20260611-006'
 
 // ── Service Worker: actualizaciones automáticas confiables ─────────
 if ('serviceWorker' in navigator) {
@@ -5875,7 +5875,7 @@ async function pgVentas() {
 let _rvSel = new Set()       // IDs seleccionados
 let _rvAnimales = []         // todos los activos cargados
 let _rvFiltrados = []        // después de búsqueda
-let _rvModoPrecio = 'pxkg'  // 'pxkg' | 'total'
+let _rvModoPrecio = 'pxkg'  // 'pxkg' | 'total' | 'cabeza'
 
 async function openRegistrarVenta() {
   _rvSel = new Set()
@@ -5903,6 +5903,7 @@ async function openRegistrarVenta() {
     <div class="seg mb10">
       <button id="rv-tab-pxkg" class="on" onclick="rvSetModo('pxkg')">💲 Por kilo</button>
       <button id="rv-tab-total" onclick="rvSetModo('total')">💰 Valor total</button>
+      <button id="rv-tab-cabeza" onclick="rvSetModo('cabeza')">🐄 Por cabeza</button>
     </div>
     <div id="rv-precio-wrap">
       <div class="field"><label id="rv-precio-lbl">Precio por kg * <span class="xs gray">(se aplica a cada animal × su peso)</span></label>
@@ -5996,18 +5997,23 @@ function rvUpdContador() {
 function rvSetModo(modo) {
   _rvModoPrecio = modo
   const wrap = document.getElementById('rv-precio-wrap')
-  const lbl  = document.getElementById('rv-precio-lbl')
-  const tabPxkg  = document.getElementById('rv-tab-pxkg')
-  const tabTotal = document.getElementById('rv-tab-total')
+  const tabPxkg   = document.getElementById('rv-tab-pxkg')
+  const tabTotal  = document.getElementById('rv-tab-total')
+  const tabCabeza = document.getElementById('rv-tab-cabeza')
   if (!wrap) return
+  tabPxkg?.classList.remove('on'); tabTotal?.classList.remove('on'); tabCabeza?.classList.remove('on')
   if (modo === 'pxkg') {
-    tabPxkg?.classList.add('on'); tabTotal?.classList.remove('on')
-    wrap.innerHTML = `<div class="field"><label id="rv-precio-lbl">Precio por kg * <span class="xs gray">(valor individual = $/kg × peso)</span></label>
+    tabPxkg?.classList.add('on')
+    wrap.innerHTML = `<div class="field"><label>Precio por kg * <span class="xs gray">(valor individual = $/kg × peso)</span></label>
       <div class="inp-wrap"><input id="rv-pxkg" class="inp" type="text" inputmode="decimal" placeholder="$/kg" oninput="rvUpdResumen()"><span class="inp-suf">$/kg</span></div></div>`
-  } else {
-    tabPxkg?.classList.remove('on'); tabTotal?.classList.add('on')
+  } else if (modo === 'total') {
+    tabTotal?.classList.add('on')
     wrap.innerHTML = `<div class="field"><label>Valor total de la venta * <span class="xs gray">(se distribuye entre animales por peso)</span></label>
       <div class="inp-wrap"><span class="inp-suf" style="left:10px;right:auto">$</span><input id="rv-vtotal" class="inp" type="text" inputmode="decimal" placeholder="Total $" style="padding-left:28px" oninput="rvUpdResumen()"></div></div>`
+  } else {
+    tabCabeza?.classList.add('on')
+    wrap.innerHTML = `<div class="field"><label>Valor por cabeza * <span class="xs gray">(mismo precio para cada animal, sin importar el peso)</span></label>
+      <div class="inp-wrap"><span class="inp-suf" style="left:10px;right:auto">$</span><input id="rv-vcabeza" class="inp" type="text" inputmode="decimal" placeholder="$ por animal" style="padding-left:28px" oninput="rvUpdResumen()"></div></div>`
   }
   rvUpdResumen()
 }
@@ -6024,10 +6030,14 @@ function rvUpdResumen() {
     const pxkg = parseFloat((document.getElementById('rv-pxkg')?.value||'').replace(',','.')) || 0
     totalVenta = pxkg * pesoTot
     pxkgProm = pxkg
-  } else {
+  } else if (_rvModoPrecio === 'total') {
     const vt = parseFloat((document.getElementById('rv-vtotal')?.value||'').replace(',','.')) || 0
     totalVenta = vt
     pxkgProm = pesoTot > 0 ? vt / pesoTot : 0
+  } else {
+    const vc = parseFloat((document.getElementById('rv-vcabeza')?.value||'').replace(',','.')) || 0
+    totalVenta = vc * selAni.length
+    pxkgProm = pesoTot > 0 ? totalVenta / pesoTot : 0
   }
   if (!totalVenta) { resDiv.style.display='none'; return }
   // Costo total
@@ -6041,7 +6051,7 @@ function rvUpdResumen() {
   resBdy.innerHTML = `
     <div style="display:flex;justify-content:space-between"><span>Animales</span><strong>${selAni.length}</strong></div>
     <div style="display:flex;justify-content:space-between"><span>Peso total</span><strong>${pesoTot.toFixed(1)} kg</strong></div>
-    <div style="display:flex;justify-content:space-between"><span>Precio prom.</span><strong>${fmt(pxkgProm)}/kg</strong></div>
+    ${_rvModoPrecio==='cabeza'?`<div style="display:flex;justify-content:space-between"><span>Precio por cabeza</span><strong>${fmt(totalVenta/selAni.length)}</strong></div>`:`<div style="display:flex;justify-content:space-between"><span>Precio prom.</span><strong>${fmt(pxkgProm)}/kg</strong></div>`}
     <div style="display:flex;justify-content:space-between;border-top:1px solid rgba(0,0,0,.08);margin-top:4px;padding-top:4px"><span>Total venta</span><strong>${fmt(totalVenta)}</strong></div>
     ${util!==null?`<div style="display:flex;justify-content:space-between"><span>Utilidad estimada</span><strong>${util>=0?'+':''}${fmt(util)}</strong></div>`:''}
   `
@@ -6056,14 +6066,19 @@ async function guardarVenta() {
 
   const selAni  = _rvAnimales.filter(a => _rvSel.has(a.id))
   const pesoTot = selAni.reduce((s,a) => s+a._pesoAct, 0)
-  let pxkg = 0, totalVenta = 0
+  let pxkg = 0, totalVenta = 0, vcabeza = 0
   if (_rvModoPrecio === 'pxkg') {
     pxkg = parseFloat((document.getElementById('rv-pxkg')?.value||'').replace(',','.')) || 0
     if (!pxkg) { showToast('Indica el precio por kg','err'); return }
     totalVenta = pxkg * pesoTot
-  } else {
+  } else if (_rvModoPrecio === 'total') {
     totalVenta = parseFloat((document.getElementById('rv-vtotal')?.value||'').replace(',','.')) || 0
     if (!totalVenta) { showToast('Indica el valor total de la venta','err'); return }
+    pxkg = pesoTot > 0 ? totalVenta / pesoTot : 0
+  } else {
+    vcabeza = parseFloat((document.getElementById('rv-vcabeza')?.value||'').replace(',','.')) || 0
+    if (!vcabeza) { showToast('Indica el valor por cabeza','err'); return }
+    totalVenta = vcabeza * selAni.length
     pxkg = pesoTot > 0 ? totalVenta / pesoTot : 0
   }
 
@@ -6076,7 +6091,9 @@ async function guardarVenta() {
       const pesoVenta = a._pesoAct
       const valorVenta = _rvModoPrecio === 'pxkg'
         ? Math.round(pxkg * pesoVenta)
-        : Math.round(totalVenta * (pesoVenta / pesoTot))  // distribución proporcional
+        : _rvModoPrecio === 'cabeza'
+          ? Math.round(vcabeza)                              // mismo valor para cada uno
+          : Math.round(totalVenta * (pesoVenta / pesoTot))  // distribución proporcional por peso
       const precioVentaKg = Math.round(valorVenta / pesoVenta)
       await fsUpdate('animales', a.id, {
         activo:0, causaBaja:'Venta', fechaBaja,
