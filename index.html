@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-006'
+const APP_VERSION = '20260611-008'
 
 // ── Service Worker: actualizaciones automáticas confiables ─────────
 if ('serviceWorker' in navigator) {
@@ -5876,10 +5876,12 @@ let _rvSel = new Set()       // IDs seleccionados
 let _rvAnimales = []         // todos los activos cargados
 let _rvFiltrados = []        // después de búsqueda
 let _rvModoPrecio = 'pxkg'  // 'pxkg' | 'total' | 'cabeza'
+let _rvPesos = {}            // { [id]: kg } pesos editados en modo pxkg
 
 async function openRegistrarVenta() {
   _rvSel = new Set()
   _rvModoPrecio = 'pxkg'
+  _rvPesos = {}
   const activos = await db.animales.where('activo').equals(1).toArray()
   if (!activos.length) { showToast('No hay animales activos','err'); return }
   const lotes = await db.lotes.where('activo').equals(1).toArray()
@@ -5894,34 +5896,46 @@ async function openRegistrarVenta() {
   const hoy = new Date().toISOString().split('T')[0]
   showSheet(`
     <div class="sh-title">💰 Registrar Venta<button class="sh-x" onclick="closeSheet()">✕</button></div>
-    <input id="rv-bus" class="inp" placeholder="🔍 Buscar por arete, nombre o lote…" oninput="rvFiltrar()" style="margin-bottom:8px">
+
+    <p class="xs bold" style="color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">1 · Seleccionar animales</p>
+    <input id="rv-bus" class="inp" placeholder="🔍 Buscar por arete, nombre o lote…" oninput="rvFiltrar()" style="margin-bottom:6px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <p class="xs gray" id="rv-ncnt">0 animales seleccionados</p>
+      <p class="xs gray" id="rv-ncnt">Ningún animal seleccionado</p>
       <button onclick="rvSelTodos()" style="border:none;background:none;color:#1565C0;font-size:.78rem;font-weight:700;cursor:pointer">Seleccionar todos</button>
     </div>
-    <div id="rv-lista" style="max-height:260px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:10px;margin-bottom:12px"></div>
-    <div class="seg mb10">
-      <button id="rv-tab-pxkg" class="on" onclick="rvSetModo('pxkg')">💲 Por kilo</button>
-      <button id="rv-tab-total" onclick="rvSetModo('total')">💰 Valor total</button>
-      <button id="rv-tab-cabeza" onclick="rvSetModo('cabeza')">🐄 Por cabeza</button>
+    <div id="rv-lista" style="max-height:220px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:10px;margin-bottom:14px"></div>
+
+    <div id="rv-sel-wrap" style="display:none;margin-bottom:14px">
+      <p class="xs bold" style="color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">2 · Animales seleccionados</p>
+      <div id="rv-sel-lista" style="border:1.5px solid #A5D6A7;border-radius:10px;overflow:hidden"></div>
     </div>
-    <div id="rv-precio-wrap">
-      <div class="field"><label id="rv-precio-lbl">Precio por kg * <span class="xs gray">(se aplica a cada animal × su peso)</span></label>
-        <div class="inp-wrap"><input id="rv-pxkg" class="inp" type="text" inputmode="decimal" placeholder="$/kg" oninput="rvUpdResumen()"><span class="inp-suf">$/kg</span></div>
+
+    <div id="rv-precio-seccion" style="display:none">
+      <p class="xs bold" style="color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">3 · Precio de venta</p>
+      <div class="seg mb10">
+        <button id="rv-tab-pxkg" class="on" onclick="rvSetModo('pxkg')">💲 Por kilo</button>
+        <button id="rv-tab-total" onclick="rvSetModo('total')">💰 Valor total</button>
+        <button id="rv-tab-cabeza" onclick="rvSetModo('cabeza')">🐄 Por cabeza</button>
       </div>
+      <div id="rv-precio-wrap">
+        <div class="field"><label>Precio por kg * <span class="xs gray">(valor = $/kg × peso de cada animal)</span></label>
+          <div class="inp-wrap"><input id="rv-pxkg" class="inp" type="text" inputmode="decimal" placeholder="$/kg" oninput="rvUpdResumen()"><span class="inp-suf">$/kg</span></div>
+        </div>
+      </div>
+      <div id="rv-resumen" style="background:#F1F8E9;border-radius:10px;padding:10px 12px;margin-bottom:12px;display:none">
+        <p class="xs bold" style="color:#2E7D32;margin-bottom:4px">Resumen de la venta</p>
+        <div id="rv-resumen-body" style="font-size:.8rem;color:#1B5E20;line-height:1.7"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
+        <div class="field"><label>Fecha venta *</label>
+          <input id="rv-fecha" class="inp" type="date" value="${hoy}"></div>
+        <div class="field"><label>Comprador</label>
+          <input id="rv-comprador" class="inp" placeholder="Opcional"></div>
+      </div>
+      <div class="field"><label>Observaciones</label>
+        <input id="rv-obs" class="inp" placeholder="Opcional…"></div>
     </div>
-    <div id="rv-resumen" style="background:#F1F8E9;border-radius:10px;padding:10px 12px;margin-bottom:12px;display:none">
-      <p class="xs bold" style="color:#2E7D32;margin-bottom:4px">Resumen de la venta</p>
-      <div id="rv-resumen-body" style="font-size:.8rem;color:#1B5E20;line-height:1.7"></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
-      <div class="field"><label>Fecha venta *</label>
-        <input id="rv-fecha" class="inp" type="date" value="${hoy}"></div>
-      <div class="field"><label>Comprador</label>
-        <input id="rv-comprador" class="inp" placeholder="Opcional"></div>
-    </div>
-    <div class="field"><label>Observaciones</label>
-      <input id="rv-obs" class="inp" placeholder="Opcional…"></div>
+
     <div class="btn-row">
       <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
       <button class="btn btn-g" id="rv-btn" onclick="guardarVenta()">✓ Registrar venta</button>
@@ -5973,6 +5987,7 @@ function rvRenderLista() {
 function rvToggle(id) {
   if (_rvSel.has(id)) _rvSel.delete(id); else _rvSel.add(id)
   rvRenderLista()
+  rvUpdSeleccionados()
   rvUpdResumen()
 }
 
@@ -5986,12 +6001,69 @@ function rvSelTodos() {
     if (btn) btn.textContent = 'Desmarcar todos'
   }
   rvRenderLista()
+  rvUpdSeleccionados()
   rvUpdResumen()
 }
 
 function rvUpdContador() {
   const el = document.getElementById('rv-ncnt')
   if (el) el.textContent = _rvSel.size === 0 ? 'Ningún animal seleccionado' : `${_rvSel.size} animal${_rvSel.size>1?'es':''} seleccionado${_rvSel.size>1?'s':''}`
+}
+
+function rvGetPeso(a) {
+  return (_rvPesos[a.id] !== undefined) ? _rvPesos[a.id] : a._pesoAct
+}
+
+function rvPesoInput(id, val) {
+  const v = parseFloat(String(val).replace(',','.'))
+  if (!isNaN(v) && v > 0) _rvPesos[id] = v
+  else delete _rvPesos[id]
+  rvUpdResumen()
+  // Actualizar solo el total del pie sin re-renderizar toda la lista
+  const selAni = _rvAnimales.filter(a => _rvSel.has(a.id))
+  const pesoTot = selAni.reduce((s,a) => s + rvGetPeso(a), 0)
+  const totEl = document.getElementById('rv-sel-total')
+  if (totEl) totEl.textContent = pesoTot.toLocaleString('es-CO',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kg total'
+}
+
+function rvUpdSeleccionados() {
+  const wrap      = document.getElementById('rv-sel-wrap')
+  const lista     = document.getElementById('rv-sel-lista')
+  const secPrecio = document.getElementById('rv-precio-seccion')
+  if (!wrap || !lista || !secPrecio) return
+  if (!_rvSel.size) {
+    wrap.style.display = 'none'
+    secPrecio.style.display = 'none'
+    return
+  }
+  wrap.style.display = 'block'
+  secPrecio.style.display = 'block'
+  const selAni  = _rvAnimales.filter(a => _rvSel.has(a.id))
+  const pesoTot = selAni.reduce((s,a) => s + rvGetPeso(a), 0)
+  const fmtKg   = v => v.toLocaleString('es-CO', {minimumFractionDigits:1, maximumFractionDigits:1})
+  const modoKg  = _rvModoPrecio === 'pxkg'
+  lista.innerHTML = selAni.map((a,i) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;${i<selAni.length-1?'border-bottom:1px solid #E8F5E9':''}">
+      <button onclick="rvToggle(${a.id})" style="border:none;background:#FFEBEE;color:#C62828;border-radius:50%;width:22px;height:22px;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>
+      <div style="flex:1;min-width:0">
+        <p style="font-size:.83rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">'+a.nombre+'</span>':''}</p>
+        <p style="font-size:.7rem;color:#888">${a._loteNom} · ${a.categoria||''}</p>
+      </div>
+      ${modoKg
+        ? `<div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+             <input type="text" inputmode="decimal"
+               value="${fmtKg(rvGetPeso(a))}"
+               oninput="rvPesoInput(${a.id},this.value)"
+               style="width:72px;border:1.5px solid #A5D6A7;border-radius:8px;padding:5px 6px;font-size:.82rem;font-weight:700;color:#1B5E20;text-align:right;background:white">
+             <span style="font-size:.72rem;color:#888">kg</span>
+           </div>`
+        : `<p style="font-size:.85rem;font-weight:700;color:#2E7D32;flex-shrink:0">${fmtKg(a._pesoAct)} kg</p>`
+      }
+    </div>`).join('') +
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#E8F5E9;border-top:1.5px solid #A5D6A7">
+      <span style="font-size:.78rem;font-weight:700;color:#1B5E20">${selAni.length} animal${selAni.length>1?'es':''}</span>
+      <span id="rv-sel-total" style="font-size:.85rem;font-weight:800;color:#1B5E20">${fmtKg(pesoTot)} kg total</span>
+    </div>`
 }
 
 function rvSetModo(modo) {
@@ -6015,6 +6087,7 @@ function rvSetModo(modo) {
     wrap.innerHTML = `<div class="field"><label>Valor por cabeza * <span class="xs gray">(mismo precio para cada animal, sin importar el peso)</span></label>
       <div class="inp-wrap"><span class="inp-suf" style="left:10px;right:auto">$</span><input id="rv-vcabeza" class="inp" type="text" inputmode="decimal" placeholder="$ por animal" style="padding-left:28px" oninput="rvUpdResumen()"></div></div>`
   }
+  rvUpdSeleccionados()
   rvUpdResumen()
 }
 
@@ -6024,7 +6097,7 @@ function rvUpdResumen() {
   if (!resDiv || !resBdy) return
   if (!_rvSel.size) { resDiv.style.display='none'; return }
   const selAni  = _rvAnimales.filter(a => _rvSel.has(a.id))
-  const pesoTot = selAni.reduce((s,a) => s+a._pesoAct, 0)
+  const pesoTot = selAni.reduce((s,a) => s + rvGetPeso(a), 0)
   let totalVenta = 0, pxkgProm = 0
   if (_rvModoPrecio === 'pxkg') {
     const pxkg = parseFloat((document.getElementById('rv-pxkg')?.value||'').replace(',','.')) || 0
@@ -6065,7 +6138,7 @@ async function guardarVenta() {
   if (!fechaStr) { showToast('Indica la fecha de venta','err'); return }
 
   const selAni  = _rvAnimales.filter(a => _rvSel.has(a.id))
-  const pesoTot = selAni.reduce((s,a) => s+a._pesoAct, 0)
+  const pesoTot = selAni.reduce((s,a) => s + rvGetPeso(a), 0)
   let pxkg = 0, totalVenta = 0, vcabeza = 0
   if (_rvModoPrecio === 'pxkg') {
     pxkg = parseFloat((document.getElementById('rv-pxkg')?.value||'').replace(',','.')) || 0
@@ -6088,7 +6161,7 @@ async function guardarVenta() {
 
   try {
     for (const a of selAni) {
-      const pesoVenta = a._pesoAct
+      const pesoVenta = rvGetPeso(a)
       const valorVenta = _rvModoPrecio === 'pxkg'
         ? Math.round(pxkg * pesoVenta)
         : _rvModoPrecio === 'cabeza'
