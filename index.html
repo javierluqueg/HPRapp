@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-003'
+const APP_VERSION = '20260611-004'
 
 // ── Service Worker: actualizaciones automáticas confiables ─────────
 if ('serviceWorker' in navigator) {
@@ -7683,6 +7683,8 @@ function pwaBannerDismiss() {
 
 // ── Auto-actualización via GitHub API ──────────────
 async function checkAppVersion() {
+  // No interrumpir si el usuario está en login o sin sesión iniciada
+  if (!USER || ['login','setup'].includes(PAGE)) return
   try {
     // Usa la API de GitHub para obtener el último commit — no le afecta el caché del CDN
     const r = await fetch('https://api.github.com/repos/javierluqueg/HPRapp/commits/main', {
