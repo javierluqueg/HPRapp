@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-009'
+const APP_VERSION = '20260611-010'
 
 // ── Service Worker: network-first, siempre sirve la versión más reciente ──
 if ('serviceWorker' in navigator) {
@@ -5955,16 +5955,16 @@ function rvRenderLista() {
     html += `<div style="padding:6px 10px;background:#f5f5f5;font-size:.72rem;font-weight:700;color:#555;letter-spacing:.04em;text-transform:uppercase">${lnom}</div>`
     for (const a of animals) {
       const sel = _rvSel.has(a.id)
-      html += `<div onclick="rvToggle(${a.id})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;background:${sel?'#E8F5E9':'white'}">
+      html += `<button onclick="rvToggle(${a.id})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;width:100%;border:none;border-bottom:1px solid #f0f0f0;background:${sel?'#E8F5E9':'white'};text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
         <div style="width:22px;height:22px;border-radius:50%;border:2px solid ${sel?'#2E7D32':'#ccc'};background:${sel?'#2E7D32':'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
           ${sel?'<span style="color:white;font-size:12px;font-weight:700;line-height:1">✓</span>':''}
         </div>
-        <div style="flex:1;min-width:0">
+        <div style="flex:1;min-width:0;text-align:left">
           <p style="font-size:.85rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''} <span style="font-size:.65rem;background:#E3F2FD;color:#1565C0;border-radius:4px;padding:1px 5px">${a.categoria||''}</span></p>
           <p style="font-size:.72rem;color:#888">${a.raza||''}</p>
         </div>
         <p style="font-size:.82rem;font-weight:700;color:#333;flex-shrink:0">${a._pesoAct.toFixed(1)} kg</p>
-      </div>`
+      </button>`
     }
   }
   el.innerHTML = html
