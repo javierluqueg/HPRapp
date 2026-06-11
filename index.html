@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260608-003'
+const APP_VERSION = '20260611-001'
 
 // ── Auto-reload para Safari PWA ──────────────────
 // Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
@@ -79,8 +79,8 @@ button{cursor:pointer}
 .btn-out{background:white;color:#388E3C;border:2px solid #388E3C}
 .btn-gray{background:#e8e8e8;color:#444}
 .btn-sm{padding:9px 14px;font-size:.82rem;width:auto;border-radius:9px}
-.btn-row{display:flex;gap:8px}
-.btn-row .btn{flex:1}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.btn-row .btn{flex:1;min-width:80px}
 
 /* Inputs */
 .field{margin-bottom:13px}
