@@ -11,26 +11,25 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-002'
+const APP_VERSION = '20260611-003'
 
-// ── Auto-reload para Safari PWA ──────────────────
-// Compara el APP_VERSION del HTML en servidor con el de esta copia cacheada.
-// Si son distintos, recarga inmediatamente antes de que el usuario vea nada.
-;(function(){
-  // Solo correr una vez por sesión (evitar loop infinito)
-  if(sessionStorage.getItem('_vchk')) return
-  sessionStorage.setItem('_vchk','1')
-  fetch(location.pathname + '?_v=' + Date.now(), {cache:'no-store'})
-    .then(r=>r.text())
-    .then(html=>{
-      const m = html.match(/APP_VERSION = '([^']+)'/)
-      if(m && m[1] !== APP_VERSION){
-        sessionStorage.removeItem('_vchk')
-        location.replace(location.pathname + '?_reload=' + Date.now())
+// ── Service Worker: actualizaciones automáticas confiables ─────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {})
+
+  // Escuchar mensaje del SW cuando hay versión nueva disponible
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type === 'NEW_VERSION') {
+      // Mostrar aviso y recargar automáticamente en 2 segundos
+      const toast = document.getElementById('toast')
+      if (toast) {
+        toast.textContent = '🔄 Nueva versión disponible — actualizando…'
+        toast.className = 'toast show'
       }
-    })
-    .catch(()=>{}) // offline — no hacer nada
-})()
+      setTimeout(() => location.reload(), 2000)
+    }
+  })
+}
 
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
 const _mb=new Blob([JSON.stringify(_manifest)],{type:'application/json'})
@@ -79,8 +78,8 @@ button{cursor:pointer}
 .btn-out{background:white;color:#388E3C;border:2px solid #388E3C}
 .btn-gray{background:#e8e8e8;color:#444}
 .btn-sm{padding:9px 14px;font-size:.82rem;width:auto;border-radius:9px}
-.btn-row{display:flex;gap:8px;flex-wrap:wrap}
-.btn-row .btn{flex:1;min-width:80px}
+.btn-row{display:flex;gap:8px}
+.btn-row .btn{flex:1}
 
 /* Inputs */
 .field{margin-bottom:13px}
@@ -4021,8 +4020,7 @@ async function pgLoteFicha({id}) {
   </div>`:''}
   <div class="btn-row mb12">
     ${pot
-      ? `<button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${cicloActivo.id},${pot.id})">🚪 Sacar</button>
-         <button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id},${cicloActivo.id},${pot.id})">🔄 Cambiar potrero</button>`
+      ? `<button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${cicloActivo.id},${pot.id})">🚪 Sacar del potrero</button>`
       : `<button class="btn btn-g btn-sm" onclick="openIngresarLote(${id})">🌿 Ingresar a potrero</button>`
     }
     <button class="btn btn-out btn-sm" onclick="openAgregarAnimal(${id})">+ Animal</button>
@@ -4262,54 +4260,6 @@ async function sacarLoteDelPotrero(loteId,cicloId,potreroId) {
   await fsUpdate('ciclos',cicloId,{activo:0,fechaSalida:Date.now(),diasOcupacion:dias})
   await fsUpdate('potreros',potreroId,{estado:'EN_DESCANSO',numAnimales:0,loteActual:undefined,fechaSalida:Date.now()})
   go('lote-ficha',{id:loteId})
-}
-async function openCambiarPotrero(loteId,cicloId,potreroActualId) {
-  const pots=await db.potreros.where('activo').equals(1).toArray()
-  const dispon=pots.filter(p=>p.estado!=='OCUPADO')
-  const potActual=await db.potreros.get(potreroActualId)
-  if(!dispon.length){
-    showToast('No hay potreros disponibles para el traslado','err',3500); return
-  }
-  showSheet(`<div class="sh-title">🔄 Cambiar potrero<button class="sh-x" onclick="closeSheet()">✕</button></div>
-    <p class="sm gray mb12">Potrero actual: <strong>${potActual?.nombre||'—'}</strong></p>
-    <div class="field"><label>Nuevo potrero *</label>
-      <select id="cp-pot" class="inp">
-        <option value="">Seleccionar…</option>
-        ${dispon.map(p=>`<option value="${p.id}">${p.nombre} (${p.areaHa?.toFixed(1)||0} ha)</option>`).join('')}
-      </select></div>
-    <div class="field"><label>Fecha de traslado</label>
-      <input id="cp-f" class="inp" type="date" value="${toD(Date.now())}"></div>
-    <div class="btn-row">
-      <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
-      <button class="btn btn-b" onclick="saveCambiarPotrero(${loteId},${cicloId},${potreroActualId})">Confirmar traslado</button>
-    </div>`)
-}
-async function saveCambiarPotrero(loteId,cicloId,potreroActualId) {
-  const potId=parseInt($('cp-pot')?.value)
-  if(!potId){
-    const f=$('cp-pot');if(f){f.style.border='2px solid #C62828';f.focus()}
-    showToast('Selecciona un potrero','err'); return
-  }
-  const btn=document.querySelector('#ov .btn-b')
-  if(btn){btn.disabled=true;btn.textContent='Guardando…'}
-  try {
-    const lote=await db.lotes.get(loteId)
-    const animales=await db.animales.where({activo:1,loteId}).toArray()
-    const fecha=fromD($('cp-f').value)
-    // Cerrar ciclo actual
-    const dias=diasDesde((await db.ciclos.get(cicloId)).fechaEntrada)
-    await fsUpdate('ciclos',cicloId,{activo:0,fechaSalida:fecha,diasOcupacion:dias})
-    await fsUpdate('potreros',potreroActualId,{estado:'EN_DESCANSO',numAnimales:0,loteActual:null,fechaSalida:fecha})
-    // Abrir nuevo ciclo
-    const nuevoCicloId=await fsAdd('ciclos',{potreroId:potId,loteId,nombreLote:lote.nombre,numAnimales:animales.length,fechaEntrada:fecha,activo:1,obs:''})
-    trazar('TRASLADO_POTRERO','CICLO',nuevoCicloId,{potreroOrigen:potreroActualId,potreroDestino:potId,lote:loteId,animales:animales.length})
-    await fsUpdate('potreros',potId,{estado:'OCUPADO',numAnimales:animales.length,loteActual:loteId})
-  } catch(e) {
-    showToast('Error al cambiar potrero','err',4000)
-    if(btn){btn.disabled=false;btn.textContent='Confirmar traslado'}
-    return
-  }
-  closeSheet(); go('lote-ficha',{id:loteId})
 }
 let _aniLoteSel=new Set(), _aniLoteAll=[], _aniLoteLibres=[], _aniLoteEnOtros=[], _aniLoteId=0, _aaTab='disp', _aniLoteFiltrada=[]
 async function openAgregarAnimal(loteId){
