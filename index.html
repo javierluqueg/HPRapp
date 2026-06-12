@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-023'
+const APP_VERSION = '20260612-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6746,8 +6746,6 @@ async function exportarParaImportar(){
 
     // ── LOTES ──
     const wsLotes = XLSX.utils.aoa_to_sheet([
-      ['📂 TABLA LOTES — HPRapp'],
-      ['Registre los lotes antes de ingresar animales. El nombre debe ser exacto (ej: LOTE 10).'],
       ['Nombre del Lote *','Descripción'],
       ...lotes.map(l=>[l.nombre, l.descripcion||''])
     ])
@@ -6755,8 +6753,6 @@ async function exportarParaImportar(){
 
     // ── POTREROS ──
     const wsPotreros = XLSX.utils.aoa_to_sheet([
-      ['🌿 TABLA POTREROS — HPRapp'],
-      ['Registre aquí todos los potreros de la finca'],
       ['Nombre del Potrero *','Área (ha) *','Estado inicial *','Descripción / Obs.','Composición Pastos (var % separados por coma)','Pendiente','Fuente de Agua'],
       ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.observaciones||'', p.pastos||'', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA'])
     ])
@@ -6764,8 +6760,6 @@ async function exportarParaImportar(){
 
     // ── ROTACIONES ──
     const wsRot = XLSX.utils.aoa_to_sheet([
-      ['🔄 TABLA ROTACIONES — HPRapp'],
-      ['Registre las rotaciones. Los potreros deben coincidir con los nombres en POTREROS. Separe con coma.'],
       ['Nombre de la Rotación *','Potreros en orden (separados por coma) *','Descripción'],
       ...rotaciones.map(r=>{
         const potNombres = (r.potreroIds||[]).map(pid=>{ const p=potreros.find(x=>x.id===pid); return p?p.nombre:'' }).filter(Boolean).join(',')
@@ -6778,8 +6772,6 @@ async function exportarParaImportar(){
     // Construir mapa loteId→nombre
     const loteNomMap = {}; lotes.forEach(l=>loteNomMap[l.id]=l.nombre)
     const wsAnim = XLSX.utils.aoa_to_sheet([
-      ['🐄 TABLA ANIMALES — HPRapp'],
-      ['Registre aquí todos los animales. El Arete debe ser único por lote. Categoría y Lote deben coincidir con sus tablas.'],
       ['Arete / Número *','Nombre','Categoría *','Raza *','Color','Peso Inicial (kg) *','Fecha Ingreso (DD/MM/AAAA) *','Procedencia','Nombre del Lote','Descripción / Obs.','Precio Compra ($/kg)'],
       ...animales.map(a=>[
         a.arete, a.nombre||'', a.categoria||'', a.raza||'', a.color||'',
@@ -6793,8 +6785,6 @@ async function exportarParaImportar(){
     // ── PESAJES ──
     const animalMap = {}; animales.forEach(a=>animalMap[a.id]=a.arete)
     const wsPes = XLSX.utils.aoa_to_sheet([
-      ['⚖️ TABLA PESAJES — HPRapp'],
-      ['Registre el historial de pesajes. El Arete debe coincidir con la columna Arete de ANIMALES.'],
       ['Arete / Número *','Peso (kg) *','Fecha (DD/MM/AAAA) *','Observación'],
       ...pesajes
         .filter(p=>animalMap[p.animalId])
@@ -6815,8 +6805,6 @@ async function exportarParaImportar(){
       if(!labLotesMap[key]) labLotesMap[key]={lote:loteNom,tipo:l.tipo,producto:l.producto||'',dosis:l.dosis||'',fecha:l.fecha,obs:l.obs||''}
     }
     const wsLabL = XLSX.utils.aoa_to_sheet([
-      ['💉 TABLA LABORES — HPRapp'],
-      ['Las labores se registran por LOTE. El nombre debe coincidir exactamente con la columna "Nombre del Lote" en ANIMALES.'],
       ['Nombre del Lote *','Tipo de Labor *','Producto / Vacuna','Dosis','Fecha (DD/MM/AAAA) *','Observación'],
       ...Object.values(labLotesMap)
         .sort((a,b)=>a.fecha-b.fecha)
@@ -6827,8 +6815,6 @@ async function exportarParaImportar(){
     // ── LABORES_POTREROS ──
     const potNomMap = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
     const wsLabP = XLSX.utils.aoa_to_sheet([
-      ['🌿 TABLA LABORES POTREROS — HPRapp'],
-      ['Labores aplicadas a un potrero: fertilización, quema, renovación, etc. El nombre debe coincidir con POTREROS.'],
       ['Nombre del Potrero *','Tipo de Labor *','Producto / Insumo','Cantidad / Dosis','Fecha (DD/MM/AAAA) *','Observación'],
       ...laboresPotrero
         .filter(l=>potNomMap[l.potreroId])
@@ -6839,8 +6825,7 @@ async function exportarParaImportar(){
 
     // ── LLUVIAS ──
     const wsLluv = XLSX.utils.aoa_to_sheet([
-      ['🌧 TABLA LLUVIAS — HPRapp'],
-      ['Opcional — Registre las precipitaciones históricas de la finca'],
+      ['Fecha (DD/MM/AAAA) *','Precipitación (mm) *','Observación'],
       ...lluvias.map(l=>[fd(l.fecha), l.mm, l.obs||''])
     ])
     XLSX.utils.book_append_sheet(wb, wsLluv, 'LLUVIAS')
@@ -6848,8 +6833,6 @@ async function exportarParaImportar(){
     // ── CICLOS ──
     const ciclos = await db.ciclos.toArray()
     const wsCiclos = XLSX.utils.aoa_to_sheet([
-      ['🔄 TABLA CICLOS — HPRapp'],
-      ['Ciclos de ocupación por potrero. Activo=1 significa que el lote sigue en el potrero (sin fecha de salida).'],
       ['Potrero *','Lote *','N° Animales','Fecha Entrada (DD/MM/AAAA) *','Fecha Salida (DD/MM/AAAA)','Activo (1=Sí / 0=No)','Observación'],
       ...ciclos
         .sort((a,b)=>(a.fechaEntrada||0)-(b.fechaEntrada||0))
@@ -6860,6 +6843,24 @@ async function exportarParaImportar(){
         })
     ])
     XLSX.utils.book_append_sheet(wb, wsCiclos, 'CICLOS')
+
+    // ── VENTAS / BAJAS ──
+    const inactivos = await db.animales.where('activo').equals(0).toArray()
+    const todosLotes = await db.lotes.toArray()
+    const todosLotesMap = {}; todosLotes.forEach(l=>todosLotesMap[l.id]=l.nombre)
+    const wsVentas = XLSX.utils.aoa_to_sheet([
+      ['Arete *','Nombre','Categoría','Raza','Causa Baja','Fecha Baja (DD/MM/AAAA)','Peso Venta (kg)','Valor Venta ($)','Precio/kg Venta ($)','Comprador','Observación Baja','Lote','Peso Inicial (kg)','Precio Compra ($/kg)'],
+      ...inactivos
+        .sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
+        .map(a=>[
+          a.arete, a.nombre||'', a.categoria||'', a.raza||'',
+          a.causaBaja||'', fd(a.fechaBaja),
+          a.pesoVenta||'', a.valorVenta||'', a.precioVentaKg||'',
+          a.comprador||'', a.obsBaja||'',
+          todosLotesMap[a.loteId]||'', a.pesoInicial||0, a.precioCompra||''
+        ])
+    ])
+    XLSX.utils.book_append_sheet(wb, wsVentas, 'VENTAS_BAJAS')
 
     const fecha = new Date().toISOString().split('T')[0]
     XLSX.writeFile(wb, `HPRapp-Exportacion-${fecha}.xlsx`)
@@ -7049,10 +7050,10 @@ async function importarTodo(input) {
       }
       const dt = new Date(s); return isNaN(dt.getTime()) ? null : dt.getTime()
     }
-    // Helper: lee hoja como arrays desde fila 3 (range:2 salta título y subtítulo)
+    // Helper: lee hoja como arrays desde fila 2 (range:0, slice(1) salta encabezados)
     const readSheet = (sh, raw=true) =>
-      XLSX.utils.sheet_to_json(wb.Sheets[sh], {header:1, range:2, raw, defval:''})
-        .slice(1)  // slice(1) salta la fila de encabezados (fila 3), datos desde fila 4
+      XLSX.utils.sheet_to_json(wb.Sheets[sh], {header:1, range:0, raw, defval:''})
+        .slice(1)  // slice(1) salta la fila de encabezados, datos desde fila 2
 
     _showProg(10, 'Importando lotes…')
     // ── LOTES ──────────────────────────────────────
