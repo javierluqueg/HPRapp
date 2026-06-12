@@ -11,13 +11,17 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-019'
+const APP_VERSION = '20260611-020'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   // Escuchar activación del SW nuevo → recargar para servir versión fresca
   navigator.serviceWorker.addEventListener('message', e => {
-    if (e.data?.type === 'SW_ACTIVATED') location.reload()
+    if (e.data?.type === 'SW_ACTIVATED') {
+      const b = document.getElementById('update-banner')
+      if (b) b.style.display = 'block'
+      else location.reload()
+    }
   })
   // Registrar con ?v= para que GitHub Pages no cachee el sw.js
   navigator.serviceWorker.register('./sw.js?v=' + APP_VERSION)
@@ -214,6 +218,9 @@ button{cursor:pointer}
 
 <div id="offline-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#E65100;color:white;text-align:center;padding:7px 12px;font-size:.78rem;font-weight:700">
   📡 Sin conexión — trabajando offline. Los cambios se sincronizarán al recuperar señal.
+</div>
+<div id="update-banner" onclick="doAppUpdate()" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9998;background:#1565C0;color:white;text-align:center;padding:9px 12px;font-size:.82rem;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent">
+  🔄 Nueva versión disponible — toca aquí para actualizar
 </div>
 <header id="hdr" hidden>
   <button id="btnBack">&#8592;</button>
@@ -8011,11 +8018,19 @@ async function checkAppVersion() {
       return
     }
     if (storedSha !== latestSha) {
-      // Hay versión nueva — recargar con cache-bust
+      // Hay versión nueva — mostrar banner para que el usuario actualice
       localStorage.setItem('hpr_commit_sha', latestSha)
-      window.location.href = location.pathname + '?_reload=' + Date.now()
+      const b = document.getElementById('update-banner')
+      if (b) b.style.display = 'block'
     }
   } catch(e) { /* offline o rate limit — no hacer nada */ }
+}
+
+function doAppUpdate() {
+  // Limpiar SHA guardado para que la próxima carga también verifique
+  localStorage.removeItem('hpr_commit_sha')
+  // Recargar con parámetro único — el SW no lo intercepta
+  window.location.href = location.pathname + '?update=' + Date.now()
 }
 
 // ── Resetear todos los datos ──────────────────────
