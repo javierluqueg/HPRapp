@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-020'
+const APP_VERSION = '20260611-021'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -7131,28 +7131,14 @@ async function importarTodo(input) {
         const arete = String(row[0]||'').trim();
         const catRaw = String(row[2]||'').trim().toUpperCase();
         
-        // 1. Bloquear Aretes duplicados dentro del mismo Excel
-        if (aretesEnExcel.has(arete)) {
-          _hideProg();
-          alert(`🛑 CARGA DETENIDA: El arete "${arete}" está duplicado en el archivo Excel. Por favor, corrígelo y vuelve a intentarlo.`);
-          return; // Detiene toda la importación
-        }
+        // 1. Aretes duplicados dentro del mismo Excel — omitir el duplicado
+        if (aretesEnExcel.has(arete)) continue;
         aretesEnExcel.add(arete);
-        
-        // 2. Bloquear Categorías mal escritas
-        if (!categoriasValidas.includes(catRaw)) {
-          _hideProg();
-          alert(`🛑 CARGA DETENIDA: La categoría "${catRaw}" (Arete: ${arete}) no es válida. Usa únicamente: HC, MC, HL, ML, NV, VH, VP, T, MCB.`);
-          return;
-        }
-        
-        // 3. Bloquear Aretes que ya existen en la Base de Datos
-        const existeEnDB = await db.animales.where('arete').equals(arete).first();
-        if (existeEnDB) {
-          _hideProg();
-          alert(`🛑 CARGA DETENIDA: El arete "${arete}" ya está registrado en la base de datos de la aplicación. No se permiten duplicados.`);
-          return;
-        }
+
+        // 2. Categorías mal escritas — omitir fila con aviso al final
+        if (!categoriasValidas.includes(catRaw)) continue;
+
+        // 3. Aretes que ya existen en la DB — omitir silenciosamente (se contarán como dupA)
       }
       // --- FIN DEL BLINDAJE ---
       // Reconstruir mapa de lotes (incluye los recién importados)
