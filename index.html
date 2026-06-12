@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-018'
+const APP_VERSION = '20260611-019'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -84,7 +84,7 @@ button{cursor:pointer}
 .btn-out{background:white;color:#388E3C;border:2px solid #388E3C}
 .btn-gray{background:#e8e8e8;color:#444}
 .btn-sm{padding:9px 14px;font-size:.82rem;width:auto;border-radius:9px}
-.btn-row{display:flex;gap:8px}
+.btn-row{display:flex;gap:8px}.vt-row-sel{background:#FFF5F5!important}.vt-chk-on{border:2px solid #C62828!important;background:#C62828!important}
 .btn-row .btn{flex:1}
 
 /* Inputs */
@@ -5765,23 +5765,38 @@ async function pgVentas() {
     <div class="card mb8">${rows}</div>`
   }
 
+  // Restaurar estado visual de selección tras render
+  setTimeout(() => vtRestaurarSel(), 0)
   return segModo + selector + kpis + exportBtns + barraElim + lista
 }
 
 // ── Selección de ventas para eliminar ─────────────────────────────
 let _vtSel = new Set()
 
+function vtRestaurarSel() {
+  if (!_vtSel.size) return
+  for (const id of _vtSel) {
+    const chk = document.getElementById('vt-chk-'+id)
+    const btn = document.querySelector(`button[data-vid="${id}"]`)
+    if (chk) { chk.classList.add('vt-chk-on'); chk.innerHTML='<span style="color:white;font-size:11px;font-weight:700">✓</span>' }
+    if (btn) btn.classList.add('vt-row-sel')
+  }
+  const barra = document.getElementById('vt-barra-elim')
+  const cnt   = document.getElementById('vt-barra-cnt')
+  if (barra) barra.style.display = 'flex'
+  if (cnt)   cnt.textContent = `${_vtSel.size} venta${_vtSel.size>1?'s':''} seleccionada${_vtSel.size>1?'s':''}`
+}
+
 function vtToggleSel(id, btn) {
+  const chk = document.getElementById('vt-chk-'+id)
   if (_vtSel.has(id)) {
     _vtSel.delete(id)
-    const chk = document.getElementById('vt-chk-'+id)
-    if (chk) { chk.style.border='2px solid #ddd'; chk.style.background=''; chk.innerHTML='' }
-    if (btn) btn.style.background = 'white'
+    if (chk) { chk.classList.remove('vt-chk-on'); chk.innerHTML='' }
+    if (btn) btn.classList.remove('vt-row-sel')
   } else {
     _vtSel.add(id)
-    const chk = document.getElementById('vt-chk-'+id)
-    if (chk) { chk.style.border='2px solid #C62828'; chk.style.background='#C62828'; chk.innerHTML='<span style="color:white;font-size:11px;font-weight:700">✓</span>' }
-    if (btn) btn.style.background = '#FFF5F5'
+    if (chk) { chk.classList.add('vt-chk-on'); chk.innerHTML='<span style="color:white;font-size:11px;font-weight:700">✓</span>' }
+    if (btn) btn.classList.add('vt-row-sel')
   }
   const barra = document.getElementById('vt-barra-elim')
   const cnt   = document.getElementById('vt-barra-cnt')
@@ -5792,9 +5807,9 @@ function vtToggleSel(id, btn) {
 function vtDeselAll() {
   for (const id of _vtSel) {
     const chk = document.getElementById('vt-chk-'+id)
-    if (chk) { chk.style.border='2px solid #ddd'; chk.style.background=''; chk.innerHTML='' }
+    if (chk) { chk.classList.remove('vt-chk-on'); chk.innerHTML='' }
     const btn = document.querySelector(`button[data-vid="${id}"]`)
-    if (btn) btn.style.background = 'white'
+    if (btn) btn.classList.remove('vt-row-sel')
   }
   _vtSel.clear()
   const barra = document.getElementById('vt-barra-elim')
