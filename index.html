@@ -11,11 +11,30 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-014'
+const APP_VERSION = '20260611-015'
 
-// ── Service Worker: network-first, siempre sirve la versión más reciente ──
+// ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {})
+  // Escuchar activación del SW nuevo → recargar para servir versión fresca
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type === 'SW_ACTIVATED') location.reload()
+  })
+  // Registrar con ?v= para que GitHub Pages no cachee el sw.js
+  navigator.serviceWorker.register('./sw.js?v=' + APP_VERSION)
+    .then(reg => {
+      // Si hay SW esperando (versión nueva), activarlo inmediatamente
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing
+        if (!sw) return
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+            sw.postMessage({ type: 'SKIP_WAITING' })
+          }
+        })
+      })
+    })
+    .catch(() => {})
 }
 
 const _manifest={name:'HPRapp',short_name:'HPRapp',start_url:'.',display:'standalone',background_color:'#1a1a2e',theme_color:'#1a1a2e',icons:[{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'72x72',type:'image/png'},{src:'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png',sizes:'192x192',type:'image/png'}]}
