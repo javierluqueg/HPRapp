@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-021'
+const APP_VERSION = '20260611-023'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6479,14 +6479,6 @@ async function pgConfig() {
     (esAdmin1?`<button class="btn btn-out mt8" onclick="openNuevoUsuario()">+ Agregar usuario</button>`:'')
   }
   if(tab==='backup') return tabs+`
-    <div class="card mb10" style="border:2.5px solid #388E3C">
-      <p class="bold mb4">🔥 Sincronizar con Firebase</p>
-      <p class="sm gray mb10">Sube todos tus datos locales a Firebase para que el equipo pueda acceder desde cualquier dispositivo.</p>
-      <button class="btn btn-g mb8" onclick="subirAFirebase()">⬆ Subir TODO a Firebase</button>
-      <button class="btn btn-gray btn-sm" onclick="probarFirebase()">🔍 Probar conexión</button>
-      <button class="btn btn-gray btn-sm mt8" onclick="diagnosticoFirestore()">📊 Diagnóstico Firestore</button>
-    </div>
-
     <div class="card mb10">
       <p class="bold mb8">📤 Exportar / Guardar copia de seguridad</p>
       <p class="sm gray mb10">Guarda en tu dispositivo, carpeta, WhatsApp, correo o Drive. En celular se abre el menú de compartir.</p>
@@ -6608,13 +6600,7 @@ async function pgConfig() {
     </div>
 
     <div class="card" style="background:#F5F5F5">
-      <p class="bold mb4 xs gray">Importaciones individuales</p>
-      <input type="file" id="xlFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="importarExcel(this)">
-      <input type="file" id="xlPotFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="importarPotreros(this)">
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-out btn-sm" onclick="$('xlFile').click()">🐄 Solo Animales</button>
-        <button class="btn btn-out btn-sm" onclick="$('xlPotFile').click()">🌿 Solo Potreros</button>
-      </div>
+
     </div>`
 }
 
@@ -7371,128 +7357,6 @@ async function importarTodo(input) {
     input.value = ''
     go('config')
   } catch(e) { _hideProg(); await showAlert('Error al importar: ' + e.message); input.value = '' }
-}
-
-async function importarExcel(input){
-  const file=input.files[0];if(!file)return
-  try{
-    await loadXLSX()
-    const data=await file.arrayBuffer()
-    const wb=XLSX.read(data,{type:'array',cellDates:true})
-
-    // Detectar hoja de animales con nombres alternativos
-    const shAnimal=findSheet(wb,'Animales','Animal','Inventario','Ganado','ANIMALES','INVENTARIO','GANADO','Bovinos','Hato')
-      ||wb.SheetNames[0]
-
-    const rows=XLSX.utils.sheet_to_json(wb.Sheets[shAnimal],{raw:false,defval:''})
-    if(!rows.length){await showAlert('El archivo no contiene datos o está vacío.');input.value='';return}
-
-    // Vista previa: mostrar primeras columnas detectadas
-    const colsDetectadas=Object.keys(rows[0])
-    const preview=`Hoja detectada: "${shAnimal}"\nColumnas encontradas: ${colsDetectadas.join(', ')}\n\nSe importarán ${rows.length} filas.\n¿Continuar?`
-    if(!await showConfirm(preview)){input.value='';return}
-
-    let added=0, omitidos=0, sinArete=0
-    for(const row of rows){
-      // Arete: buscar bajo múltiples nombres
-      const arete=String(getCol(row,'Arete','arete','ARETE','No.','Número','Numero','ID',
-        'Código','Codigo','Identificación','Identificacion','Nro','Nro.','# Arete','Num')).trim()
-      if(!arete||arete==='0'){sinArete++;continue}
-
-      const existe=await db.animales.where('arete').equals(arete).first()
-      if(existe){omitidos++;continue}
-
-      // Categoría: acepta abreviatura (HC) o nombre completo o variantes
-      const catRaw=String(getCol(row,'Categoría','Categoria','CATEGORIA','Tipo','TIPO',
-        'Clase','CLASE','Abreviatura','Abre','Cat')).trim()
-      const cat=Object.keys(CAT).find(k=>k===catRaw)
-        ||Object.keys(CAT).find(k=>CAT[k]===catRaw)
-        ||Object.keys(CAT).find(k=>CAT[k].toLowerCase().includes(catRaw.toLowerCase()))
-        ||'HC'
-
-      // Peso: buscar bajo múltiples nombres
-      const pesoRaw=getCol(row,'Peso inicial (kg)','Peso (kg)','Peso','PESO','Peso kg',
-        'Peso actual','Peso actual (kg)','Kg','KG','peso')
-      const pesoIni=parseFloat(String(pesoRaw).replace(',','.'))||0
-
-      // Fecha pesaje
-      const fPesoRaw=getCol(row,'Fecha pesaje','Fecha de pesaje','Fecha Pesaje','Fecha peso',
-        'Fecha','FECHA','Fecha ingreso','Fecha de ingreso')
-      let fPesoTs=Date.now()
-      if(fPesoRaw){const d=new Date(fPesoRaw);if(!isNaN(d.getTime()))fPesoTs=d.getTime()}
-
-      const nombre=String(getCol(row,'Nombre','NOMBRE','nombre','')).trim()
-      const raza=String(getCol(row,'Raza','RAZA','raza','Cruza','')).trim()
-      const color=String(getCol(row,'Color','COLOR','color','Pelaje','PELAJE','')).trim()
-      const desc=String(getCol(row,'Descripción','Descripcion','DESCRIPCION','Obs','Observación','Observacion','')).trim()
-      const proc=String(getCol(row,'Procedencia','PROCEDENCIA','Origen','ORIGEN','')).trim()
-
-      const id=await fsAdd('animales',{
-        arete,nombre,categoria:cat,raza,color,pesoInicial:pesoIni,
-        descripcion:desc,procedencia:proc,estadoSanitario:'SANO',activo:1,
-        fechaIngreso:fPesoTs,creadoPor:USER?.nombre||'—',creadoEn:Date.now()
-      })
-      if(pesoIni>0){
-        const quien=USER?.nombre||'—',ahora=Date.now()
-        await fsAdd('pesajes',{animalId:id,fecha:fPesoTs,pesoKg:pesoIni,metodo:'BASCULA',cc:3,
-          obs:'Importado desde Excel',registradoPor:quien,registradoEn:ahora})
-        await fsAdd('labores',{animalId:id,fecha:fPesoTs,tipo:'PESAJE',pesoKg:pesoIni,
-          obs:'Importado desde Excel',registradoPor:quien,registradoEn:ahora})
-      }
-      added++
-    }
-
-    let msg=`✓ ${added} animales importados`
-    if(omitidos) msg+=`\n⏭ ${omitidos} ya existían (arete duplicado)`
-    if(sinArete) msg+=`\n⚠ ${sinArete} filas sin arete (ignoradas)`
-    await showAlert(msg)
-    input.value='';go('config')
-  }catch(e){await showAlert('Error al importar: '+e.message);input.value=''}
-}
-
-
-async function importarPotreros(input){
-  const file=input.files[0]; if(!file) return
-  try{
-    await loadXLSX()
-    const data=await file.arrayBuffer()
-    const wb=XLSX.read(data,{type:'array',cellDates:true})
-    const shPot=findSheet(wb,'Potreros_Rotacion','Potreros','POTREROS','Potrero','Rotacion','Rotación','N_Rotacion','Predios')||wb.SheetNames[0]
-    const allRows=XLSX.utils.sheet_to_json(wb.Sheets[shPot],{header:1,defval:''})
-    if(!allRows.length){await showAlert('Sin datos.');input.value='';return}
-    let headerIdx=0
-    for(let i=0;i<Math.min(6,allRows.length);i++){
-      if(allRows[i].filter(c=>typeof c==='string'&&c.trim().length>1).length>=2){headerIdx=i;break}
-    }
-    const headers=allRows[headerIdx].map(h=>(h||'').toString().trim())
-    const rows=allRows.slice(headerIdx+1).map(row=>{const o={};headers.forEach((h,i)=>{o[h]=row[i]??''});return o})
-      .filter(r=>Object.values(r).some(v=>v!==''&&v!==null))
-    if(!rows.length){await showAlert('No hay filas válidas.');input.value='';return}
-    const norm=s=>s.toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\s_\(\)\/]/g,'')
-    const colNombre=headers.find(h=>/nombre|potrero|n.?rotac/i.test(h))
-    const colArea=headers.find(h=>{const n=norm(h);return n==='area'||n==='areaha'||/\bha\b/.test(n)||/hect/.test(n)||/area/.test(n)})
-    if(!colNombre||!colArea){await showAlert('Columnas no detectadas.\nDetectadas: '+headers.filter(h=>h).join(', '));input.value='';return}
-    const validas=rows.filter(r=>{
-      const nom=(r[colNombre]||'').toString().trim()
-      const ar=(r[colArea]||'').toString().trim()
-      return nom&&!/^total/i.test(nom)&&ar&&ar.toLowerCase()!=='verificar'&&!isNaN(parseFloat(ar.replace(',','.')))
-    })
-    if(!validas.length){await showAlert('Sin filas válidas.');input.value='';return}
-    if(!await showConfirm(`Hoja: "${shPot}"\nPotreros a importar: ${validas.length}\nPrimeros 5: ${validas.slice(0,5).map(r=>r[colNombre]).join(', ')}\n\n¿Confirmar?`)){input.value='';return}
-    let added=0,dup=0
-    for(const row of validas){
-      const nombre=(row[colNombre]||'').toString().trim()
-      const areaHa=parseFloat((row[colArea]||'').toString().replace(',','.'))
-      const existe=await db.potreros.where('activo').equals(1).filter(p=>p.nombre.trim().toLowerCase()===nombre.toLowerCase()).first()
-      if(existe){dup++;continue}
-      const potId = await fsAdd('potreros',{nombre,areaHa,pendiente:'PLANO',pastos:'Pasto Nativo',fuenteAgua:'NINGUNA',observaciones:'',estado:'DISPONIBLE',activo:1,numAnimales:0})
-      trazar('IMPORTAR_POTRERO','POTRERO',potId,{nombre,areaHa,fuente:'Excel'})
-      added++
-    }
-    let msg=`✓ ${added} potreros importados`
-    if(dup) msg+=`\n⏭ ${dup} ya existían`
-    await showAlert(msg); input.value=''; go('config')
-  }catch(e){await showAlert('Error: '+e.message);input.value=''}
 }
 
 async function descargarPlantilla(){
