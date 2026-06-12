@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-017'
+const APP_VERSION = '20260611-018'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -8109,41 +8109,66 @@ async function deshacerResetear() {
 }
 
 async function init(){
-  try{
+  // Mostrar pantalla de carga mientras se conecta a Firebase
+  $('pg').innerHTML = `
+    <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0d1b2a;padding:32px">
+      ${logoHPR(72)}
+      <p style="color:rgba(255,255,255,.6);font-size:.82rem;letter-spacing:.12em;text-transform:uppercase;margin:12px 0 32px">Gestión Ganadera</p>
+      <div id="boot-msg" style="color:rgba(255,255,255,.7);font-size:.88rem;margin-bottom:16px">Conectando…</div>
+      <div style="width:48px;height:4px;background:rgba(255,255,255,.15);border-radius:4px;overflow:hidden">
+        <div id="boot-bar" style="height:100%;width:0%;background:#FF8C00;border-radius:4px;transition:width .4s"></div>
+      </div>
+      <button id="boot-retry" onclick="location.reload()" style="display:none;margin-top:24px;padding:10px 28px;background:#FF8C00;color:white;border:none;border-radius:10px;font-weight:700;cursor:pointer">🔄 Reintentar</button>
+    </div>`
+
+  const setMsg = (msg, pct) => {
+    const el = document.getElementById('boot-msg')
+    const bar = document.getElementById('boot-bar')
+    if (el) el.textContent = msg
+    if (bar) bar.style.width = pct + '%'
+  }
+
+  try {
+    setMsg('Verificando datos locales…', 20)
     try {
-      // Bootstrap silencioso - no mostrar pantalla de carga
       await Promise.race([
         bootstrapFromFirebase(),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),8000))
+        new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 20000))
       ])
     } catch(e) {
-      console.warn('Bootstrap omitido:', e.message)
+      console.warn('Bootstrap:', e.message)
+      // Si hay timeout pero Dexie tiene datos, continuar igual
     }
+
+    setMsg('Cargando configuración…', 60)
     await migrarNombresLote()
-    let ok=await getCfg('setup_ok')
-    if(!ok){
-      // Dexie no tiene setup_ok — leer TODA la config de Firestore y guardar localmente
-      try{
-        const cfgSnap=await fsdb.collection('config').get()
-        for(const doc of cfgSnap.docs){
-          const d=doc.data()
-          if(d.clave&&d.valor!==undefined) await setCfg(d.clave,d.valor)
+    let ok = await getCfg('setup_ok')
+    if (!ok) {
+      setMsg('Restaurando configuración…', 75)
+      try {
+        const cfgSnap = await fsdb.collection('config').get()
+        for (const doc of cfgSnap.docs) {
+          const d = doc.data()
+          if (d.clave && d.valor !== undefined) await setCfg(d.clave, d.valor)
         }
-        ok=await getCfg('setup_ok')
-      }catch(e){ console.warn('setup_ok fallback:',e.message) }
+        ok = await getCfg('setup_ok')
+      } catch(e) { console.warn('setup_ok fallback:', e.message) }
     }
-    // Si USER sobrevivio en sessionStorage (navegador suspendido), reanudar sesion directamente
+
+    setMsg('Iniciando…', 95)
     if (USER && ok) {
       _syncActive = true
       initFirebaseSync()
       await go('dashboard')
     } else {
-      await go(ok?'login':'setup')
+      await go(ok ? 'login' : 'setup')
     }
-    // Verificar actualizaciones en segundo plano (no bloquea el inicio)
     setTimeout(checkAppVersion, 3000)
-  }catch(e){
-    $('pg').innerHTML=`<div style="padding:32px;text-align:center"><p style="color:#C62828;font-weight:700">Error: ${e.message}</p><button onclick="location.reload()" style="margin-top:16px;padding:10px 20px;background:#388E3C;color:white;border:none;border-radius:8px">Reintentar</button></div>`
+  } catch(e) {
+    const msg = document.getElementById('boot-msg')
+    const retry = document.getElementById('boot-retry')
+    if (msg) msg.textContent = 'Error al conectar: ' + e.message
+    if (retry) retry.style.display = 'block'
   }
 }
 init()
