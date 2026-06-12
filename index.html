@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-016'
+const APP_VERSION = '20260611-017'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -5733,68 +5733,147 @@ async function pgVentas() {
     grupos[key].items.push(a)
   }
 
+  // Botón eliminar seleccionados
+  const barraElim = `<div id="vt-barra-elim" style="display:none;background:#FFEBEE;border:1.5px solid #EF9A9A;border-radius:10px;padding:8px 12px;margin-bottom:10px;align-items:center;justify-content:space-between">
+    <span class="xs bold" style="color:#C62828" id="vt-barra-cnt">0 seleccionadas</span>
+    <div style="display:flex;gap:8px">
+      <button onclick="vtDeselAll()" style="border:1.5px solid #C62828;background:white;color:#C62828;border-radius:8px;padding:4px 10px;font-size:.75rem;font-weight:700;cursor:pointer">Cancelar</button>
+      <button onclick="vtConfElim()" style="border:none;background:#C62828;color:white;border-radius:8px;padding:4px 12px;font-size:.75rem;font-weight:700;cursor:pointer">🗑 Eliminar</button>
+    </div>
+  </div>`
+
   let lista = ''
   for (const key of Object.keys(grupos).sort().reverse()) {
     const g = grupos[key]
-    let gValor=0, gCosto=0
+    let gValor = 0
     const rows = g.items.map(a => {
-      const pesoE = a.pesoInicial||0, pesoS = a.pesoVenta||pesoE
-      const ganP  = pesoS - pesoE
-      const valV  = a.valorVenta||0
-      const valC  = (a.precioPorKg||0)*(a.pesoInicial||0)
-      const util  = valV && valC ? valV - valC : null
+      const valV = a.valorVenta || 0
       if (valV) gValor += valV
-      if (valC) gCosto += valC
-      const colG = ganP>=0?'#2E7D32':'#C62828'
-      const colU2 = !util?'#888':util>=0?'#2E7D32':'#C62828'
-      return `<div style="padding:11px 0;border-bottom:1px solid #f4f4f4">
-        <div class="row-b mb6">
-          <div>
-            <span class="bold sm">${a.arete}${a.nombre?' — '+a.nombre:''}</span>
-            <span class="badge bg-gray xs ml6">${CAT[a.categoria]||a.categoria}</span>
-          </div>
-          <span class="xs gray">${a.fechaBaja?fd(a.fechaBaja):''}</span>
+      return `<button onclick="vtToggleSel(${a.id},this)" data-vid="${a.id}"
+        style="display:flex;align-items:center;gap:10px;width:100%;border:none;border-bottom:1px solid #f4f4f4;background:white;padding:10px 0;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        <div id="vt-chk-${a.id}" style="width:20px;height:20px;border-radius:50%;border:2px solid #ddd;flex-shrink:0;display:flex;align-items:center;justify-content:center"></div>
+        <div style="flex:1;min-width:0">
+          <p style="font-size:.88rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''}</p>
+          <p style="font-size:.72rem;color:#aaa">${a.fechaBaja?fd(a.fechaBaja):'Sin fecha'}</p>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center;margin-bottom:6px">
-          <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.72rem;font-weight:700">${pesoE} kg</p><p style="font-size:.6rem;color:#aaa">Entrada</p>
-          </div>
-          <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.72rem;font-weight:700">${pesoS} kg</p><p style="font-size:.6rem;color:#aaa">Salida</p>
-          </div>
-          <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.72rem;font-weight:700;color:${colG}">${ganP>=0?'+':''}${ganP} kg</p><p style="font-size:.6rem;color:#aaa">Δ Peso</p>
-          </div>
-          <div style="background:#f8f8f8;border-radius:6px;padding:5px 2px">
-            <p style="font-size:.72rem;font-weight:800;color:${colU2}">${util!==null?(util>=0?'+':'')+fmt(util):'—'}</p><p style="font-size:.6rem;color:#aaa">Utilidad</p>
-          </div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:6px">
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            ${a.precioVentaKg?`<span class="xs gray">💰 Venta: <strong>$${a.precioVentaKg.toLocaleString('es-CO')}/kg</strong></span>`:''}
-            ${a.precioPorKg?`<span class="xs gray">🛒 Compra: <strong>$${a.precioPorKg.toLocaleString('es-CO')}/kg</strong></span>`:''}
-            ${a.comprador?`<span class="xs gray">👤 ${a.comprador}</span>`:''}
-          </div>
-          <button onclick="openEditarVenta(${a.id})" style="border:1.5px solid #1565C0;background:white;color:#1565C0;border-radius:8px;padding:4px 10px;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0">✏️ Editar</button>
-        </div>
-      </div>`
+        <p style="font-size:.9rem;font-weight:800;color:#1565C0;flex-shrink:0;margin-right:6px">${valV?fmt(valV):'—'}</p>
+        <button onclick="event.stopPropagation();openDetalleVenta(${a.id})" style="border:1.5px solid #e0e0e0;background:white;color:#555;border-radius:8px;padding:5px 10px;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0">Ver</button>
+      </button>`
     }).join('')
-    const gUtil = gValor&&gCosto ? gValor-gCosto : null
-    const colGU = !gUtil?'#888':gUtil>=0?'#2E7D32':'#C62828'
-    lista += `<p class="sec" style="text-transform:capitalize">${g.label}</p>
-    <div class="card mb8">
-      <div class="row-b mb8">
-        <span class="xs gray">${g.items.length} animal${g.items.length>1?'es':''}</span>
-        <div style="text-align:right">
-          ${gValor?`<p class="xs bold" style="color:#1565C0">${fmt(gValor)} venta</p>`:''}
-          ${gUtil!==null?`<p class="xs bold" style="color:${colGU}">${gUtil>=0?'+':''}${fmt(gUtil)} utilidad</p>`:''}
-        </div>
-      </div>
-      ${rows}
-    </div>`
+    lista += `<p class="sec" style="text-transform:capitalize">${g.label}
+      <span class="xs gray" style="font-weight:400;margin-left:6px">${g.items.length} venta${g.items.length>1?'s':''} · ${fmt(gValor)}</span></p>
+    <div class="card mb8">${rows}</div>`
   }
 
-  return segModo + selector + kpis + exportBtns + lista
+  return segModo + selector + kpis + exportBtns + barraElim + lista
+}
+
+// ── Selección de ventas para eliminar ─────────────────────────────
+let _vtSel = new Set()
+
+function vtToggleSel(id, btn) {
+  if (_vtSel.has(id)) {
+    _vtSel.delete(id)
+    const chk = document.getElementById('vt-chk-'+id)
+    if (chk) { chk.style.border='2px solid #ddd'; chk.style.background=''; chk.innerHTML='' }
+    if (btn) btn.style.background = 'white'
+  } else {
+    _vtSel.add(id)
+    const chk = document.getElementById('vt-chk-'+id)
+    if (chk) { chk.style.border='2px solid #C62828'; chk.style.background='#C62828'; chk.innerHTML='<span style="color:white;font-size:11px;font-weight:700">✓</span>' }
+    if (btn) btn.style.background = '#FFF5F5'
+  }
+  const barra = document.getElementById('vt-barra-elim')
+  const cnt   = document.getElementById('vt-barra-cnt')
+  if (barra) barra.style.display = _vtSel.size > 0 ? 'flex' : 'none'
+  if (cnt)   cnt.textContent = `${_vtSel.size} venta${_vtSel.size>1?'s':''} seleccionada${_vtSel.size>1?'s':''}`
+}
+
+function vtDeselAll() {
+  for (const id of _vtSel) {
+    const chk = document.getElementById('vt-chk-'+id)
+    if (chk) { chk.style.border='2px solid #ddd'; chk.style.background=''; chk.innerHTML='' }
+    const btn = document.querySelector(`button[data-vid="${id}"]`)
+    if (btn) btn.style.background = 'white'
+  }
+  _vtSel.clear()
+  const barra = document.getElementById('vt-barra-elim')
+  if (barra) barra.style.display = 'none'
+}
+
+async function vtConfElim() {
+  if (!_vtSel.size) return
+  const n = _vtSel.size
+  const ok = await showConfirm(`¿Eliminar ${n} venta${n>1?'s':''}? Los animales quedarán activos nuevamente.`)
+  if (!ok) return
+  const ids = [..._vtSel]
+  try {
+    for (const id of ids) {
+      await fsUpdate('animales', id, {
+        activo:1, causaBaja:null, fechaBaja:null, obsBaja:null,
+        pesoVenta:null, valorVenta:null, precioVentaKg:null, comprador:null
+      })
+    }
+    _vtSel.clear()
+    showToast(`✅ ${n} venta${n>1?'s':''} eliminada${n>1?'s':''}`, 'ok', 3000)
+    go('ventas')
+  } catch(e) {
+    showToast('Error al eliminar','err',4000)
+  }
+}
+
+async function openDetalleVenta(id) {
+  const a = await db.animales.get(id)
+  if (!a) return
+  const fd2 = ts => { if(!ts) return '—'; const d=new Date(ts); return d.getDate()+' de '+['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][d.getMonth()]+' '+d.getFullYear() }
+  const fmt2 = v => '$'+Math.round(v).toLocaleString('es-CO')
+  const pesoE = a.pesoInicial||0, pesoS = a.pesoVenta||0
+  const ganP  = pesoS && pesoE ? pesoS - pesoE : null
+  const valV  = a.valorVenta||0
+  const valC  = (a.precioPorKg||0)*(a.pesoInicial||0)
+  const util  = valV && valC ? valV - valC : null
+  const colU  = !util?'#888':util>=0?'#2E7D32':'#C62828'
+  showSheet(`
+    <div class="sh-title">🐄 Detalle de venta<button class="sh-x" onclick="closeSheet()">✕</button></div>
+    <p style="font-size:1.05rem;font-weight:800;margin-bottom:2px">${a.arete}${a.nombre?' — '+a.nombre:''}</p>
+    <p class="xs gray mb14">${CAT[a.categoria]||a.categoria||''} · ${a.raza||''}</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+      <div style="background:#F1F8E9;border-radius:10px;padding:10px;text-align:center">
+        <p class="xs gray">Fecha venta</p>
+        <p style="font-weight:700;font-size:.88rem">${fd2(a.fechaBaja)}</p>
+      </div>
+      <div style="background:#E3F2FD;border-radius:10px;padding:10px;text-align:center">
+        <p class="xs gray">Valor venta</p>
+        <p style="font-weight:800;font-size:.95rem;color:#1565C0">${valV?fmt2(valV):'—'}</p>
+      </div>
+      <div style="background:#f8f8f8;border-radius:10px;padding:10px;text-align:center">
+        <p class="xs gray">Peso entrada</p>
+        <p style="font-weight:700">${pesoE?pesoE+' kg':'—'}</p>
+      </div>
+      <div style="background:#f8f8f8;border-radius:10px;padding:10px;text-align:center">
+        <p class="xs gray">Peso venta</p>
+        <p style="font-weight:700">${pesoS?pesoS+' kg':'—'}</p>
+      </div>
+      ${ganP!==null?`<div style="background:#f8f8f8;border-radius:10px;padding:10px;text-align:center">
+        <p class="xs gray">Δ Peso</p>
+        <p style="font-weight:700;color:${ganP>=0?'#2E7D32':'#C62828'}">${ganP>=0?'+':''} ${ganP} kg</p>
+      </div>`:''}
+      ${util!==null?`<div style="background:${util>=0?'#F1F8E9':'#FFEBEE'};border-radius:10px;padding:10px;text-align:center">
+        <p class="xs gray">Utilidad</p>
+        <p style="font-weight:800;color:${colU}">${util>=0?'+':''} ${fmt2(util)}</p>
+      </div>`:''}
+    </div>
+    ${a.precioVentaKg||a.precioPorKg||a.comprador||a.obsBaja?`
+    <div class="card mb12" style="font-size:.83rem">
+      ${a.precioVentaKg?`<div class="row-b mb6"><span class="gray">💰 Precio venta</span><strong>${fmt2(a.precioVentaKg)}/kg</strong></div>`:''}
+      ${a.precioPorKg?`<div class="row-b mb6"><span class="gray">🛒 Precio compra</span><strong>${fmt2(a.precioPorKg)}/kg</strong></div>`:''}
+      ${a.comprador?`<div class="row-b mb6"><span class="gray">👤 Comprador</span><strong>${a.comprador}</strong></div>`:''}
+      ${a.obsBaja?`<div><span class="gray xs">Obs: </span><span class="xs">${a.obsBaja}</span></div>`:''}
+    </div>`:''}
+    <div class="btn-row">
+      <button class="btn btn-gray" onclick="closeSheet()">Cerrar</button>
+      <button class="btn btn-b" onclick="closeSheet();openEditarVenta(${id})">✏️ Editar</button>
+    </div>`)
 }
 
 // ── Estado selección de animales para venta ─────────────────────
