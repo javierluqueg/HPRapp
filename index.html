@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260611-015'
+const APP_VERSION = '20260611-016'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -2472,7 +2472,7 @@ function openBajaSeleccionados(){
   if(_ganSelected.size===0){showToast('Selecciona al menos un animal','info');return}
   _sheetBajaIds=[..._ganSelected]
   const n=_sheetBajaIds.length
-  const causas=['Muerte','Venta','Cesión']
+  const causas=['Muerte','Cesión']
   const hoy=new Date().toISOString().split('T')[0]
   showSheet(`
     <div style="padding:4px 0 8px;border-bottom:1px solid #eee;margin-bottom:14px">
@@ -2480,20 +2480,10 @@ function openBajaSeleccionados(){
       <p class="xs gray mt4">Los animales serán marcados como inactivos.</p>
     </div>
     <div class="field"><label>Causa de baja *</label>
-      <select id="bj-causa" class="inp" onchange="toggleVentaFieldsMasiva(this.value)">
+      <select id="bj-causa" class="inp">
         <option value="">— Seleccionar —</option>
         ${causas.map(c=>`<option value="${c}">${c}</option>`).join('')}
       </select>
-    </div>
-    <div id="bj-venta" style="display:none">
-      <div class="inp-row">
-        <div class="field"><label>Precio de venta ($/kg) *</label>
-          <div class="inp-wrap"><input id="bj-precio" class="inp" type="number" inputmode="decimal" placeholder="0"><span class="inp-suf">$/kg</span></div>
-        </div>
-      </div>
-      <div class="field"><label>Comprador</label>
-        <input id="bj-comprador" class="inp" placeholder="Nombre del comprador (opcional)">
-      </div>
     </div>
     <div class="field"><label>Fecha de baja</label>
       <input id="bj-fecha" class="inp" type="date" value="${hoy}">
@@ -2502,25 +2492,18 @@ function openBajaSeleccionados(){
       <textarea id="bj-obs" class="inp" rows="2" placeholder="Detalles adicionales…" style="resize:none"></textarea>
     </div>
     <div style="margin-top:4px;padding:10px;background:#FFF3E0;border-radius:8px;margin-bottom:14px">
-      <p class="xs" style="color:#E65100">⚠ Se darán de baja <strong>${n} animal${n>1?'es':''}</strong>. El peso de venta se tomará del último pesaje de cada animal.</p>
+      <p class="xs" style="color:#E65100">⚠ Se darán de baja <strong>${n} animal${n>1?'es':''}</strong>. Esta acción se puede deshacer.</p>
     </div>
     <div class="btn-row">
       <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
       <button class="btn btn-r" onclick="saveBajaSeleccionados()">Confirmar baja</button>
     </div>`)
 }
-function toggleVentaFieldsMasiva(causa) {
-  const div=$('bj-venta'); if(div) div.style.display=causa==='Venta'?'block':'none'
-}
 async function saveBajaSeleccionados(){
   const causa=$('bj-causa')?.value
   if(!causa){const sel=$('bj-causa');if(sel){sel.style.border='2px solid #C62828';sel.focus()};showToast('Selecciona la causa de baja','err');return}
-  const esVenta = causa==='Venta'
-  const precioVenta = parseFloat($('bj-precio')?.value)||0
-  if(esVenta&&!precioVenta){const f=$('bj-precio');if(f){f.style.border='2px solid #C62828';f.focus()};showToast('Ingresa el precio de venta por kg','err');return}
   const fechaStr=$('bj-fecha')?.value
   const obs=$('bj-obs')?.value?.trim()||''
-  const comprador=$('bj-comprador')?.value?.trim()||''
   const fechaBaja=fechaStr?new Date(fechaStr+'T00:00:00').getTime():Date.now()
   const ids=_sheetBajaIds; if(!ids.length){closeSheet();return}
   const btn=document.querySelector('#ov .btn-r')
@@ -2530,13 +2513,7 @@ async function saveBajaSeleccionados(){
     snapshots=await Promise.all(ids.map(id=>db.animales.get(id)))
     for(const snap of snapshots){
       if(!snap) continue
-      let ventaData={}
-      if(esVenta){
-        const ult=await getPesoActual(snap.id)
-        const pesoVenta=ult?.pesoKg||snap.pesoInicial||0
-        ventaData={precioVentaKg:precioVenta,pesoVenta,valorVenta:precioVenta*pesoVenta,comprador}
-      }
-      await fsUpdate('animales',snap.id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||undefined,loteId:undefined,fechaLote:undefined,...ventaData})
+      await fsUpdate('animales',snap.id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||null,loteId:null,fechaLote:null})
       ok++
     }
   }catch(e){
@@ -2545,8 +2522,6 @@ async function saveBajaSeleccionados(){
     if(btn){btn.disabled=false;btn.textContent='Confirmar baja'}
     return
   }
-  // pushUndo y navegación SIEMPRE fuera del try-catch
-  const n=ids.length
   closeSheet()
   _sheetBajaIds=[]
   _ganSelMode=false; _ganSelected=new Set(); _ganAll=[]
@@ -2554,13 +2529,12 @@ async function saveBajaSeleccionados(){
     for(const prev of snapshots){
       if(!prev) continue
       await fsUpdate('animales',prev.id,{
-        activo:1, causaBaja:undefined, fechaBaja:undefined,
-        obsBaja:undefined, loteId:prev.loteId, fechaLote:prev.fechaLote,
-        precioVentaKg:undefined, pesoVenta:undefined, valorVenta:undefined, comprador:undefined
+        activo:1, causaBaja:null, fechaBaja:null,
+        obsBaja:null, loteId:prev.loteId||null, fechaLote:prev.fechaLote||null
       })
     }
   })
-  go(esVenta ? 'ventas' : 'ganado')
+  go('ganado')
 }
 
 async function openLoteSeleccionados(){
@@ -3115,32 +3089,15 @@ async function saveEditarAnimal(id) {
 function escH(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 
 function darBaja(id) {
-  const causas = ['Muerte','Venta','Cesión']
+  const causas = ['Muerte','Cesión']
   const hoy = new Date().toISOString().split('T')[0]
   showSheet(`
     <div class="sh-title">🔴 Dar de baja<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <div class="field"><label>Causa de baja *</label>
-      <select id="bj1-causa" class="inp" onchange="toggleVentaFields(this.value)">
+      <select id="bj1-causa" class="inp">
         <option value="">— Seleccionar causa —</option>
         ${causas.map(c=>`<option value="${c}">${c}</option>`).join('')}
       </select>
-    </div>
-    <div id="bj1-venta" style="display:none">
-      <div class="inp-row">
-        <div class="field"><label>Precio de venta ($/kg) *</label>
-          <div class="inp-wrap"><input id="bj1-precio" class="inp" type="number" inputmode="decimal" placeholder="0"><span class="inp-suf">$/kg</span></div>
-        </div>
-        <div class="field"><label>Peso de venta (kg)</label>
-          <div class="inp-wrap"><input id="bj1-peso" class="inp" type="number" inputmode="decimal" placeholder="Último registrado"><span class="inp-suf">kg</span></div>
-        </div>
-      </div>
-      <div class="field"><label>Comprador</label>
-        <input id="bj1-comprador" class="inp" placeholder="Nombre del comprador (opcional)">
-      </div>
-      <div id="bj1-resumen" style="display:none;background:#E8F5E9;border-left:4px solid #388E3C;border-radius:8px;padding:11px 13px;margin-bottom:10px">
-        <p class="xs bold" style="color:#1B5E20">Valor total estimado</p>
-        <p id="bj1-total" class="bold" style="color:#2E7D32;font-size:1.1rem"></p>
-      </div>
     </div>
     <div class="field"><label>Fecha de baja</label>
       <input id="bj1-fecha" class="inp" type="date" value="${hoy}">
@@ -3157,25 +3114,6 @@ function darBaja(id) {
     </div>`)
 }
 
-function toggleVentaFields(causa) {
-  const div = $('bj1-venta')
-  if (div) div.style.display = causa==='Venta' ? 'block' : 'none'
-  const precio = $('bj1-precio'), peso = $('bj1-peso')
-  if (precio) precio.oninput = () => _updResumenVenta()
-  if (peso)   peso.oninput   = () => _updResumenVenta()
-}
-function _updResumenVenta() {
-  const precio = parseFloat($('bj1-precio')?.value)||0
-  const peso   = parseFloat($('bj1-peso')?.value)||0
-  const res = $('bj1-resumen'), tot = $('bj1-total')
-  if (precio > 0 && peso > 0) {
-    if (res) res.style.display = 'block'
-    if (tot) tot.textContent = `$${(precio*peso).toLocaleString('es-CO')} (${peso} kg × $${precio.toLocaleString('es-CO')}/kg)`
-  } else {
-    if (res) res.style.display = 'none'
-  }
-}
-
 async function saveBajaAnimal(id) {
   const causa = $('bj1-causa')?.value
   if (!causa) {
@@ -3183,13 +3121,6 @@ async function saveBajaAnimal(id) {
     if (sel) { sel.style.border = '2px solid #C62828'; sel.focus() }
     showToast('Selecciona la causa de baja','err')
     return
-  }
-  // Validar precio si es venta
-  const esVenta = causa === 'Venta'
-  const precioVenta = parseFloat($('bj1-precio')?.value)||0
-  if (esVenta && !precioVenta) {
-    const f=$('bj1-precio'); if(f){f.style.border='2px solid #C62828';f.focus()}
-    showToast('Ingresa el precio de venta por kg','err'); return
   }
   const fechaStr = $('bj1-fecha')?.value
   const obs = $('bj1-obs')?.value?.trim() || ''
@@ -3199,22 +3130,9 @@ async function saveBajaAnimal(id) {
   let prev
   try {
     prev = await db.animales.get(id)
-    // Peso de venta: campo ingresado o último pesaje o pesoInicial
-    let pesoVenta = parseFloat($('bj1-peso')?.value)||0
-    if (esVenta && !pesoVenta) {
-      const ult = await getPesoActual(id)
-      pesoVenta = ult?.pesoKg || prev?.pesoInicial || 0
-    }
-    const ventaData = esVenta ? {
-      precioVentaKg: precioVenta,
-      pesoVenta,
-      valorVenta: precioVenta * pesoVenta,
-      comprador: $('bj1-comprador')?.value?.trim() || ''
-    } : {}
     await fsUpdate('animales', id, {
-      activo:0, causaBaja:causa, fechaBaja, obsBaja:obs||undefined,
-      loteId:undefined, fechaLote:undefined,
-      ...ventaData
+      activo:0, causaBaja:causa, fechaBaja, obsBaja:obs||null,
+      loteId:null, fechaLote:null
     })
     trazar('BAJA_ANIMAL','ANIMAL', id, {causa, fecha:fechaBaja})
   } catch(e) {
@@ -3225,12 +3143,11 @@ async function saveBajaAnimal(id) {
   closeSheet()
   pushUndo(`Baja de "${prev.arete}" revertida`, async () => {
     await fsUpdate('animales', id, {
-      activo:1, causaBaja:undefined, fechaBaja:undefined, obsBaja:undefined,
-      loteId:prev.loteId, fechaLote:prev.fechaLote,
-      precioVentaKg:undefined, pesoVenta:undefined, valorVenta:undefined, comprador:undefined
+      activo:1, causaBaja:null, fechaBaja:null, obsBaja:null,
+      loteId:prev.loteId||null, fechaLote:prev.fechaLote||null
     })
   })
-  go(esVenta ? 'ventas' : 'ganado')
+  go('ganado')
 }
 
 // ═══════════════════════════════════════════════════
