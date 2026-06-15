@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260615-001'
+const APP_VERSION = '20260615-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6824,7 +6824,7 @@ async function exportarParaImportar(){
       ['#','Arete / Número *','Categoría *','Raza *','Color','Peso Inicial (kg) *','Precio Compra ($/kg)','Fecha Ingreso (DD/MM/AAAA) *','Procedencia','Nombre del Lote','Descripción / Obs.'],
       ...animales.map((a,i)=>[
         i+1, a.arete, a.categoria||'', a.raza||'', a.color||'',
-        a.pesoInicial||0, a.precioCompra||'', fd(a.fechaIngreso),
+        a.pesoInicial||0, a.precioPorKg||'', fd(a.fechaIngreso),
         a.procedencia||'', loteNomMap[a.loteId]||'',
         a.descripcion||''
       ])
@@ -6906,7 +6906,7 @@ async function exportarParaImportar(){
           a.causaBaja||'', fd(a.fechaBaja),
           a.pesoVenta||'', a.valorVenta||'', a.precioVentaKg||'',
           a.comprador||'', a.obsBaja||'',
-          todosLotesMap[a.loteId]||'', a.pesoInicial||0, a.precioCompra||''
+          todosLotesMap[a.loteId]||'', a.pesoInicial||0, a.precioPorKg||''
         ])
     ])
     XLSX.utils.book_append_sheet(wb, wsVentas, 'VENTAS_BAJAS')
@@ -7224,7 +7224,7 @@ async function importarTodo(input) {
           procedencia:String(row[8]||'').trim()||undefined,
           estadoSanitario:'SANO', activo:1, fechaIngreso:fechaTs,
           loteId, fechaLote:loteId?fechaTs:undefined,
-          precioCompra:precioKg,
+          precioPorKg:precioKg,
           creadoPor:quien, creadoEn:ahora
         })
         if (pesoIni > 0) {
