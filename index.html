@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260615-002'
+const APP_VERSION = '20260615-005'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -7198,23 +7198,33 @@ async function importarTodo(input) {
         }
       }
 
-      let addedA=0, dupA=0, sinArete=0
+      let addedA=0, dupA=0, updA=0, sinArete=0
       for (const row of rows) {
         const arete = String(row[1]||'').trim()
         if (!arete) { sinArete++; continue }
         const existe = await db.animales.where('arete').equals(arete).first()
-        if (existe) { dupA++; continue }
+
+        const precioKg = parseFloat(String(row[6]||'0').replace(',','.')) || null
+
+        if (existe) {
+          // Actualizar solo precio de compra si viene en el Excel y es diferente
+          if (precioKg && precioKg !== (existe.precioPorKg||null)) {
+            await fsUpdate('animales', existe.id, {precioPorKg: precioKg})
+            updA++
+          } else {
+            dupA++
+          }
+          continue
+        }
 
         const catRaw = String(row[2]||'').trim()
         const cat = Object.keys(CAT).find(k=>k===catRaw) || Object.keys(CAT).find(k=>CAT[k]===catRaw) || 'HC'
         const pesoIni   = parseFloat(String(row[5]||'0').replace(',','.')) || 0
         const fechaTs   = parseFecha(row[7]) || ahora
         const loteRaw   = String(row[9]||'').trim()
-        // Normalizar: solo número → "LOTE N", "lote 11" → "LOTE 11", texto libre → tal cual
         const loteNorm  = loteRaw ? (/^\d+$/.test(loteRaw) ? 'LOTE '+loteRaw : /^lote\s+\d+$/i.test(loteRaw) ? 'LOTE '+loteRaw.replace(/^lote\s+/i,'') : loteRaw) : ''
         const loteNom   = loteNorm.toLowerCase()
         const loteId    = loteNom ? (loteMap[loteNom]||null) : null
-        const precioKg  = parseFloat(String(row[6]||'0').replace(',','.')) || undefined
 
         const id = await fsAdd('animales', {
           arete, nombre:undefined,
@@ -7233,7 +7243,7 @@ async function importarTodo(input) {
         }
         addedA++
       }
-      resumen.push(`🐄 Animales: ${addedA} importados${dupA?' · '+dupA+' ya existían':''}${sinArete?' · '+sinArete+' sin arete':''}`)
+      resumen.push(`🐄 Animales: ${addedA} importados${updA?' · '+updA+' precios actualizados':''}${dupA?' · '+dupA+' ya existían':''}${sinArete?' · '+sinArete+' sin arete':''}`)
     }
 
     _showProg(55, 'Importando pesajes…')
