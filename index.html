@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260612-002'
+const APP_VERSION = '20260615-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6821,12 +6821,12 @@ async function exportarParaImportar(){
     // Construir mapa loteId→nombre
     const loteNomMap = {}; lotes.forEach(l=>loteNomMap[l.id]=l.nombre)
     const wsAnim = XLSX.utils.aoa_to_sheet([
-      ['Arete / Número *','Nombre','Categoría *','Raza *','Color','Peso Inicial (kg) *','Fecha Ingreso (DD/MM/AAAA) *','Procedencia','Nombre del Lote','Descripción / Obs.','Precio Compra ($/kg)'],
-      ...animales.map(a=>[
-        a.arete, a.nombre||'', a.categoria||'', a.raza||'', a.color||'',
-        a.pesoInicial||0, fd(a.fechaIngreso),
+      ['#','Arete / Número *','Categoría *','Raza *','Color','Peso Inicial (kg) *','Precio Compra ($/kg)','Fecha Ingreso (DD/MM/AAAA) *','Procedencia','Nombre del Lote','Descripción / Obs.'],
+      ...animales.map((a,i)=>[
+        i+1, a.arete, a.categoria||'', a.raza||'', a.color||'',
+        a.pesoInicial||0, a.precioCompra||'', fd(a.fechaIngreso),
         a.procedencia||'', loteNomMap[a.loteId]||'',
-        a.descripcion||'', a.precioCompra||''
+        a.descripcion||''
       ])
     ])
     XLSX.utils.book_append_sheet(wb, wsAnim, 'ANIMALES')
@@ -7149,14 +7149,14 @@ async function importarTodo(input) {
 
     _showProg(35, 'Importando animales…')
     // ── ANIMALES ───────────────────────────────────
-    // Col 0:Arete  1:Nombre  2:Cat  3:Raza  4:Color  5:Peso  6:FechaIngreso  7:Procedencia  8:Lote  9:Desc  10:PrecioCompra
+    // Col 0:#  1:Arete  2:Cat  3:Raza  4:Color  5:Peso  6:PrecioCompra  7:FechaIngreso  8:Procedencia  9:Lote  10:Desc
     const shAnim = wb.SheetNames.find(s => /ANIMALES?/i.test(s))
     if (shAnim) {
       const esAreteValido = v => {
         const s = String(v||'').trim()
         return s.length > 0 && s.length < 30 && !/^[⚠•\-\*]/.test(s) && !/^(la |el |esto |•|importante)/i.test(s)
       }
-            const rows = readSheet(shAnim, true).filter(r => r[0] && esAreteValido(r[0]))
+            const rows = readSheet(shAnim, true).filter(r => r[1] && esAreteValido(r[1]))
 
       // --- NUEVO BLINDAJE: VALIDACIÓN ESTRICTA DE EXCEL ---
       const aretesEnExcel = new Set();
@@ -7164,7 +7164,7 @@ async function importarTodo(input) {
       
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const arete = String(row[0]||'').trim();
+        const arete = String(row[1]||'').trim();
         const catRaw = String(row[2]||'').trim().toUpperCase();
         
         // 1. Aretes duplicados dentro del mismo Excel — omitir el duplicado
@@ -7185,7 +7185,7 @@ async function importarTodo(input) {
       // Auto-crear lotes que aparecen en ANIMALES pero no existen todavía
       const lotesEnAnimales = new Set()
       for (const row of rows) {
-        const ln = String(row[8]||'').trim()
+        const ln = String(row[9]||'').trim()
         if (!ln) continue
         // Normalizar ya en la recolección
         const lnNorm = /^\d+$/.test(ln) ? 'LOTE '+ln : /^lote\s+\d+$/i.test(ln) ? 'LOTE '+ln.replace(/^lote\s+/i,'') : ln
@@ -7200,7 +7200,7 @@ async function importarTodo(input) {
 
       let addedA=0, dupA=0, sinArete=0
       for (const row of rows) {
-        const arete = String(row[0]||'').trim()
+        const arete = String(row[1]||'').trim()
         if (!arete) { sinArete++; continue }
         const existe = await db.animales.where('arete').equals(arete).first()
         if (existe) { dupA++; continue }
@@ -7208,20 +7208,20 @@ async function importarTodo(input) {
         const catRaw = String(row[2]||'').trim()
         const cat = Object.keys(CAT).find(k=>k===catRaw) || Object.keys(CAT).find(k=>CAT[k]===catRaw) || 'HC'
         const pesoIni   = parseFloat(String(row[5]||'0').replace(',','.')) || 0
-        const fechaTs   = parseFecha(row[6]) || ahora
-        const loteRaw   = String(row[8]||'').trim()
+        const fechaTs   = parseFecha(row[7]) || ahora
+        const loteRaw   = String(row[9]||'').trim()
         // Normalizar: solo número → "LOTE N", "lote 11" → "LOTE 11", texto libre → tal cual
         const loteNorm  = loteRaw ? (/^\d+$/.test(loteRaw) ? 'LOTE '+loteRaw : /^lote\s+\d+$/i.test(loteRaw) ? 'LOTE '+loteRaw.replace(/^lote\s+/i,'') : loteRaw) : ''
         const loteNom   = loteNorm.toLowerCase()
         const loteId    = loteNom ? (loteMap[loteNom]||null) : null
-        const precioKg  = parseFloat(String(row[10]||'0').replace(',','.')) || undefined
+        const precioKg  = parseFloat(String(row[6]||'0').replace(',','.')) || undefined
 
         const id = await fsAdd('animales', {
-          arete, nombre:String(row[1]||'').trim()||undefined,
+          arete, nombre:undefined,
           categoria:cat, raza:String(row[3]||'').trim(),
           color:String(row[4]||'').trim()||undefined,
-          pesoInicial:pesoIni, descripcion:String(row[9]||'').trim()||undefined,
-          procedencia:String(row[7]||'').trim()||undefined,
+          pesoInicial:pesoIni, descripcion:String(row[10]||'').trim()||undefined,
+          procedencia:String(row[8]||'').trim()||undefined,
           estadoSanitario:'SANO', activo:1, fechaIngreso:fechaTs,
           loteId, fechaLote:loteId?fechaTs:undefined,
           precioCompra:precioKg,
