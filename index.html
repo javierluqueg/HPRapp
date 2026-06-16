@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260615-005'
+const APP_VERSION = '20260615-006'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -5267,7 +5267,7 @@ async function pgPotreroFicha({id}) {
                 </div>
               </div>
             </div>
-            ${l.tipo==='FUMIGACION'&&l.productos?`<p class="xs gray mt8"><span class="bold">Productos:</span> ${l.productos}</p>`:''}
+            ${l.productos?`<p class="xs gray mt8"><span class="bold">Producto:</span> ${l.productos}${l.volumen?' · '+l.volumen+' lt':''}</p>`:''}
             ${l.observaciones?`<p class="xs gray mt4">${l.observaciones}</p>`:''}
           </div>`
       }).join('')
@@ -5361,13 +5361,15 @@ function openNuevaLaborPotrero(potreroId) {
     </div>
     <div class="field">
       <label>Jornales</label>
-      <input id="lp-jornales" class="inp" type="number" min="0" step="1" placeholder="0">
+      <input id="lp-jornales" class="inp" type="text" inputmode="numeric" placeholder="0">
     </div>
-    <div id="lp-fumi-sec" style="display:none">
-      <div class="field">
-        <label>Productos utilizados</label>
-        <textarea id="lp-productos" class="inp" rows="3" placeholder="Ej: Roundup 2L, Glifosato 500ml…" style="resize:none"></textarea>
-      </div>
+    <div class="field">
+      <label>Producto</label>
+      <input id="lp-productos" class="inp" placeholder="Nombre del producto (opcional)">
+    </div>
+    <div class="field">
+      <label>Volumen producto (litros)</label>
+      <input id="lp-volumen" class="inp" type="text" inputmode="decimal" placeholder="0">
     </div>
     <div class="field">
       <label>Observaciones</label>
@@ -5384,8 +5386,6 @@ function selLaborTipo(tipo, btn) {
   document.querySelectorAll('#lp-grid button').forEach(b => b.style.opacity = '0.55')
   btn.style.opacity = '1'
   btn.style.boxShadow = '0 0 0 3px ' + btn.style.color
-  const sec = $('lp-fumi-sec')
-  if (sec) sec.style.display = tipo === 'FUMIGACION' ? 'block' : 'none'
 }
 
 async function saveNuevaLaborPotrero(potreroId) {
@@ -5400,16 +5400,17 @@ async function saveNuevaLaborPotrero(potreroId) {
   const fechaFinStr = $('lp-fecha-fin')?.value
   const fechaFin = fechaFinStr ? new Date(fechaFinStr+'T00:00:00').getTime() : null
   const jornales = parseInt($('lp-jornales')?.value) || 0
-  const productos = tipo === 'FUMIGACION' ? ($('lp-productos')?.value?.trim() || '') : ''
+  const productos = $('lp-productos')?.value?.trim() || ''
+  const volumen   = parseFloat(String($('lp-volumen')?.value||'').replace(',','.')) || null
   const obs = $('lp-obs')?.value?.trim() || ''
   const btn = $('lp-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
 
-  // Construir objeto sin campos vacíos (evita conflictos con Dexie/IndexedDB)
   const payload = { potreroId: parseInt(potreroId), tipo, fecha, jornales }
-  if (fechaFin) payload.fechaFin = fechaFin
-  if (productos) payload.productos = productos
-  if (obs) payload.observaciones = obs
+  if (fechaFin)  payload.fechaFin    = fechaFin
+  if (productos) payload.productos   = productos
+  if (volumen)   payload.volumen     = volumen
+  if (obs)       payload.observaciones = obs
 
   let laborId
   try {
@@ -5454,11 +5455,11 @@ async function openEditarLaborPotrero(laborId, potreroId) {
         <input id="lp-fecha-fin" class="inp" type="date" value="${toDateStr(l.fechaFin)}"></div>
     </div>
     <div class="field"><label>Jornales</label>
-      <input id="lp-jornales" class="inp" type="number" min="0" step="1" value="${l.jornales||0}"></div>
-    <div id="lp-fumi-sec" style="display:${l.tipo==='FUMIGACION'?'block':'none'}">
-      <div class="field"><label>Productos utilizados</label>
-        <textarea id="lp-productos" class="inp" rows="3" style="resize:none">${l.productos||''}</textarea></div>
-    </div>
+      <input id="lp-jornales" class="inp" type="text" inputmode="numeric" value="${l.jornales||0}"></div>
+    <div class="field"><label>Producto</label>
+      <input id="lp-productos" class="inp" value="${l.productos||''}" placeholder="Nombre del producto (opcional)"></div>
+    <div class="field"><label>Volumen producto (litros)</label>
+      <input id="lp-volumen" class="inp" type="text" inputmode="decimal" value="${l.volumen||''}"></div>
     <div class="field"><label>Observaciones</label>
       <input id="lp-obs" class="inp" value="${l.observaciones||''}" placeholder="Opcional…"></div>
     <div class="btn-row">
@@ -5476,14 +5477,16 @@ async function saveEditarLaborPotrero(laborId, potreroId) {
   const fechaFinStr = $('lp-fecha-fin')?.value
   const fechaFin = fechaFinStr ? new Date(fechaFinStr+'T00:00:00').getTime() : null
   const jornales = parseInt($('lp-jornales')?.value) || 0
-  const productos = tipo === 'FUMIGACION' ? ($('lp-productos')?.value?.trim() || '') : ''
+  const productos = $('lp-productos')?.value?.trim() || ''
+  const volumen   = parseFloat(String($('lp-volumen')?.value||'').replace(',','.')) || null
   const obs = $('lp-obs')?.value?.trim() || ''
   const btn = $('lp-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
   const payload = { tipo, fecha, jornales,
-    fechaFin: fechaFin || null,
-    productos: productos || null,
-    observaciones: obs || null
+    fechaFin:      fechaFin   || null,
+    productos:     productos  || null,
+    volumen:       volumen    || null,
+    observaciones: obs        || null
   }
   try {
     await fsUpdate('laboresPotrero', laborId, payload)
@@ -6864,11 +6867,15 @@ async function exportarParaImportar(){
     // ── LABORES_POTREROS ──
     const potNomMap = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
     const wsLabP = XLSX.utils.aoa_to_sheet([
-      ['Nombre del Potrero *','Tipo de Labor *','Producto / Insumo','Cantidad / Dosis','Fecha (DD/MM/AAAA) *','Observación'],
+      ['Tipo *','Potrero *','Fecha Inicio (DD/MM/AAAA) *','Fecha Final (DD/MM/AAAA)','Jornales','Producto','Volumen Producto (litros)','Observaciones'],
       ...laboresPotrero
         .filter(l=>potNomMap[l.potreroId])
         .sort((a,b)=>a.fecha-b.fecha)
-        .map(l=>[potNomMap[l.potreroId], l.tipo, l.producto||'', l.dosis||'', fd(l.fecha), l.obs||''])
+        .map(l=>[
+          l.tipo||'', potNomMap[l.potreroId]||'',
+          fd(l.fecha), fd(l.fechaFin),
+          l.jornales||0, l.productos||'', l.volumen||'', l.observaciones||''
+        ])
     ])
     XLSX.utils.book_append_sheet(wb, wsLabP, 'LABORES_POTREROS')
 
@@ -7303,21 +7310,25 @@ async function importarTodo(input) {
     // Col 0:Potrero  1:Tipo  2:Producto  3:Dosis  4:Fecha  5:Obs
     const shLabP = wb.SheetNames.find(s => /LABORES?_POTREROS?/i.test(s))
     if (shLabP) {
-      const rows = readSheet(shLabP, true).filter(r => r[0] && r[1] && r[4])
+      // Col: 0=Tipo 1=Potrero 2=FechaIni 3=FechaFin 4=Jornales 5=Producto 6=Volumen 7=Obs
+      const tiposValidos = ['CERCA','GUADANA','FUMIGACION','TOCONEO','SIEMBRA','RESIEMBRA']
+      const rows = readSheet(shLabP, true).filter(r => r[0] && r[1] && r[2])
       const todosPotLP = await db.potreros.where('activo').equals(1).toArray()
       const potMapLP = {}; todosPotLP.forEach(p=>potMapLP[p.nombre.trim().toLowerCase()]=p.id)
       let addedLP=0, skipLP=0
       for (const row of rows) {
-        const potNom  = String(row[0]||'').trim(); if (!potNom) { skipLP++; continue }
-        const tipo    = String(row[1]||'').trim().toUpperCase()
-        const fechaTs = parseFecha(row[4]); if (!fechaTs) { skipLP++; continue }
+        const tipo    = String(row[0]||'').trim().toUpperCase(); if (!tiposValidos.includes(tipo)) { skipLP++; continue }
+        const potNom  = String(row[1]||'').trim(); if (!potNom) { skipLP++; continue }
+        const fechaTs = parseFecha(row[2]); if (!fechaTs) { skipLP++; continue }
         const potId   = potMapLP[potNom.toLowerCase()]; if (!potId) { skipLP++; continue }
         const dup = await db.laboresPotrero.where('potreroId').equals(potId).filter(l=>l.fecha===fechaTs&&l.tipo===tipo).first()
         if (dup) { skipLP++; continue }
-        const producto = String(row[2]||'').trim()||undefined
-        const dosis    = String(row[3]||'').trim()||undefined
-        const obs      = String(row[5]||'').trim()||undefined
-        await fsAdd('laboresPotrero',{potreroId:potId,tipo,producto,dosis,fecha:fechaTs,obs,registradoPor:quien,registradoEn:ahora})
+        const fechaFin  = parseFecha(row[3]) || null
+        const jornales  = parseInt(String(row[4]||'0')) || 0
+        const productos = String(row[5]||'').trim() || null
+        const volumen   = parseFloat(String(row[6]||'').replace(',','.')) || null
+        const obs       = String(row[7]||'').trim() || null
+        await fsAdd('laboresPotrero',{potreroId:potId,tipo,fecha:fechaTs,fechaFin,jornales,productos,volumen,observaciones:obs,registradoPor:quien,registradoEn:ahora})
         addedLP++
       }
       if (addedLP||skipLP) resumen.push(`🌿 Labores potreros: ${addedLP} importadas${skipLP?' · '+skipLP+' omitidas':''}`)
