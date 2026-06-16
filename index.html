@@ -3864,16 +3864,10 @@ async function pgLoteFicha({id}) {
   if(!l) return '<p>Lote no encontrado</p>'
   $('hdrTitle').textContent=l.nombre
   _lfLoteId = id
-  if (_lfSelMode) {
-    const n = _lfSelected.size
-    const dis = n===0 ? 'disabled' : ''
-    $('hdrAct').innerHTML=`<div style="display:flex;gap:4px">
-      <button class="btn btn-sm btn-gray" style="padding:8px 10px" onclick="cancelarSelLF()">✕</button>
-      <button class="btn btn-sm btn-g" style="padding:8px 10px;font-size:.8rem" onclick="openLaborLoteFicha()" ${dis}>💉 Labor${n?' ('+n+')':''}</button>
-    </div>`
+  if (false) { // modo selección desactivado
+    $('hdrAct').innerHTML=''
   } else {
     $('hdrAct').innerHTML=`<div style="display:flex;gap:6px">
-      <button class="btn btn-sm btn-g" onclick="activarSelLF(${id})">☑ Labor</button>
       <button class="btn btn-sm btn-b" onclick="openEditarLote(${id})">✏️ Editar</button>
       <button class="btn btn-sm btn-r" onclick="eliminarLote(${id})">🗑</button>
     </div>`
@@ -4001,7 +3995,43 @@ async function pgLoteFicha({id}) {
   const prodMetrics = await calcProdLote(id, _prodLoteDesde, _prodLoteHasta)
   const prodCard = renderProdLoteHTML(prodMetrics, id, _prodLoteDesde, _prodLoteHasta)
 
-  return hdr + prodCard + selHeader + (Array.isArray(listaAnimales)?listaAnimales.join(''):listaAnimales)
+  // ── Pestaña Labores ──
+  const lfTab = _seg['lft2'] || 'animales'
+  const tabs2 = `<div class="seg mb12">
+    <button class="${lfTab==='animales'?'on':''}" onclick="_seg['lft2']='animales';go('lote-ficha',{id:${id}})">🐄 Animales</button>
+    <button class="${lfTab==='labores'?'on':''}" onclick="_seg['lft2']='labores';go('lote-ficha',{id:${id}})">💉 Labores</button>
+  </div>`
+
+  if (lfTab === 'labores') {
+    // Cargar labores del lote (agrupadas por animal)
+    const laboresLote = await db.labores.where('animalId').anyOf(animales.map(a=>a.id))
+      .filter(l=>['VACUNACION','DESPARASITACION','BANO','MARCADO'].includes(l.tipo))
+      .sortBy('fecha')
+    laboresLote.reverse()
+    const animalMap = Object.fromEntries(animales.map(a=>[a.id, a.arete]))
+
+    const tipoColor = {VACUNACION:'#1565C0,#E3F2FD',DESPARASITACION:'#6A1B9A,#F3E5F5',BANO:'#00838F,#E0F7FA',MARCADO:'#E65100,#FFF3E0'}
+    const tipoNom   = {VACUNACION:'💉 Vacunación',DESPARASITACION:'💊 Desparasitación',BANO:'🚿 Baño',MARCADO:'🔖 Marcado'}
+
+    const btnLab = `<button class="btn btn-b mb12" style="width:100%" onclick="openLaborLoteFicha(${id})">+ Registrar labor</button>`
+
+    const filasLab = laboresLote.length ? laboresLote.map(l => {
+      const [col,bg] = (tipoColor[l.tipo]||'#555,#f5f5f5').split(',')
+      return `<div class="card mb8" style="border-left:4px solid ${col}">
+        <div class="row-b mb4">
+          <p class="bold sm">${tipoNom[l.tipo]||l.tipo}</p>
+          <p class="xs gray">${ffd(l.fecha)}</p>
+        </div>
+        <p class="xs gray">🐄 ${animalMap[l.animalId]||'?'}</p>
+        ${l.producto?`<p class="xs gray mt4"><span class="bold">Producto:</span> ${l.producto}${l.dosis?' · '+l.dosis:''}</p>`:''}
+        ${l.obs&&!l.obs.startsWith('Producto:')?`<p class="xs gray mt4">${l.obs}</p>`:''}
+      </div>`
+    }).join('') : '<div class="empty"><div class="eico">💉</div><p>Sin labores registradas</p></div>'
+
+    return hdr + tabs2 + btnLab + filasLab
+  }
+
+  return hdr + tabs2 + prodCard + selHeader + (Array.isArray(listaAnimales)?listaAnimales.join(''):listaAnimales)
 }
 
 function activarSelLF(loteId) {
@@ -4032,102 +4062,144 @@ function selectAllLF(ids) {
   go('lote-ficha', {id: _lfLoteId})
 }
 
-function openLaborLoteFicha() {
-  if (_lfSelected.size === 0) { showToast('Selecciona al menos un animal','info'); return }
-  _sheetLaborIds = [..._lfSelected]
-  const n = _sheetLaborIds.length
+async function openLaborLoteFicha(loteId, modoSel=false) {
+  const animales = await db.animales.where({activo:1, loteId:parseInt(loteId)}).toArray()
+  if (!animales.length) { showToast('No hay animales en este lote','err'); return }
+  _lfSelMode = modoSel
+  _lfSelected = modoSel ? new Set() : new Set(animales.map(a=>a.id))
+  _lfLoteId = parseInt(loteId)
   const hoy = new Date().toISOString().split('T')[0]
+  const n = animales.length
+
+  const listaAnimalesHTML = modoSel ? `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <p class="xs bold gray">Selecciona animales</p>
+        <button onclick="llToggleAll(${JSON.stringify(animales.map(a=>a.id))})" style="border:none;background:none;color:#1565C0;font-size:.78rem;font-weight:700;cursor:pointer" id="ll-sel-todos">Todos</button>
+      </div>
+      <div style="max-height:180px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:10px">
+        ${animales.map(a=>`<button onclick="llToggle(${a.id})" data-llid="${a.id}"
+          style="display:flex;align-items:center;gap:8px;width:100%;border:none;border-bottom:1px solid #f0f0f0;background:white;padding:8px 12px;text-align:left;cursor:pointer">
+          <div id="ll-chk-${a.id}" style="width:18px;height:18px;border-radius:50%;border:2px solid #ddd;flex-shrink:0"></div>
+          <p style="font-size:.82rem;font-weight:700">${a.arete} <span style="font-weight:400;color:#888">${a.categoria||''}</span></p>
+        </button>`).join('')}
+      </div>
+      <p class="xs gray mt6" id="ll-cnt">0 seleccionados</p>
+    </div>` : `
+    <div style="background:#E3F2FD;border-radius:8px;padding:8px 12px;margin-bottom:12px">
+      <p class="xs" style="color:#1565C0">📋 Se registrará a <strong>todos los ${n} animales</strong> del lote</p>
+    </div>`
+
   showSheet(`
-    <div class="sh-title">💉 Labor — ${n} animal${n>1?'es':''}<button class="sh-x" onclick="closeSheet()">✕</button></div>
+    <div class="sh-title">💉 Labor del lote<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <input type="hidden" id="sl-tipo" value="">
+    <input type="hidden" id="sl-lote-id" value="${loteId}">
+    <div class="seg mb12">
+      <button class="${!modoSel?'on':''}" onclick="closeSheet();openLaborLoteFicha(${loteId},false)">Todos (${n})</button>
+      <button class="${modoSel?'on':''}" onclick="closeSheet();openLaborLoteFicha(${loteId},true)">Seleccionar</button>
+    </div>
+    ${listaAnimalesHTML}
     <p style="font-size:.78rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Tipo de labor *</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px" id="sl-grid">
-      <button onclick="selLaborMasiva('VACUNA',this)" style="border:2.5px solid #1565C0;border-radius:14px;padding:14px 8px;background:#E3F2FD;color:#1565C0;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
-        <span style="font-size:1.8rem">💉</span>Vacuna
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px" id="sl-grid">
+      <button onclick="selLaborMasiva('VACUNACION',this)" style="border:2.5px solid #1565C0;border-radius:14px;padding:14px 8px;background:#E3F2FD;color:#1565C0;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        <span style="font-size:1.8rem">💉</span>Vacunación
       </button>
-      <button onclick="selLaborMasiva('PURGA',this)" style="border:2.5px solid #6A1B9A;border-radius:14px;padding:14px 8px;background:#F3E5F5;color:#6A1B9A;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
-        <span style="font-size:1.8rem">💊</span>Purga
+      <button onclick="selLaborMasiva('DESPARASITACION',this)" style="border:2.5px solid #6A1B9A;border-radius:14px;padding:14px 8px;background:#F3E5F5;color:#6A1B9A;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        <span style="font-size:1.8rem">💊</span>Desparasitación
       </button>
-      <button onclick="selLaborMasiva('BANO',this)" style="border:2.5px solid #00838F;border-radius:14px;padding:14px 8px;background:#E0F7FA;color:#00838F;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+      <button onclick="selLaborMasiva('BANO',this)" style="border:2.5px solid #00838F;border-radius:14px;padding:14px 8px;background:#E0F7FA;color:#00838F;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
         <span style="font-size:1.8rem">🚿</span>Baño
       </button>
-      <button onclick="selLaborMasiva('MARCADO',this)" style="border:2.5px solid #E65100;border-radius:14px;padding:14px 8px;background:#FFF3E0;color:#E65100;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer">
+      <button onclick="selLaborMasiva('MARCADO',this)" style="border:2.5px solid #E65100;border-radius:14px;padding:14px 8px;background:#FFF3E0;color:#E65100;font-size:.95rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
         <span style="font-size:1.8rem">🔖</span>Marcado
       </button>
     </div>
-    <div id="sl-vacuna-sec" style="display:none">
-      <div class="field"><label>Tipo de vacuna *</label>
-        <select id="sl-vacuna-tipo" class="inp">
-          <option value="">— Seleccionar vacuna —</option>
-          <option value="Aftosa">Aftosa</option>
-          <option value="Brucela">Brucela</option>
-          <option value="Carbon_Sintomatico">Carbón sintomático</option>
-          <option value="Clostridiosis">Clostridiosis</option>
-          <option value="IBR_DVB">IBR / DVB</option>
-          <option value="Rabia">Rabia</option>
-          <option value="Otra">Otra</option>
-        </select>
-      </div>
-      <div id="sl-vacuna-otra-sec" style="display:none">
-        <div class="field"><label>Especificar vacuna</label>
-          <input id="sl-vacuna-otra" class="inp" placeholder="Nombre de la vacuna…">
-        </div>
-      </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field"><label>Fecha *</label>
+        <input id="sl-fecha" class="inp" type="date" value="${hoy}"></div>
+      <div class="field"><label>Dosis</label>
+        <input id="sl-dosis" class="inp" placeholder="Ej: 2 ml"></div>
     </div>
-    <div class="field"><label>Fecha *</label>
-      <input id="sl-fecha" class="inp" type="date" value="${hoy}">
-    </div>
-    <div class="field"><label>Producto / Dosis</label>
-      <input id="sl-prod" class="inp" placeholder="Ej: Dectomax 1ml, Ivermectina 2ml…">
+    <div class="field"><label>Producto</label>
+      <input id="sl-prod" class="inp" placeholder="Ej: Dectomax, Ivermectina…">
     </div>
     <div class="field"><label>Observación</label>
       <input id="sl-obs" class="inp" placeholder="Opcional…">
-    </div>
-    <div style="background:#E3F2FD;border-radius:8px;padding:10px 12px;margin-bottom:14px">
-      <p class="xs" style="color:#1565C0">📋 Se registrará la labor a los <strong>${n} animales</strong> seleccionados</p>
     </div>
     <div class="btn-row">
       <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
       <button class="btn btn-g" id="sl-btn" onclick="saveLaborLoteFicha()">✓ Registrar</button>
     </div>`)
-  setTimeout(()=>{
-    const sel = document.getElementById('sl-vacuna-tipo')
-    if (sel) sel.addEventListener('change', ()=>{
-      const otra = document.getElementById('sl-vacuna-otra-sec')
-      if (otra) otra.style.display = sel.value === 'Otra' ? 'block' : 'none'
-    })
-  }, 100)
 }
+
+function llToggle(id) {
+  if (_lfSelected.has(id)) {
+    _lfSelected.delete(id)
+    const chk = document.getElementById('ll-chk-'+id)
+    if (chk) { chk.style.border='2px solid #ddd'; chk.style.background=''; chk.innerHTML='' }
+  } else {
+    _lfSelected.add(id)
+    const chk = document.getElementById('ll-chk-'+id)
+    if (chk) { chk.style.border='2px solid #1565C0'; chk.style.background='#1565C0'; chk.innerHTML='<span style="color:white;font-size:10px;font-weight:700">✓</span>' }
+  }
+  const cnt = document.getElementById('ll-cnt')
+  if (cnt) cnt.textContent = `${_lfSelected.size} seleccionado${_lfSelected.size!==1?'s':''}`
+  const btn = document.getElementById('ll-sel-todos')
+  const allBtns = document.querySelectorAll('[data-llid]')
+  if (btn) btn.textContent = _lfSelected.size === allBtns.length ? 'Desmarcar todos' : 'Todos'
+}
+
+function llToggleAll(ids) {
+  const allSel = _lfSelected.size === ids.length
+  if (allSel) {
+    _lfSelected.clear()
+    ids.forEach(id => {
+      const chk = document.getElementById('ll-chk-'+id)
+      if (chk) { chk.style.border='2px solid #ddd'; chk.style.background=''; chk.innerHTML='' }
+    })
+  } else {
+    ids.forEach(id => {
+      _lfSelected.add(id)
+      const chk = document.getElementById('ll-chk-'+id)
+      if (chk) { chk.style.border='2px solid #1565C0'; chk.style.background='#1565C0'; chk.innerHTML='<span style="color:white;font-size:10px;font-weight:700">✓</span>' }
+    })
+  }
+  const cnt = document.getElementById('ll-cnt')
+  if (cnt) cnt.textContent = `${_lfSelected.size} seleccionado${_lfSelected.size!==1?'s':''}`
+  const btn = document.getElementById('ll-sel-todos')
+  if (btn) btn.textContent = allSel ? 'Todos' : 'Desmarcar todos'
+}
+
 
 async function saveLaborLoteFicha() {
   const tipo = document.getElementById('sl-tipo')?.value
   if (!tipo) { showToast('Selecciona el tipo de labor','err'); return }
-  let tipoLabel = tipo
-  if (tipo === 'VACUNA') {
-    const vt = document.getElementById('sl-vacuna-tipo')?.value
-    if (!vt) {
-      const s = document.getElementById('sl-vacuna-tipo')
-      if (s) { s.style.border='2px solid #C62828'; s.focus() }
-      showToast('Selecciona el tipo de vacuna','err'); return
-    }
-    const otraVal = vt === 'Otra' ? (document.getElementById('sl-vacuna-otra')?.value?.trim()||'Otra') : vt
-    tipoLabel = 'VACUNA_' + otraVal.toUpperCase()
-  }
+  const loteId = parseInt(document.getElementById('sl-lote-id')?.value)
   const fechaStr = document.getElementById('sl-fecha')?.value
   if (!fechaStr) { showToast('Selecciona la fecha','err'); return }
   const fecha = new Date(fechaStr+'T00:00:00').getTime()
-  const prod = document.getElementById('sl-prod')?.value?.trim() || ''
-  const obs  = document.getElementById('sl-obs')?.value?.trim() || ''
-  const obsTexto = [prod, obs].filter(Boolean).join(' · ')
-  const ids = _sheetLaborIds
-  if (!ids.length) { closeSheet(); return }
+  const prod  = document.getElementById('sl-prod')?.value?.trim() || ''
+  const dosis = document.getElementById('sl-dosis')?.value?.trim() || ''
+  const obs   = document.getElementById('sl-obs')?.value?.trim() || ''
+  const obsTexto = [prod && `Producto: ${prod}`, dosis && `Dosis: ${dosis}`, obs].filter(Boolean).join(' · ')
+
+  // Respetar selección: si _lfSelected tiene IDs usar esos, sino todos del lote
+  const todosAnim = await db.animales.where({activo:1, loteId}).toArray()
+  if (!todosAnim.length) { showToast('No hay animales en el lote','err'); return }
+  const animalesTarget = _lfSelected.size > 0
+    ? todosAnim.filter(a => _lfSelected.has(a.id))
+    : todosAnim
+  if (!animalesTarget.length) { showToast('Selecciona al menos un animal','err'); return }
+
   const btn = document.getElementById('sl-btn')
-  if (btn) { btn.disabled = true; btn.textContent = 'Registrando…' }
+  if (btn) { btn.disabled = true; btn.textContent = `Registrando en ${animalesTarget.length} animales…` }
   const labIds = []
   try {
-    for (const animalId of ids) {
+    for (const a of animalesTarget) {
       const lid = await fsAdd('labores', {
-        animalId, fecha, tipo: tipoLabel,
+        animalId: a.id, fecha, tipo,
+        producto: prod || null,
+        dosis: dosis || null,
         obs: obsTexto || null,
         registradoPor: USER?.nombre||'—',
         registradoEn: Date.now()
@@ -4140,15 +4212,15 @@ async function saveLaborLoteFicha() {
     return
   }
   closeSheet()
-  _sheetLaborIds = []
-  _lfSelMode = false
-  _lfSelected = new Set()
   const n = labIds.length
   pushUndo(`Labor registrada en ${n} animal${n>1?'es':''}`, async () => {
     for (const lid of labIds) await fsDelete('labores', lid)
   })
-  go('lote-ficha', {id: _lfLoteId})
+  showToast(`✅ Labor registrada en ${n} animales`, 'ok', 3000)
+  _seg['lft2'] = 'labores'
+  go('lote-ficha', {id: loteId})
 }
+
 
 async function openIngresarLote(loteId) {
   const pots=await db.potreros.where('activo').equals(1).toArray()
@@ -6834,35 +6906,9 @@ async function exportarParaImportar(){
     ])
     XLSX.utils.book_append_sheet(wb, wsAnim, 'ANIMALES')
 
-    // ── PESAJES ──
-    const animalMap = {}; animales.forEach(a=>animalMap[a.id]=a.arete)
-    const wsPes = XLSX.utils.aoa_to_sheet([
-      ['Arete / Número *','Peso (kg) *','Fecha (DD/MM/AAAA) *','Observación'],
-      ...pesajes
-        .filter(p=>animalMap[p.animalId])
-        .sort((a,b)=>a.fecha-b.fecha)
-        .map(p=>[animalMap[p.animalId], p.pesoKg, fd(p.fecha), p.obs||''])
-    ])
-    XLSX.utils.book_append_sheet(wb, wsPes, 'PESAJES')
+    // PESAJES omitido — demasiados registros, no útil para importación
 
-    // ── LABORES_LOTES ──
-    // Agrupar labores por lote: buscar animales del mismo lote con misma labor/fecha
-    const labLotesMap = {}
-    for(const l of labores){
-      const anim = animales.find(a=>a.id===l.animalId)
-      if(!anim||!anim.loteId) continue
-      const loteNom = loteNomMap[anim.loteId]||''
-      if(!loteNom) continue
-      const key = loteNom+'|'+l.tipo+'|'+l.fecha
-      if(!labLotesMap[key]) labLotesMap[key]={lote:loteNom,tipo:l.tipo,producto:l.producto||'',dosis:l.dosis||'',fecha:l.fecha,obs:l.obs||''}
-    }
-    const wsLabL = XLSX.utils.aoa_to_sheet([
-      ['Nombre del Lote *','Tipo de Labor *','Producto / Vacuna','Dosis','Fecha (DD/MM/AAAA) *','Observación'],
-      ...Object.values(labLotesMap)
-        .sort((a,b)=>a.fecha-b.fecha)
-        .map(l=>[l.lote, l.tipo, l.producto, l.dosis, fd(l.fecha), l.obs])
-    ])
-    XLSX.utils.book_append_sheet(wb, wsLabL, 'LABORES_LOTES')
+    // LABORES_LOTES omitido — se gestiona directamente desde la ficha de cada lote
 
     // ── LABORES_POTREROS ──
     const potNomMap = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
