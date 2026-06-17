@@ -3303,6 +3303,8 @@ async function openEditarLote(id){
   const l=await db.lotes.get(id)
   if(!l){showToast('Lote no encontrado','err');return}
   _editLoteAnimales=await db.animales.where({activo:1,loteId:id}).toArray()
+  const cicloActivo=await db.ciclos.where({loteId:id,activo:1}).first()
+  const potrerosDisp=await db.potreros.where('activo').equals(1).toArray()
   const cats=[...new Set(_editLoteAnimales.map(a=>a.categoria||'').filter(Boolean))].sort()
   const optsCat=`<option value="">Todas (${_editLoteAnimales.length})</option>`+cats.map(c=>`<option value="${c}">${CAT[c]||c} (${_editLoteAnimales.filter(a=>a.categoria===c).length})</option>`).join('')
   const sufijoEdit=l.nombre.replace(/^lote\s*/i,'').trim()
@@ -3327,6 +3329,15 @@ async function openEditarLote(id){
       <div id="el-lista" style="border:1.5px solid #eee;border-radius:10px;padding:0 10px;max-height:28vh;overflow-y:auto;margin-bottom:6px"></div>
       <button id="el-btn-quitar" class="btn btn-r" onclick="openAccionQuitarLote()" style="display:none;padding:10px 16px;font-size:.85rem">🗑 Quitar seleccionados</button>
     </div>
+    ${cicloActivo ? `<div style="border-top:1.5px solid #eee;margin:14px 0 10px;padding-top:14px">
+      <p style="font-size:.78rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.03em;margin-bottom:10px">📍 Potrero actual</p>
+      <div class="field"><label>Potrero *</label>
+        <select id="el-pot" class="inp">
+          ${potrerosDisp.map(p=>`<option value="${p.id}" ${p.id===cicloActivo.potreroId?'selected':''}>${p.nombre}</option>`).join('')}
+        </select></div>
+      <div class="field"><label>Fecha de ingreso al potrero</label>
+        <input id="el-pot-fecha" class="inp" type="date" value="${toD(cicloActivo.fechaEntrada)}"></div>
+    </div>` : ''}
     <button class="btn btn-b" onclick="saveEditarLote(${id})">Guardar cambios</button>`)
   filtrarEditLote()
 }
@@ -3554,6 +3565,30 @@ async function saveEditarLote(id){
   try{
     prev=await db.lotes.get(id)
     await fsUpdate('lotes',id,{nombre:n, descripcion:($('el-d').value||'').trim()})
+    // Actualizar ciclo activo si cambió potrero o fecha
+    const potEl   = $('el-pot')
+    const fechaEl = $('el-pot-fecha')
+    if (potEl && fechaEl) {
+      const nuevoPotId  = parseInt(potEl.value)
+      const nuevaFecha  = fromD(fechaEl.value)
+      const cicloActivo = await db.ciclos.where({loteId:id,activo:1}).first()
+      if (cicloActivo) {
+        const potCambio   = nuevoPotId !== cicloActivo.potreroId
+        const fechaCambio = nuevaFecha && nuevaFecha !== cicloActivo.fechaEntrada
+        if (potCambio || fechaCambio) {
+          // Si cambió el potrero: liberar el anterior y ocupar el nuevo
+          if (potCambio) {
+            await fsUpdate('potreros', cicloActivo.potreroId, {estado:'DISPONIBLE', numAnimales:0, loteActual:null})
+            const animales = await db.animales.where({activo:1,loteId:id}).toArray()
+            await fsUpdate('potreros', nuevoPotId, {estado:'OCUPADO', numAnimales:animales.length, loteActual:id})
+          }
+          await fsUpdate('ciclos', cicloActivo.id, {
+            potreroId:   nuevoPotId,
+            fechaEntrada: nuevaFecha || cicloActivo.fechaEntrada
+          })
+        }
+      }
+    }
   }catch(e){
     showToast('Error al guardar lote','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Guardar cambios'}
