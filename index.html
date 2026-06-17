@@ -5278,8 +5278,8 @@ async function pgPotreroFicha({id}) {
 
   const tabs=`<div class="tabs" style="overflow:hidden">
     <div class="tab${tab==='datos'?' on':''}" onclick="setTab('pf','datos');go('potrero-ficha',{id:${id}})" style="font-size:.95rem;font-weight:700;${tab==='datos'?'':'color:#81C784'}">Datos</div>
-
     <div class="tab${tab==='labores'?' on':''}" onclick="setTab('pf','labores');go('potrero-ficha',{id:${id}})" style="font-size:.95rem;font-weight:700;${tab==='labores'?'':'color:#81C784'}">🛠 Labores</div>
+    <div class="tab${tab==='historial'?' on':''}" onclick="setTab('pf','historial');go('potrero-ficha',{id:${id}})" style="font-size:.95rem;font-weight:700;${tab==='historial'?'':'color:#81C784'}">📋 Historial</div>
   </div>`
 
   let body=''
@@ -5385,6 +5385,53 @@ async function pgPotreroFicha({id}) {
         : '<div class="empty"><div class="eico">🔍</div><p>Sin labores de este tipo</p></div>')
     }
   }
+  if (tab === 'historial') {
+    const hace1anio = Date.now() - 365*24*60*60*1000
+    const ciclos = await db.ciclos.where('potreroId').equals(id).toArray()
+    const historial = ciclos
+      .filter(c => c.fechaEntrada && c.fechaEntrada >= hace1anio)
+      .sort((a,b) => (b.fechaEntrada||0) - (a.fechaEntrada||0))
+
+    if (!historial.length) {
+      body = '<div class="empty"><div class="eico">📋</div><p>Sin historial en el último año</p></div>'
+    } else {
+      // Calcular días de descanso entre ciclos
+      const sorted = [...historial].sort((a,b) => (a.fechaEntrada||0) - (b.fechaEntrada||0))
+      const descansos = {}
+      for (let i=1; i<sorted.length; i++) {
+        const anterior = sorted[i-1]
+        const actual   = sorted[i]
+        if (anterior.fechaSalida && actual.fechaEntrada) {
+          const dias = Math.round((actual.fechaEntrada - anterior.fechaSalida) / 86400000)
+          if (dias > 0) descansos[actual.id] = dias
+        }
+      }
+      const filas = historial.map(c => {
+        const diasOcupado = c.fechaEntrada && c.fechaSalida
+          ? Math.round((c.fechaSalida - c.fechaEntrada) / 86400000)
+          : c.fechaEntrada && c.activo
+          ? diasDesde(c.fechaEntrada)
+          : null
+        const desc = descansos[c.id]
+        const bg = c.activo ? '#E8F5E9' : 'white'
+        const borde = c.activo ? '#2E7D32' : '#e0e0e0'
+        return `<div class="card mb8" style="border-left:4px solid ${borde};background:${bg}">
+          <div class="row-b mb4">
+            <p class="bold sm">${c.nombreLote||'Lote ?'} ${c.activo?'<span style="background:#2E7D32;color:white;border-radius:6px;padding:1px 7px;font-size:.68rem;margin-left:4px">Actual</span>':''}</p>
+            <p class="xs gray">${c.numAnimales||0} animales</p>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <p class="xs gray">📅 Entrada: <strong>${ffd(c.fechaEntrada)}</strong></p>
+            ${c.fechaSalida?`<p class="xs gray">📤 Salida: <strong>${ffd(c.fechaSalida)}</strong></p>`:''}
+            ${diasOcupado!==null?`<p class="xs gray">⏱ Ocupación: <strong>${diasOcupado}d</strong></p>`:''}
+          </div>
+          ${desc?`<p class="xs mt6" style="color:#1565C0">💤 Descanso previo: <strong>${desc} días</strong></p>`:''}
+        </div>`
+      }).join('')
+      body = `<p class="xs gray mb8">${historial.length} ciclo${historial.length!==1?'s':''} en el último año</p>` + filas
+    }
+  }
+
   return hdr+tabs+body
 }
 
@@ -6945,8 +6992,10 @@ async function exportarParaImportar(){
     wsRot['!autofilter']={ref:'A1:C'+(rotaciones.length+1)}
     XLSX.utils.book_append_sheet(wb, wsRot, 'ROTACIONES')
 
-    // ── CICLOS ──
-    const ciclos = await db.ciclos.toArray()
+    // ── CICLOS — último año ──
+    const hace1anio = Date.now() - 365*24*60*60*1000
+    const todosCiclos = await db.ciclos.toArray()
+    const ciclos = todosCiclos.filter(c => c.activo || (c.fechaEntrada && c.fechaEntrada >= hace1anio))
     const wsCiclos = XLSX.utils.aoa_to_sheet([
       ['Potrero','Lote','N° Animales','Fecha Entrada (DD/MM/AAAA) *','Fecha Salida (DD/MM/AAAA)','Activo (1=Sí / 0=No)','Observación'],
       ...ciclos.sort((a,b)=>(a.fechaEntrada||0)-(b.fechaEntrada||0)).map(c=>[
@@ -8010,6 +8059,20 @@ function pwaBannerDismiss() {
 }
 
 // ── Auto-actualización via GitHub API ──────────────
+async function limpiarCiclosAntiguos() {
+  try {
+    const hace1anio = Date.now() - 365*24*60*60*1000
+    const viejos = await db.ciclos
+      .filter(c => !c.activo && c.fechaEntrada && c.fechaEntrada < hace1anio)
+      .toArray()
+    if (!viejos.length) return
+    for (const c of viejos) {
+      await fsDelete('ciclos', c.id)
+    }
+    console.log(`Ciclos eliminados por antigüedad: ${viejos.length}`)
+  } catch(e) { console.warn('limpiarCiclosAntiguos:', e.message) }
+}
+
 async function checkAppVersion() {
   // No interrumpir si el usuario está en login o sin sesión iniciada
   if (!USER || ['login','setup'].includes(PAGE)) return
@@ -8206,6 +8269,8 @@ async function init(){
       await go(ok ? 'login' : 'setup')
     }
     setTimeout(checkAppVersion, 3000)
+    // Limpiar ciclos con más de 1 año de antigüedad (inactivos únicamente)
+    limpiarCiclosAntiguos()
   } catch(e) {
     const msg = document.getElementById('boot-msg')
     const retry = document.getElementById('boot-retry')
