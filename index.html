@@ -6854,10 +6854,8 @@ async function probarFirebase(){
 async function exportarParaImportar(){
   try{
     await loadXLSX()
-    const [animales,pesajes,labores,potreros,lotes,rotaciones,laboresPotrero,lluvias]=await Promise.all([
+    const [animales,potreros,lotes,rotaciones,laboresPotrero,lluvias]=await Promise.all([
       db.animales.where('activo').equals(1).toArray(),
-      db.pesajes.toArray(),
-      db.labores.toArray(),
       db.potreros.where('activo').equals(1).toArray(),
       db.lotes.where('activo').equals(1).toArray(),
       db.rotaciones.where('activo').equals(1).toArray(),
@@ -6865,110 +6863,122 @@ async function exportarParaImportar(){
       db.lluvias.orderBy('fecha').toArray()
     ])
     const wb = XLSX.utils.book_new()
-    // Formato DD/MM/AAAA — compatible con el importador
-    const fd = ts => { if(!ts) return ''; const d=new Date(+ts); const dd=String(d.getDate()).padStart(2,'0'); const mm=String(d.getMonth()+1).padStart(2,'0'); const aaaa=d.getFullYear(); return `${dd}/${mm}/${aaaa}` }
+    const fd = ts => { if(!ts) return ''; const d=new Date(+ts); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear() }
+    const loteNomMap = {}; lotes.forEach(l=>loteNomMap[l.id]=l.nombre)
+    const potNomMap  = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
+
+    // ── ANIMALES ──
+    const wsAnim = XLSX.utils.aoa_to_sheet([
+      ['#','Número','Cat.','Raza','Color','Peso Inicial (kg)','Precio Compra ($/kg)','Fecha Ingreso (DD/MM/AAAA)','Procedencia','Lote','Descripción / Obs.'],
+      ...animales.map((a,i)=>[
+        i+1, a.arete, a.categoria||'', a.raza||'', a.color||'',
+        a.pesoInicial||0, a.precioPorKg||'', fd(a.fechaIngreso),
+        a.procedencia||'', loteNomMap[a.loteId]||'', a.descripcion||''
+      ])
+    ])
+    wsAnim['!cols']=[{wch:4},{wch:10},{wch:5},{wch:10},{wch:8},{wch:11},{wch:12},{wch:14},{wch:13},{wch:16},{wch:30}]
+    wsAnim['!autofilter']={ref:'A1:K'+(animales.length+1)}
+    XLSX.utils.book_append_sheet(wb, wsAnim, 'ANIMALES')
 
     // ── LOTES ──
     const wsLotes = XLSX.utils.aoa_to_sheet([
-      ['Nombre del Lote *','Descripción'],
+      ['Nombre del Lote','Descripción'],
       ...lotes.map(l=>[l.nombre, l.descripcion||''])
     ])
+    wsLotes['!cols']=[{wch:17},{wch:30}]
+    wsLotes['!autofilter']={ref:'A1:B'+(lotes.length+1)}
     XLSX.utils.book_append_sheet(wb, wsLotes, 'LOTES')
 
     // ── POTREROS ──
     const wsPotreros = XLSX.utils.aoa_to_sheet([
-      ['Nombre del Potrero *','Área (ha) *','Estado inicial *','Descripción / Obs.','Composición Pastos (var % separados por coma)','Pendiente','Fuente de Agua'],
-      ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.observaciones||'', p.pastos||'', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA'])
+      ['Nombre del Potrero','Área (ha)','Estado inicial','Pendiente','Fuente de Agua','Descripción / Obs.','Composición Pastos (var % separados por coma)'],
+      ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA', p.observaciones||'', p.pastos||''])
     ])
+    wsPotreros['!cols']=[{wch:12},{wch:9},{wch:12},{wch:9},{wch:10},{wch:17},{wch:42}]
+    wsPotreros['!autofilter']={ref:'A1:G'+(potreros.length+1)}
     XLSX.utils.book_append_sheet(wb, wsPotreros, 'POTREROS')
 
     // ── ROTACIONES ──
     const wsRot = XLSX.utils.aoa_to_sheet([
-      ['Nombre de la Rotación *','Potreros en orden (separados por coma) *','Descripción'],
+      ['Nombre de la Rotación','Potreros en orden','Descripción'],
       ...rotaciones.map(r=>{
-        const potNombres = (r.potreroIds||[]).map(pid=>{ const p=potreros.find(x=>x.id===pid); return p?p.nombre:'' }).filter(Boolean).join(',')
+        const potNombres=(r.potreroIds||[]).map(pid=>potNomMap[pid]||'').filter(Boolean).join(',')
         return [r.nombre, potNombres, r.descripcion||'']
       })
     ])
+    wsRot['!cols']=[{wch:12},{wch:60},{wch:20}]
+    wsRot['!autofilter']={ref:'A1:C'+(rotaciones.length+1)}
     XLSX.utils.book_append_sheet(wb, wsRot, 'ROTACIONES')
-
-    // ── ANIMALES ──
-    // Construir mapa loteId→nombre
-    const loteNomMap = {}; lotes.forEach(l=>loteNomMap[l.id]=l.nombre)
-    const wsAnim = XLSX.utils.aoa_to_sheet([
-      ['#','Arete / Número *','Categoría *','Raza *','Color','Peso Inicial (kg) *','Precio Compra ($/kg)','Fecha Ingreso (DD/MM/AAAA) *','Procedencia','Nombre del Lote','Descripción / Obs.'],
-      ...animales.map((a,i)=>[
-        i+1, a.arete, a.categoria||'', a.raza||'', a.color||'',
-        a.pesoInicial||0, a.precioPorKg||'', fd(a.fechaIngreso),
-        a.procedencia||'', loteNomMap[a.loteId]||'',
-        a.descripcion||''
-      ])
-    ])
-    XLSX.utils.book_append_sheet(wb, wsAnim, 'ANIMALES')
-
-    // PESAJES omitido — demasiados registros, no útil para importación
-
-    // LABORES_LOTES omitido — se gestiona directamente desde la ficha de cada lote
-
-    // ── LABORES_POTREROS ──
-    const potNomMap = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
-    const wsLabP = XLSX.utils.aoa_to_sheet([
-      ['Tipo *','Potrero *','Fecha Inicio (DD/MM/AAAA) *','Fecha Final (DD/MM/AAAA)','Jornales','Producto','Volumen Producto (litros)','Observaciones'],
-      ...laboresPotrero
-        .filter(l=>potNomMap[l.potreroId])
-        .sort((a,b)=>a.fecha-b.fecha)
-        .map(l=>[
-          l.tipo||'', potNomMap[l.potreroId]||'',
-          fd(l.fecha), fd(l.fechaFin),
-          l.jornales||0, l.productos||'', l.volumen||'', l.observaciones||''
-        ])
-    ])
-    XLSX.utils.book_append_sheet(wb, wsLabP, 'LABORES_POTREROS')
-
-    // ── LLUVIAS ──
-    const wsLluv = XLSX.utils.aoa_to_sheet([
-      ['Fecha (DD/MM/AAAA) *','Precipitación (mm) *','Observación'],
-      ...lluvias.map(l=>[fd(l.fecha), l.mm, l.obs||''])
-    ])
-    XLSX.utils.book_append_sheet(wb, wsLluv, 'LLUVIAS')
 
     // ── CICLOS ──
     const ciclos = await db.ciclos.toArray()
     const wsCiclos = XLSX.utils.aoa_to_sheet([
-      ['Potrero *','Lote *','N° Animales','Fecha Entrada (DD/MM/AAAA) *','Fecha Salida (DD/MM/AAAA)','Activo (1=Sí / 0=No)','Observación'],
-      ...ciclos
-        .sort((a,b)=>(a.fechaEntrada||0)-(b.fechaEntrada||0))
-        .map(c=>{
-          const potNom = potNomMap[c.potreroId]||''
-          const loteNom = loteNomMap[c.loteId]||c.nombreLote||''
-          return [potNom, loteNom, c.numAnimales||0, fd(c.fechaEntrada), fd(c.fechaSalida), c.activo===1?1:0, c.obs||'']
-        })
+      ['Potrero','Lote','N° Animales','Fecha Entrada (DD/MM/AAAA) *','Fecha Salida (DD/MM/AAAA)','Activo (1=Sí / 0=No)','Observación'],
+      ...ciclos.sort((a,b)=>(a.fechaEntrada||0)-(b.fechaEntrada||0)).map(c=>[
+        potNomMap[c.potreroId]||'', loteNomMap[c.loteId]||c.nombreLote||'',
+        c.numAnimales||0, fd(c.fechaEntrada), fd(c.fechaSalida),
+        c.activo===1?1:0, c.obs||''
+      ])
     ])
+    wsCiclos['!cols']=[{wch:11},{wch:12},{wch:9},{wch:15},{wch:14},{wch:12},{wch:20}]
+    wsCiclos['!autofilter']={ref:'A1:G'+(ciclos.length+1)}
     XLSX.utils.book_append_sheet(wb, wsCiclos, 'CICLOS')
 
-    // ── VENTAS / BAJAS ──
+    // ── LABORES_POTREROS ──
+    const wsLabP = XLSX.utils.aoa_to_sheet([
+      ['Potrero','Tipo','Fecha Inicio (DD/MM/AAAA)','Fecha Final (DD/MM/AAAA)','Jornales','Producto','Volumen Producto (litros)','Observaciones'],
+      ...laboresPotrero
+        .filter(l=>potNomMap[l.potreroId])
+        .sort((a,b)=>a.fecha-b.fecha)
+        .map(l=>[
+          potNomMap[l.potreroId]||'', l.tipo||'',
+          fd(l.fecha), fd(l.fechaFin),
+          l.jornales||0, l.productos||'', l.volumen||'', l.observaciones||''
+        ])
+    ])
+    wsLabP['!cols']=[{wch:11},{wch:12},{wch:14},{wch:14},{wch:8},{wch:24},{wch:14},{wch:20}]
+    wsLabP['!autofilter']={ref:'A1:H'+(laboresPotrero.length+1)}
+    XLSX.utils.book_append_sheet(wb, wsLabP, 'LABORES_POTREROS')
+
+    // ── LLUVIAS ──
+    const wsLluv = XLSX.utils.aoa_to_sheet([
+      ['Fecha (DD/MM/AAAA)','Precipitación (mm)','Observación'],
+      ...lluvias.map(l=>[fd(l.fecha), l.mm, l.obs||''])
+    ])
+    wsLluv['!cols']=[{wch:16},{wch:12},{wch:20}]
+    wsLluv['!autofilter']={ref:'A1:C'+(lluvias.length+1)}
+    XLSX.utils.book_append_sheet(wb, wsLluv, 'LLUVIAS')
+
+    // ── VENTAS_BAJAS ──
     const inactivos = await db.animales.where('activo').equals(0).toArray()
     const todosLotes = await db.lotes.toArray()
     const todosLotesMap = {}; todosLotes.forEach(l=>todosLotesMap[l.id]=l.nombre)
     const wsVentas = XLSX.utils.aoa_to_sheet([
-      ['Arete *','Nombre','Categoría','Raza','Causa Baja','Fecha Baja (DD/MM/AAAA)','Peso Venta (kg)','Valor Venta ($)','Precio/kg Venta ($)','Comprador','Observación Baja','Lote','Peso Inicial (kg)','Precio Compra ($/kg)'],
-      ...inactivos
-        .sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
-        .map(a=>[
-          a.arete, a.nombre||'', a.categoria||'', a.raza||'',
-          a.causaBaja||'', fd(a.fechaBaja),
-          a.pesoVenta||'', a.valorVenta||'', a.precioVentaKg||'',
-          a.comprador||'', a.obsBaja||'',
-          todosLotesMap[a.loteId]||'', a.pesoInicial||0, a.precioPorKg||''
-        ])
+      ['Arete *','Categoría','Raza','Causa Baja','Fecha Baja (DD/MM/AAAA)','Peso Venta (kg)','Valor Venta ($)','Precio/kg Venta ($)','Comprador','Lote','Peso Inicial (kg)','Precio Compra ($/kg)','Observación Baja'],
+      ...inactivos.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0)).map(a=>[
+        a.arete, a.categoria||'', a.raza||'', a.causaBaja||'', fd(a.fechaBaja),
+        a.pesoVenta||'', a.valorVenta||'', a.precioVentaKg||'',
+        a.comprador||'', todosLotesMap[a.loteId]||'',
+        a.pesoInicial||0, a.precioPorKg||'', a.obsBaja||''
+      ])
     ])
+    wsVentas['!cols']=[{wch:11},{wch:9},{wch:10},{wch:10},{wch:14},{wch:10},{wch:12},{wch:12},{wch:14},{wch:16},{wch:11},{wch:12},{wch:20}]
+    wsVentas['!autofilter']={ref:'A1:M'+(inactivos.length+1)}
     XLSX.utils.book_append_sheet(wb, wsVentas, 'VENTAS_BAJAS')
+
+    // ── PESAJES (plantilla vacía para importar pesajes masivos) ──
+    const wsPes = XLSX.utils.aoa_to_sheet([
+      ['Arete / Número *','Peso (kg) *','Fecha (DD/MM/AAAA) *','Observación'],
+    ])
+    wsPes['!cols']=[{wch:14},{wch:10},{wch:14},{wch:30}]
+    XLSX.utils.book_append_sheet(wb, wsPes, 'PESAJES')
 
     const fecha = new Date().toISOString().split('T')[0]
     XLSX.writeFile(wb, `HPRapp-Exportacion-${fecha}.xlsx`)
     showToast('✅ Exportación lista','ok')
   }catch(e){ await showAlert('Error al exportar: '+e.message) }
 }
+
 
 async function exportarExcel(){
   try{
@@ -7356,15 +7366,15 @@ async function importarTodo(input) {
     // Col 0:Potrero  1:Tipo  2:Producto  3:Dosis  4:Fecha  5:Obs
     const shLabP = wb.SheetNames.find(s => /LABORES?_POTREROS?/i.test(s))
     if (shLabP) {
-      // Col: 0=Tipo 1=Potrero 2=FechaIni 3=FechaFin 4=Jornales 5=Producto 6=Volumen 7=Obs
+      // Col: 0=Potrero 1=Tipo 2=FechaIni 3=FechaFin 4=Jornales 5=Producto 6=Volumen 7=Obs
       const tiposValidos = ['CERCA','GUADANA','FUMIGACION','TOCONEO','SIEMBRA','RESIEMBRA']
       const rows = readSheet(shLabP, true).filter(r => r[0] && r[1] && r[2])
       const todosPotLP = await db.potreros.where('activo').equals(1).toArray()
       const potMapLP = {}; todosPotLP.forEach(p=>potMapLP[p.nombre.trim().toLowerCase()]=p.id)
       let addedLP=0, skipLP=0
       for (const row of rows) {
-        const tipo    = String(row[0]||'').trim().toUpperCase(); if (!tiposValidos.includes(tipo)) { skipLP++; continue }
-        const potNom  = String(row[1]||'').trim(); if (!potNom) { skipLP++; continue }
+        const potNom  = String(row[0]||'').trim(); if (!potNom) { skipLP++; continue }
+        const tipo    = String(row[1]||'').trim().toUpperCase(); if (!tiposValidos.includes(tipo)) { skipLP++; continue }
         const fechaTs = parseFecha(row[2]); if (!fechaTs) { skipLP++; continue }
         const potId   = potMapLP[potNom.toLowerCase()]; if (!potId) { skipLP++; continue }
         const dup = await db.laboresPotrero.where('potreroId').equals(potId).filter(l=>l.fecha===fechaTs&&l.tipo===tipo).first()
