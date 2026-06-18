@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260615-006'
+const APP_VERSION = '20260618-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -4328,16 +4328,24 @@ async function saveCambiarPotrero(loteId,cicloId,potreroActualId) {
   const btn = document.querySelector('#ov .btn-b')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
   try {
-    const lote    = await db.lotes.get(loteId)
+    const lote     = await db.lotes.get(loteId)
     const animales = await db.animales.where({activo:1,loteId}).toArray()
-    const fecha   = fromD($('cp-f').value) || Date.now()
-    const dias    = diasDesde((await db.ciclos.get(cicloId)).fechaEntrada)
-    // Cerrar ciclo actual y poner potrero en descanso
-    await fsUpdate('ciclos',cicloId,{activo:0,fechaSalida:fecha,diasOcupacion:dias})
-    await fsUpdate('potreros',potreroActualId,{estado:'EN_DESCANSO',numAnimales:0,loteActual:null,fechaSalida:fecha})
+    const fecha    = fromD($('cp-f').value) || Date.now()
+    // Cerrar TODOS los ciclos activos del lote (evita huérfanos por operaciones previas incompletas)
+    const ciclosActivos = await db.ciclos.where({loteId,activo:1}).toArray()
+    for (const c of ciclosActivos) {
+      const dias = diasDesde(c.fechaEntrada)
+      await fsUpdate('ciclos', c.id, {activo:0, fechaSalida:fecha, diasOcupacion:dias})
+      // Si había un ciclo activo en otro potrero distinto al actual, también ponerlo en descanso
+      if (c.potreroId !== potreroActualId) {
+        await fsUpdate('potreros', c.potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:null, fechaSalida:fecha})
+      }
+    }
+    // Poner potrero actual en descanso
+    await fsUpdate('potreros', potreroActualId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:null, fechaSalida:fecha})
     // Abrir nuevo ciclo en potrero destino
-    await fsAdd('ciclos',{potreroId:potId,loteId,nombreLote:lote.nombre,numAnimales:animales.length,fechaEntrada:fecha,activo:1,obs:''})
-    await fsUpdate('potreros',potId,{estado:'OCUPADO',numAnimales:animales.length,loteActual:loteId})
+    await fsAdd('ciclos', {potreroId:potId, loteId, nombreLote:lote.nombre, numAnimales:animales.length, fechaEntrada:fecha, activo:1, obs:''})
+    await fsUpdate('potreros', potId, {estado:'OCUPADO', numAnimales:animales.length, loteActual:loteId, fechaSalida:undefined})
     closeSheet()
     showToast('✅ Rotación registrada','ok',3000)
     go('lote-ficha',{id:loteId})
