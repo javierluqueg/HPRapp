@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260618-001'
+const APP_VERSION = '20260622-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -4306,17 +4306,20 @@ async function sacarLoteDelPotrero(loteId,cicloId,potreroId) {
 
 async function openCambiarPotrero(loteId,cicloId,potreroActualId) {
   const pots = await db.potreros.where('activo').equals(1).toArray()
-  const dispon = pots.filter(p => p.estado !== 'OCUPADO')
+  const dispon = pots.filter(p => p.estado !== 'OCUPADO').sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}))
   const potActual = await db.potreros.get(potreroActualId)
   if (!dispon.length) { showToast('No hay potreros disponibles para rotar','err',3500); return }
+  const optsHtml = dispon.map(p=>`<option value="${p.id}">${p.nombre} (${p.areaHa?.toFixed(1)||0} ha)</option>`).join('')
   showSheet(`
     <div class="sh-title">🔄 Rotar potrero<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <p class="sm gray mb12">Potrero actual: <strong>${potActual?.nombre||'—'}</strong></p>
     <div class="field"><label>Nuevo potrero *</label>
-      <select id="cp-pot" class="inp">
-        <option value="">Seleccionar…</option>
-        ${dispon.map(p=>`<option value="${p.id}">${p.nombre} (${p.areaHa?.toFixed(1)||0} ha)</option>`).join('')}
+      <input id="cp-buscar" class="inp" type="text" placeholder="🔍 Buscar potrero…" oninput="cpFiltrar()" autocomplete="off" style="margin-bottom:6px;">
+      <select id="cp-pot" class="inp" size="5" style="height:auto;">
+        <option value="">— Seleccionar —</option>
+        ${optsHtml}
       </select>
+      <p id="cp-sin" class="sm gray" style="display:none;margin-top:4px;">Sin resultados</p>
     </div>
     <div class="field"><label>Fecha de rotación</label>
       <input id="cp-f" class="inp" type="date" value="${toD(Date.now())}"></div>
@@ -4324,6 +4327,24 @@ async function openCambiarPotrero(loteId,cicloId,potreroActualId) {
       <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
       <button class="btn btn-b" onclick="saveCambiarPotrero(${loteId},${cicloId},${potreroActualId})">Confirmar rotación</button>
     </div>`)
+}
+function cpFiltrar() {
+  const q = ($('cp-buscar')?.value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+  const sel = $('cp-pot')
+  if (!sel) return
+  let visibles = 0
+  for (const opt of sel.options) {
+    if (!opt.value) continue
+    const txt = opt.textContent.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    const show = txt.includes(q)
+    opt.style.display = show ? '' : 'none'
+    if (show) visibles++
+  }
+  const sin = $('cp-sin')
+  if (sin) sin.style.display = visibles === 0 ? '' : 'none'
+  // Limpiar selección si el opción seleccionada quedó oculta
+  const selOpt = sel.options[sel.selectedIndex]
+  if (selOpt && selOpt.style.display === 'none') sel.value = ''
 }
 
 async function saveCambiarPotrero(loteId,cicloId,potreroActualId) {
