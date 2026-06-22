@@ -185,7 +185,7 @@ button{cursor:pointer}
 #ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;display:none;align-items:flex-end;justify-content:center}
 #ov.show{display:flex}
 #sheet{background:white;border-radius:20px 20px 0 0;padding:20px 16px 36px;width:100%;max-width:640px;max-height:92dvh;overflow-y:auto}
-.sh-title{font-size:1.05rem;font-weight:700;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}
+.sh-title{font-size:1.05rem;font-weight:700;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}.cp-item{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;border-bottom:1px solid #e8e8e8;transition:background .15s}.cp-item:last-child{border-bottom:none}.cp-item:active{background:#e3ecf7}.cp-nom{font-size:.97rem;font-weight:500;color:#222}.cp-ha{font-size:.82rem;color:#888;white-space:nowrap;margin-left:8px}.cp-sel{background:#e3ecf7!important}.cp-sel .cp-nom{color:#1565C0;font-weight:700}
 .sh-x{background:none;border:none;font-size:1.5rem;color:#bbb;line-height:1}
 
 /* Login special */
@@ -4309,17 +4309,21 @@ async function openCambiarPotrero(loteId,cicloId,potreroActualId) {
   const dispon = pots.filter(p => p.estado !== 'OCUPADO').sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}))
   const potActual = await db.potreros.get(potreroActualId)
   if (!dispon.length) { showToast('No hay potreros disponibles para rotar','err',3500); return }
-  const optsHtml = dispon.map(p=>`<option value="${p.id}">${p.nombre} (${p.areaHa?.toFixed(1)||0} ha)</option>`).join('')
+  window._cpPotreros = dispon
+  window._cpSelId = null
+  const listHtml = dispon.map(p=>`
+    <div class="cp-item" data-id="${p.id}" data-nom="${escH(p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''))}" onclick="cpSeleccionar(${p.id},this)">
+      <span class="cp-nom">${escH(p.nombre)}</span>
+      <span class="cp-ha">${p.areaHa?.toFixed(1)||0} ha</span>
+    </div>`).join('')
   showSheet(`
     <div class="sh-title">🔄 Rotar potrero<button class="sh-x" onclick="closeSheet()">✕</button></div>
-    <p class="sm gray mb12">Potrero actual: <strong>${potActual?.nombre||'—'}</strong></p>
-    <div class="field"><label>Nuevo potrero *</label>
-      <input id="cp-buscar" class="inp" type="text" placeholder="🔍 Buscar potrero…" oninput="cpFiltrar()" autocomplete="off" style="margin-bottom:6px;">
-      <select id="cp-pot" class="inp" size="5" style="height:auto;">
-        <option value="">— Seleccionar —</option>
-        ${optsHtml}
-      </select>
-      <p id="cp-sin" class="sm gray" style="display:none;margin-top:4px;">Sin resultados</p>
+    <p class="sm gray mb12">Potrero actual: <strong>${escH(potActual?.nombre||'—')}</strong></p>
+    <div class="field">
+      <label>Nuevo potrero *</label>
+      <input id="cp-buscar" class="inp" type="text" placeholder="🔍 Buscar potrero…" oninput="cpFiltrar()" autocomplete="off" style="margin-bottom:8px;">
+      <div id="cp-lista" style="max-height:220px;overflow-y:auto;border:1.5px solid #e0e0e0;border-radius:10px;background:#f8f8f8;">${listHtml}</div>
+      <p id="cp-sin" class="sm gray" style="display:none;margin-top:6px;text-align:center;">Sin resultados</p>
     </div>
     <div class="field"><label>Fecha de rotación</label>
       <input id="cp-f" class="inp" type="date" value="${toD(Date.now())}"></div>
@@ -4328,28 +4332,33 @@ async function openCambiarPotrero(loteId,cicloId,potreroActualId) {
       <button class="btn btn-b" onclick="saveCambiarPotrero(${loteId},${cicloId},${potreroActualId})">Confirmar rotación</button>
     </div>`)
 }
+function cpSeleccionar(id, el) {
+  window._cpSelId = id
+  document.querySelectorAll('.cp-item').forEach(e=>e.classList.remove('cp-sel'))
+  el.classList.add('cp-sel')
+}
 function cpFiltrar() {
   const q = ($('cp-buscar')?.value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-  const sel = $('cp-pot')
-  if (!sel) return
+  const items = document.querySelectorAll('.cp-item')
   let visibles = 0
-  for (const opt of sel.options) {
-    if (!opt.value) continue
-    const txt = opt.textContent.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    const show = txt.includes(q)
-    opt.style.display = show ? '' : 'none'
+  items.forEach(el => {
+    const nom = el.dataset.nom||''
+    const show = nom.includes(q)
+    el.style.display = show ? '' : 'none'
     if (show) visibles++
-  }
+  })
   const sin = $('cp-sin')
   if (sin) sin.style.display = visibles === 0 ? '' : 'none'
-  // Limpiar selección si el opción seleccionada quedó oculta
-  const selOpt = sel.options[sel.selectedIndex]
-  if (selOpt && selOpt.style.display === 'none') sel.value = ''
+  // Si el ítem seleccionado quedó oculto, deseleccionar
+  if (window._cpSelId) {
+    const selEl = document.querySelector(`.cp-item[data-id="${window._cpSelId}"]`)
+    if (selEl && selEl.style.display === 'none') { window._cpSelId = null; selEl.classList.remove('cp-sel') }
+  }
 }
 
 async function saveCambiarPotrero(loteId,cicloId,potreroActualId) {
-  const potId = parseInt($('cp-pot')?.value)
-  if (!potId) { const f=$('cp-pot');if(f){f.style.border='2px solid #C62828';f.focus()};showToast('Selecciona un potrero','err'); return }
+  const potId = window._cpSelId ? parseInt(window._cpSelId) : 0
+  if (!potId) { const lista=$('cp-lista');if(lista){lista.style.border='2px solid #C62828'};showToast('Selecciona un potrero','err'); return }
   const btn = document.querySelector('#ov .btn-b')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
   try {
