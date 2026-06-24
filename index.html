@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260622-001'
+const APP_VERSION = '20260624-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1189,11 +1189,11 @@ async function pgDashboard() {
   const catResumen = catOrdenDash.map(k => {
     const [bg,fg] = (catColors[k]||'#F5F5F5,#555').split(',')
     const n = catCount[k] || 0
-    const opacity = n === 0 ? 'opacity:.4;' : ''
-    return `<div style="${opacity}display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;background:${bg}"><span style="width:4px;height:32px;border-radius:3px;background:${fg};flex-shrink:0"></span><span style="flex:1;font-size:.82rem;font-weight:700;color:${fg}">${CAT[k]||k}</span><span style="font-size:1.3rem;font-weight:900;color:${fg};min-width:36px;text-align:right">${n}</span></div>`
+    const opacity = n === 0 ? 'opacity:.35;' : ''
+    return `<div style="${opacity}display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:7px 4px;border-radius:10px;background:${bg};border-bottom:3px solid ${fg}"><span style="font-size:1.25rem;font-weight:900;color:${fg};line-height:1">${n}</span><span style="font-size:.64rem;font-weight:700;color:${fg};text-align:center;line-height:1.1">${k}</span></div>`
   }).join('')
   const catExtra = Object.keys(catCount).filter(k=>!catOrdenDash.includes(k)).map(k =>
-    `<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;background:#F5F5F5"><span style="width:4px;height:32px;border-radius:3px;background:#999;flex-shrink:0"></span><span style="flex:1;font-size:.82rem;font-weight:700;color:#555">${CAT[k]||k}</span><span style="font-size:1.3rem;font-weight:900;color:#555;min-width:36px;text-align:right">${catCount[k]}</span></div>`
+    `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:7px 4px;border-radius:10px;background:#F5F5F5;border-bottom:3px solid #999"><span style="font-size:1.25rem;font-weight:900;color:#555;line-height:1">${catCount[k]}</span><span style="font-size:.64rem;font-weight:700;color:#555;text-align:center;line-height:1.1">${k}</span></div>`
   ).join('')
 
   // Período para rendimiento
@@ -1341,9 +1341,11 @@ async function pgDashboard() {
     </div>
 
     ${(catResumen||catExtra)?`<div class="card mb8">
-      <p class="sec" style="margin-top:0;margin-bottom:10px">🐄 Animales por categoría</p>
-      <div style="display:flex;flex-direction:column;gap:5px">${catResumen}${catExtra}</div>
-      <p class="xs gray" style="margin-top:8px;text-align:right">${animales.length} animales totales</p>
+      <div class="row-b" style="margin-bottom:8px">
+        <p class="sec" style="margin:0">🐄 Animales por categoría</p>
+        <p class="xs gray">${animales.length} totales</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:5px">${catResumen}${catExtra}</div>
     </div>`:''}
 
     <div class="card mb8">
