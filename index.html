@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260624-001'
+const APP_VERSION = '20260626-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -3990,6 +3990,7 @@ async function pgLoteFicha({id}) {
       : `<button class="btn btn-g btn-sm" onclick="openIngresarLote(${id})">🌿 Ingresar a potrero</button>`
     }
     <button class="btn btn-out btn-sm" onclick="openAgregarAnimal(${id})">+ Animal</button>
+    ${animales.length?`<button class="btn btn-sm btn-p" onclick="openVentaDesdeLote(${id})">💰 Venta</button>`:''}
   </div>
   <div class="card mb12">
     <p class="bold sm mb8">📈 Rendimiento del lote</p>
@@ -5980,17 +5981,19 @@ async function pgVentas() {
     <button class="btn btn-sm btn-gray" style="flex:1" onclick="exportarVentasExcel()">📊 Excel</button>
   </div>`
 
-  // Lista agrupada por mes
-  const grupos = {}
+  // ── Agrupar por TRANSACCIÓN (fecha + comprador) ──────────────────
+  // Cada transacción es una venta realizada el mismo día al mismo comprador
+  const txMap = {}
   for (const a of filtrados) {
-    const d = a.fechaBaja ? new Date(a.fechaBaja) : null
-    const key = d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` : '0000-00'
-    const label = d ? `${MESES[d.getMonth()]} ${d.getFullYear()}` : 'Sin fecha'
-    if (!grupos[key]) grupos[key] = {label, items:[]}
-    grupos[key].items.push(a)
+    const dateKey = a.fechaBaja ? new Date(a.fechaBaja).toISOString().slice(0,10) : '0000-00-00'
+    const buyKey  = (a.comprador||'').trim().toLowerCase()
+    const txKey   = dateKey + '|' + buyKey
+    if (!txMap[txKey]) txMap[txKey] = { fechaBaja: a.fechaBaja, comprador: a.comprador||null, items: [], key: txKey }
+    txMap[txKey].items.push(a)
   }
+  const txList = Object.values(txMap).sort((a,b) => (b.fechaBaja||0)-(a.fechaBaja||0))
 
-  // Botón eliminar seleccionados
+  // ── Botón eliminar seleccionados ──────────────────────────────────
   const barraElim = `<div id="vt-barra-elim" style="display:none;background:#FFEBEE;border:1.5px solid #EF9A9A;border-radius:10px;padding:8px 12px;margin-bottom:10px;align-items:center;justify-content:space-between">
     <span class="xs bold" style="color:#C62828" id="vt-barra-cnt">0 seleccionadas</span>
     <div style="display:flex;gap:8px">
@@ -5999,32 +6002,93 @@ async function pgVentas() {
     </div>
   </div>`
 
+  // ── Renderizar tarjetas de transacciones ──────────────────────────
   let lista = ''
-  for (const key of Object.keys(grupos).sort().reverse()) {
-    const g = grupos[key]
-    let gValor = 0
-    const rows = g.items.map(a => {
+  for (const tx of txList) {
+    const txValor   = tx.items.reduce((s,a) => s+(a.valorVenta||0), 0)
+    const txAnimales= tx.items.length
+    const txPeso    = tx.items.reduce((s,a) => s+(a.pesoVenta||0), 0)
+    const txPxkg    = txPeso > 0 ? Math.round(txValor/txPeso) : null
+    const txFecha   = tx.fechaBaja ? fd(tx.fechaBaja) : 'Sin fecha'
+    const txIds     = tx.items.map(a=>a.id).join(',')
+
+    // Filas internas de animales (ocultas por defecto)
+    const innerRows = tx.items.map(a => {
       const valV = a.valorVenta || 0
-      if (valV) gValor += valV
-      return `<button onclick="vtToggleSel(${a.id},this)" data-vid="${a.id}"
-        style="display:flex;align-items:center;gap:10px;width:100%;border:none;border-bottom:1px solid #f4f4f4;background:white;padding:10px 0;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
-        <div id="vt-chk-${a.id}" style="width:20px;height:20px;border-radius:50%;border:2px solid #ddd;flex-shrink:0;display:flex;align-items:center;justify-content:center"></div>
+      return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f0f0f0">
+        <div id="vt-chk-${a.id}" onclick="vtToggleSelEl(${a.id},this)" style="width:20px;height:20px;border-radius:50%;border:2px solid #ddd;flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer"></div>
         <div style="flex:1;min-width:0">
-          <p style="font-size:.88rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''}</p>
-          <p style="font-size:.72rem;color:#aaa">${a.fechaBaja?fd(a.fechaBaja):'Sin fecha'}</p>
+          <p style="font-size:.85rem;font-weight:700">${a.arete}${a.nombre?` <span style="font-weight:400;color:#888">— ${a.nombre}</span>`:''}</p>
+          <p style="font-size:.72rem;color:#aaa">${a.categoria||''} · ${a.pesoVenta?a.pesoVenta+' kg':'sin peso'}</p>
         </div>
-        <p style="font-size:.9rem;font-weight:800;color:#1565C0;flex-shrink:0;margin-right:6px">${valV?fmt(valV):'—'}</p>
-        <button onclick="event.stopPropagation();openDetalleVenta(${a.id})" style="border:1.5px solid #e0e0e0;background:white;color:#555;border-radius:8px;padding:5px 10px;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0">Ver</button>
-      </button>`
+        <p style="font-size:.88rem;font-weight:800;color:#1565C0;flex-shrink:0;margin-right:6px">${valV?fmt(valV):'—'}</p>
+        <button onclick="openDetalleVenta(${a.id})" style="border:1.5px solid #e0e0e0;background:white;color:#555;border-radius:8px;padding:5px 10px;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0">Ver</button>
+      </div>`
     }).join('')
-    lista += `<p class="sec" style="text-transform:capitalize">${g.label}
-      <span class="xs gray" style="font-weight:400;margin-left:6px">${g.items.length} venta${g.items.length>1?'s':''} · ${fmt(gValor)}</span></p>
-    <div class="card mb8">${rows}</div>`
+
+    lista += `<div class="card mb10" style="padding:0;overflow:hidden">
+      <!-- Cabecera de la transacción -->
+      <button onclick="vtToggleTx(this)" style="display:flex;align-items:center;gap:10px;width:100%;border:none;background:white;padding:13px 14px;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+            <p style="font-size:1rem;font-weight:800;color:#1a1a1a">${fmt(txValor)}</p>
+            <p style="font-size:.75rem;color:#888">${txAnimales} animal${txAnimales>1?'es':''} · ${Math.round(txPeso)} kg${txPxkg?' · '+fmt2d(txPxkg)+'/kg':''}</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:3px;flex-wrap:wrap">
+            <span style="font-size:.78rem;font-weight:700;color:#388E3C;background:#E8F5E9;border-radius:6px;padding:2px 8px">${txFecha}</span>
+            ${tx.comprador?`<span style="font-size:.75rem;color:#666">👤 ${tx.comprador}</span>`:''}
+          </div>
+        </div>
+        <span class="vt-tx-ico" style="font-size:1.1rem;color:#aaa;flex-shrink:0;transition:transform .2s">▾</span>
+      </button>
+      <!-- Detalle de animales (colapsable) -->
+      <div class="vt-tx-detail" style="display:none;padding:0 14px 4px">
+        ${innerRows}
+      </div>
+    </div>`
   }
 
   // Restaurar estado visual de selección tras render
   setTimeout(() => vtRestaurarSel(), 0)
   return segModo + selector + kpis + exportBtns + barraElim + lista
+}
+
+// ── Helper formato precio por kg ─────────────────────────────────
+function fmt2d(v) { return '$'+Math.round(v).toLocaleString('es-CO') }
+
+// ── Toggle expandir/colapsar tarjeta de transacción ──────────────
+function vtToggleTx(btn) {
+  const card   = btn.closest('.card')
+  const detail = card.querySelector('.vt-tx-detail')
+  const ico    = btn.querySelector('.vt-tx-ico')
+  const open   = detail.style.display === 'block'
+  detail.style.display = open ? 'none' : 'block'
+  if (ico) ico.style.transform = open ? '' : 'rotate(180deg)'
+}
+
+// ── Toggle selección desde fila interna ──────────────────────────
+function vtToggleSelEl(id, chkEl) {
+  const fakeBtn = { dataset:{ vid: id }, id:'vt-chk-'+id }
+  // reusar lógica existente simulando el elemento
+  if (_vtSel.has(id)) {
+    _vtSel.delete(id)
+    chkEl.style.border='2px solid #ddd'
+    chkEl.style.background=''
+    chkEl.innerHTML=''
+    const row = chkEl.closest('div[style*="display:flex"]')
+    if (row) row.style.background=''
+  } else {
+    _vtSel.add(id)
+    chkEl.style.border='2px solid #C62828'
+    chkEl.style.background='#C62828'
+    chkEl.innerHTML='<span style="color:white;font-size:.7rem">✓</span>'
+    const row = chkEl.closest('div[style*="display:flex"]')
+    if (row) row.style.background='#FFF5F5'
+  }
+  const barra = document.getElementById('vt-barra-elim')
+  const cnt   = document.getElementById('vt-barra-cnt')
+  if (barra) barra.style.display = _vtSel.size ? 'flex' : 'none'
+  if (cnt)   cnt.textContent = `${_vtSel.size} venta${_vtSel.size>1?'s':''} seleccionada${_vtSel.size>1?'s':''}`
 }
 
 // ── Selección de ventas para eliminar ─────────────────────────────
@@ -6151,44 +6215,164 @@ async function openDetalleVenta(id) {
 // ── Estado selección de animales para venta ─────────────────────
 let _rvSel = new Set()       // IDs seleccionados
 let _rvAnimales = []         // todos los activos cargados
-let _rvFiltrados = []        // después de búsqueda
+let _rvFiltrados = []        // después de búsqueda en pestaña animal
 let _rvModoPrecio = 'pxkg'  // 'pxkg' | 'total' | 'cabeza'
 let _rvPesos = {}            // { [id]: kg } pesos editados en modo pxkg
+let _rvTab = 'lotes'         // 'lotes' | 'animales'
+let _rvLotes = []            // lotes con sus animales para pestaña lotes
+let _rvLoteExp = new Set()   // IDs de lotes expandidos
+
+async function _rvCargarAnimales() {
+  const activos = await db.animales.where('activo').equals(1).toArray()
+  const lotes = await db.lotes.where('activo').equals(1).toArray()
+  const loteMap = Object.fromEntries(lotes.map(l=>[l.id, l]))
+  _rvAnimales = await Promise.all(activos.map(async a => {
+    const ult = await getPesoActual(a.id)
+    return { ...a, _pesoAct: ult?.pesoKg || a.pesoInicial || 0, _loteNom: a.loteId ? (loteMap[a.loteId]?.nombre||'Sin lote') : 'Sin lote' }
+  }))
+  _rvAnimales.sort((a,b) => a._loteNom.localeCompare(b._loteNom) || a.arete.localeCompare(b.arete))
+  // Construir estructura de lotes para pestaña lotes
+  const loteIdx = {}
+  for (const a of _rvAnimales) {
+    const k = a.loteId || 0
+    if (!loteIdx[k]) loteIdx[k] = { id: k, nombre: a._loteNom, animales: [] }
+    loteIdx[k].animales.push(a)
+  }
+  _rvLotes = Object.values(loteIdx).sort((a,b) => a.nombre.localeCompare(b.nombre))
+}
+
+function _rvRenderPag() {
+  const pg = $('pg')
+  const s = _rvSel.size
+  const btnCont = s > 0 ? `<button onclick="rvAbrirSheet()" class="btn btn-g btn-sm">Continuar (${s}) →</button>` : ''
+  pg.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <button onclick="rvCancelarBusqueda()" style="border:none;background:none;font-size:1.4rem;padding:4px;cursor:pointer;color:#333">←</button>
+      <p style="font-size:1rem;font-weight:700;flex:1">💰 Seleccionar animales</p>
+      <span id="rv-btn-continuar">${btnCont}</span>
+    </div>
+    <div class="seg mb10">
+      <button id="rv-tab-lotes" class="${_rvTab==='lotes'?'on':''}" onclick="rvSetTab('lotes')">🐄 Por lote</button>
+      <button id="rv-tab-ani"   class="${_rvTab==='animales'?'on':''}" onclick="rvSetTab('animales')">🔍 Por animal</button>
+    </div>
+    <div id="rv-cuerpo"></div>
+    <div id="rv-sel-previa" style="${s?'':'display:none'};margin-top:12px">
+      <p class="xs bold" style="color:#2E7D32;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">✓ Seleccionados (${s})</p>
+      <div id="rv-sel-chips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+    </div>`
+  if (_rvTab === 'lotes') rvRenderTabLotes()
+  else rvRenderTabAnimales()
+  rvUpdChips()
+}
+
+function rvSetTab(tab) {
+  _rvTab = tab
+  _rvRenderPag()
+}
+
+function rvRenderTabLotes() {
+  const el = document.getElementById('rv-cuerpo')
+  if (!el) return
+  if (!_rvLotes.length) { el.innerHTML = '<div class="empty"><p>Sin lotes activos</p></div>'; return }
+  let html = ''
+  for (const lote of _rvLotes) {
+    const ids = lote.animales.map(a=>a.id)
+    const selCount = ids.filter(id=>_rvSel.has(id)).length
+    const todosSelLote = selCount === ids.length
+    const exp = _rvLoteExp.has(lote.id)
+    html += `<div style="border-radius:12px;overflow:hidden;margin-bottom:8px;border:1.5px solid ${todosSelLote?'#A5D6A7':selCount>0?'#FFD54F':'#e0e0e0'}">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${todosSelLote?'#E8F5E9':selCount>0?'#FFFDE7':'#f8f8f8'};cursor:pointer" onclick="rvToggleExpLote(${lote.id})">
+        <div style="flex:1;min-width:0">
+          <p style="font-size:.9rem;font-weight:700">${lote.nombre}</p>
+          <p style="font-size:.72rem;color:#888">${ids.length} animal${ids.length!==1?'es':''} · ${selCount} seleccionado${selCount!==1?'s':''}</p>
+        </div>
+        <button onclick="event.stopPropagation();rvToggleLote(${lote.id})"
+          style="border:none;border-radius:8px;padding:6px 11px;font-size:.78rem;font-weight:700;cursor:pointer;white-space:nowrap;
+          background:${todosSelLote?'#C62828':'#2E7D32'};color:white">
+          ${todosSelLote?'✕ Quitar':'✓ Todos'}
+        </button>
+        <span style="font-size:.85rem;color:#999;margin-left:2px">${exp?'▲':'▼'}</span>
+      </div>`
+    if (exp) {
+      html += `<div style="border-top:1px solid #e8e8e8">`
+      for (const a of lote.animales) {
+        const sel = _rvSel.has(a.id)
+        html += `<button onclick="rvToggle(${a.id})" style="display:flex;align-items:center;gap:10px;padding:8px 12px;width:100%;border:none;border-bottom:1px solid #f4f4f4;background:${sel?'#F1F8E9':'white'};text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
+          <div style="width:20px;height:20px;border-radius:50%;border:2px solid ${sel?'#2E7D32':'#ccc'};background:${sel?'#2E7D32':'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            ${sel?'<span style="color:white;font-size:11px;font-weight:700">✓</span>':''}
+          </div>
+          <div style="flex:1;min-width:0;text-align:left">
+            <p style="font-size:.83rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''} <span style="font-size:.63rem;background:#E3F2FD;color:#1565C0;border-radius:4px;padding:1px 5px">${a.categoria||''}</span></p>
+            <p style="font-size:.7rem;color:#888">${a.raza||''}</p>
+          </div>
+          <p style="font-size:.82rem;font-weight:700;color:#333;flex-shrink:0">${a._pesoAct.toFixed(1)} kg</p>
+        </button>`
+      }
+      html += `</div>`
+    }
+    html += `</div>`
+  }
+  el.innerHTML = html
+}
+
+function rvRenderTabAnimales() {
+  const el = document.getElementById('rv-cuerpo')
+  if (!el) return
+  el.innerHTML = `
+    <input id="rv-bus" class="inp" placeholder="🔍 Buscar por arete, nombre o lote…" oninput="rvFiltrar()" autocomplete="off" style="margin-bottom:8px">
+    <p class="xs gray mb8" id="rv-ncnt">Escribe para buscar</p>
+    <div id="rv-lista"></div>`
+  // Re-aplicar búsqueda si había texto previo
+}
+
+function rvToggleExpLote(loteId) {
+  if (_rvLoteExp.has(loteId)) _rvLoteExp.delete(loteId)
+  else _rvLoteExp.add(loteId)
+  rvRenderTabLotes()
+}
+
+function rvToggleLote(loteId) {
+  const lote = _rvLotes.find(l=>l.id===loteId)
+  if (!lote) return
+  const ids = lote.animales.map(a=>a.id)
+  const todos = ids.every(id=>_rvSel.has(id))
+  if (todos) ids.forEach(id=>_rvSel.delete(id))
+  else ids.forEach(id=>_rvSel.add(id))
+  _rvRenderPag()
+}
 
 async function openRegistrarVenta() {
   _rvSel = new Set()
   _rvModoPrecio = 'pxkg'
   _rvPesos = {}
+  _rvFiltrados = []
+  _rvTab = 'lotes'
+  _rvLoteExp = new Set()
   const activos = await db.animales.where('activo').equals(1).toArray()
   if (!activos.length) { showToast('No hay animales activos','err'); return }
-  const lotes = await db.lotes.where('activo').equals(1).toArray()
-  const loteMap = Object.fromEntries(lotes.map(l=>[l.id, l.nombre]))
-  _rvAnimales = await Promise.all(activos.map(async a => {
-    const ult = await getPesoActual(a.id)
-    return { ...a, _pesoAct: ult?.pesoKg || a.pesoInicial || 0, _loteNom: a.loteId ? (loteMap[a.loteId]||'Sin lote') : 'Sin lote' }
-  }))
-  _rvAnimales.sort((a,b) => a._loteNom.localeCompare(b._loteNom) || a.arete.localeCompare(b.arete))
+  await _rvCargarAnimales()
+  _rvRenderPag()
+}
+
+async function openVentaDesdeLote(loteId) {
+  loteId = parseInt(loteId)
+  _rvSel = new Set()
+  _rvModoPrecio = 'pxkg'
+  _rvPesos = {}
   _rvFiltrados = []
-  // Mostrar buscador en la página normal (fuera del sheet)
-  const pg = $('pg')
-  pg.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-      <button onclick="rvCancelarBusqueda()" style="border:none;background:none;font-size:1.4rem;padding:4px;cursor:pointer;color:#333">←</button>
-      <p style="font-size:1rem;font-weight:700;flex:1">💰 Seleccionar animales</p>
-      <button onclick="rvAbrirSheet()" class="btn btn-g btn-sm" id="rv-btn-continuar" style="display:none">Continuar →</button>
-    </div>
-    <input id="rv-bus" class="inp" placeholder="🔍 Buscar por arete, nombre o lote…" oninput="rvFiltrar()" autocomplete="off" style="margin-bottom:8px" autofocus>
-    <p class="xs gray mb8" id="rv-ncnt">Escribe para buscar</p>
-    <div id="rv-lista"></div>
-    <div id="rv-sel-previa" style="display:none;margin-top:16px">
-      <p class="xs bold" style="color:#2E7D32;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">✓ Seleccionados</p>
-      <div id="rv-sel-chips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-    </div>`
-  document.getElementById('rv-bus')?.focus()
+  _rvTab = 'lotes'
+  _rvLoteExp = new Set([loteId])   // ese lote expandido
+  const activos = await db.animales.where('activo').equals(1).toArray()
+  if (!activos.length) { showToast('No hay animales activos','err'); return }
+  await _rvCargarAnimales()
+  // Seleccionar todos los del lote
+  const lote = _rvLotes.find(l=>l.id===loteId)
+  if (lote) lote.animales.forEach(a=>_rvSel.add(a.id))
+  _rvRenderPag()
 }
 
 function rvCancelarBusqueda() {
-  _rvSel = new Set(); _rvPesos = {}; _rvFiltrados = []
+  _rvSel = new Set(); _rvPesos = {}; _rvFiltrados = []; _rvLoteExp = new Set()
   go('ventas')
 }
 
@@ -6237,6 +6421,7 @@ function rvFiltrar() {
     if (cnt) cnt.textContent = 'Escribe para buscar'
     const el = document.getElementById('rv-lista')
     if (el) el.innerHTML = ''
+    rvUpdBtnContinuar()
     return
   }
   _rvFiltrados = _rvAnimales.filter(a =>
@@ -6276,26 +6461,45 @@ function rvRenderLista() {
   }
   el.innerHTML = html
   rvUpdContador()
-  // Mostrar/ocultar botón continuar
-  const btnCont = document.getElementById('rv-btn-continuar')
-  if (btnCont) btnCont.style.display = _rvSel.size > 0 ? 'block' : 'none'
+  rvUpdBtnContinuar()
 }
 
 function rvToggle(id) {
   if (_rvSel.has(id)) _rvSel.delete(id); else _rvSel.add(id)
-  rvRenderLista()
-  rvUpdChips()
-  rvUpdSeleccionados()
-  rvUpdResumen()
+  if (_rvTab === 'lotes') {
+    rvRenderTabLotes()
+    rvUpdChips()
+    rvUpdBtnContinuar()
+    rvUpdSelPreviaCount()
+  } else {
+    rvRenderLista()
+    rvUpdChips()
+    rvUpdBtnContinuar()
+    rvUpdSelPreviaCount()
+  }
+}
+
+function rvUpdBtnContinuar() {
+  const s = _rvSel.size
+  const el = document.getElementById('rv-btn-continuar')
+  if (!el) return
+  el.innerHTML = s > 0 ? `<button onclick="rvAbrirSheet()" class="btn btn-g btn-sm">Continuar (${s}) →</button>` : ''
+}
+
+function rvUpdSelPreviaCount() {
+  const el = document.querySelector('#rv-sel-previa > p.xs')
+  if (!el) return
+  const s = _rvSel.size
+  const wrap = document.getElementById('rv-sel-previa')
+  if (wrap) wrap.style.display = s ? '' : 'none'
+  el.textContent = `✓ Seleccionados (${s})`
 }
 
 function rvUpdChips() {
   const wrap = document.getElementById('rv-sel-previa')
   const chips = document.getElementById('rv-sel-chips')
-  const btnCont = document.getElementById('rv-btn-continuar')
   if (!wrap || !chips) return
-  if (!_rvSel.size) { wrap.style.display='none'; if(btnCont) btnCont.style.display='none'; return }
-  if(btnCont) btnCont.style.display='block'
+  if (!_rvSel.size) { wrap.style.display='none'; return }
   wrap.style.display='block'
   const selAni = _rvAnimales.filter(a => _rvSel.has(a.id))
   chips.innerHTML = selAni.map(a =>
