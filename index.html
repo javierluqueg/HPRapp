@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260627-001'
+const APP_VERSION = '20260627-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -5054,11 +5054,11 @@ async function saveAvanzarRotacion(loteId, idxAct, idxSig, potIdAct, potIdSig) {
   const fecha = $('av-f')?.value ? fromD($('av-f').value) : Date.now()
   const btn=$('av-btn'); if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   try {
-    // Cerrar ciclo actual si existe
-    const cicloAct = await db.ciclos.where({potreroId:potIdAct,loteId,activo:1}).first()
-    if(cicloAct){
-      await fsUpdate('ciclos',cicloAct.id,{activo:0,fechaSalida:fecha})
-      await fsUpdate('potreros',potIdAct,{estado:'EN_DESCANSO',numAnimales:0,loteActual:undefined,fechaSalida:fecha})
+    // Cerrar TODOS los ciclos activos del lote (evita ciclos huérfanos duplicados)
+    const ciclosActLote = await db.ciclos.where({loteId, activo:1}).toArray()
+    for (const c of ciclosActLote) {
+      await fsUpdate('ciclos', c.id, {activo:0, fechaSalida:fecha})
+      await fsUpdate('potreros', c.potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:undefined, fechaSalida:fecha})
     }
     // Abrir nuevo ciclo en siguiente potrero
     const l = await db.lotes.get(loteId)
@@ -6580,6 +6580,25 @@ function rvUpdResumen() {
     <div style="display:flex;justify-content:space-between;border-top:1px solid rgba(0,0,0,.08);margin-top:4px;padding-top:4px"><span>Total venta</span><strong>${fmt(totalVenta)}</strong></div>
     ${util!==null?`<div style="display:flex;justify-content:space-between"><span>Utilidad estimada</span><strong>${util>=0?'+':''}${fmt(util)}</strong></div>`:''}
   `
+}
+
+// Auto-descanso: lote vacío → potrero EN_DESCANSO
+async function checkLoteVacio(loteIds, fechaTs) {
+  const ids = [...new Set(loteIds.filter(Boolean))]
+  for (const loteId of ids) {
+    const restantes = await db.animales.where({ activo: 1, loteId }).count()
+    if (restantes > 0) continue
+    const ciclo = await db.ciclos.where({ loteId, activo: 1 }).first()
+    if (!ciclo) continue
+    await fsUpdate('ciclos', ciclo.id, { activo: 0, fechaSalida: fechaTs || Date.now() })
+    await fsUpdate('potreros', ciclo.potreroId, {
+      estado: 'EN_DESCANSO', numAnimales: 0,
+      loteActual: null, fechaSalida: fechaTs || Date.now()
+    })
+    const potrero = await db.potreros.get(ciclo.potreroId)
+    const nomPot = potrero ? potrero.nombre : 'potrero'
+    showToast('🌿 ' + nomPot + ' pasó a descanso (lote vacío)', 'ok', 4000)
+  }
 }
 
 // Auto-descanso: lote vacío → potrero EN_DESCANSO
