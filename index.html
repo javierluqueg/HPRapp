@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260627-004'
+const APP_VERSION = '20260627-006'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -5898,8 +5898,17 @@ async function setEstadoPotrero(id,estado) {
 // VENTAS
 // ═══════════════════════════════════════════════════
 async function pgVentas() {
-  $('hdrTitle').textContent = '💰 Ventas'
-  $('hdrAct').innerHTML = `<button class="btn btn-sm btn-g" onclick="openRegistrarVenta()">+ Venta</button>`
+  const tipo = _seg['ven_tipo'] || 'ventas'
+  $('hdrTitle').textContent = tipo === 'cesiones' ? '🔄 Cesiones' : '💰 Ventas'
+  $('hdrAct').innerHTML = tipo === 'ventas' ? `<button class="btn btn-sm btn-g" onclick="openRegistrarVenta()">+ Venta</button>` : ''
+
+  // Selector Ventas / Cesiones
+  const tipoSel = `<div class="seg mb10">
+    <button class="${tipo==='ventas'?'on':''}" onclick="_seg['ven_tipo']='ventas';go('ventas')">Ventas</button>
+    <button class="${tipo==='cesiones'?'on':''}" onclick="_seg['ven_tipo']='cesiones';go('ventas')">Cesiones</button>
+  </div>`
+
+  if (tipo === 'cesiones') return tipoSel + await _pgCesiones()
 
   const modo = _seg['ven_modo'] || 'mes'
   const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -5949,9 +5958,9 @@ async function pgVentas() {
   filtrados.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
 
   if (!filtrados.length) {
-    return segModo + selector + `<div class="empty">
+    return tipoSel + segModo + selector + `<div class="empty">
       <div class="eico">💰</div>
-      <p>Sin ventas en este período</p>
+      <p>Sin ventas en este perío do</p>
       <p class="xs gray mt8">Usa el botón <strong>+ Venta</strong> para registrar.</p>
     </div>`
   }
@@ -5994,7 +6003,7 @@ async function pgVentas() {
     <button class="btn btn-sm btn-gray" style="flex:1" onclick="exportarVentasExcel()">📊 Excel</button>
   </div>`
 
-  // // Agrupar por TRANSACCIÓN (fecha + comprador)
+  // Agrupar por TRANSACCIÓN (fecha + comprador)
   const txMap = {}
   for (const a of filtrados) {
     const dateKey = a.fechaBaja ? new Date(a.fechaBaja).toISOString().slice(0,10) : '0000-00-00'
@@ -6056,7 +6065,7 @@ async function pgVentas() {
   }
 
   setTimeout(() => vtRestaurarSel(), 0)
-  return segModo + selector + kpis + exportBtns + barraElim + lista
+  return tipoSel + segModo + selector + kpis + exportBtns + barraElim + lista
 }
 
 function vtToggleTx(btn) {
@@ -6089,6 +6098,8 @@ function vtToggleSelEl(id, chkEl) {
   if (barra) barra.style.display = _vtSel.size ? 'flex' : 'none'
   if (cnt)   cnt.textContent = `${_vtSel.size} venta${_vtSel.size>1?'s':''} seleccionada${_vtSel.size>1?'s':''}`
 }
+
+
 
 // ── Selección de ventas para eliminar ─────────────────────────────
 let _vtSel = new Set()
@@ -6155,6 +6166,90 @@ async function vtConfElim() {
   } catch(e) {
     showToast('Error al eliminar','err',4000)
   }
+}
+
+async function _pgCesiones() {
+  const modo = _seg['ven_modo'] || 'mes'
+  const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+  const fd  = ts => { const d=new Date(ts); return d.getDate()+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear() }
+  const now = new Date()
+  const selMes  = _seg['ven_mes']  ?? now.getMonth()
+  const selAnio = _seg['ven_anio'] ?? now.getFullYear()
+  const anios = []; for (let y=now.getFullYear(); y>=now.getFullYear()-5; y--) anios.push(y)
+
+  const segModo = `<div class="seg mb10">
+    <button class="${modo==='mes'?'on':''}"  onclick="_seg['ven_modo']='mes';go('ventas')">Mes</button>
+    <button class="${modo==='anio'?'on':''}" onclick="_seg['ven_modo']='anio';go('ventas')">Año</button>
+    <button class="${modo==='todo'?'on':''}" onclick="_seg['ven_modo']='todo';go('ventas')">Todo</button>
+  </div>`
+
+  let selector = ''
+  if (modo === 'mes') {
+    selector = `<div style="display:flex;gap:8px;margin-bottom:12px">
+      <select class="inp" style="flex:1" onchange="_seg['ven_mes']=parseInt(this.value);go('ventas')">
+        ${MESES.map((m,i)=>`<option value="${i}" ${i===selMes?'selected':''}>${m}</option>`).join('')}
+      </select>
+      <select class="inp" style="width:90px" onchange="_seg['ven_anio']=parseInt(this.value);go('ventas')">
+        ${anios.map(y=>`<option value="${y}" ${y===selAnio?'selected':''}>${y}</option>`).join('')}
+      </select>
+    </div>`
+  } else if (modo === 'anio') {
+    selector = `<div style="margin-bottom:12px">
+      <select class="inp" style="width:100px" onchange="_seg['ven_anio']=parseInt(this.value);go('ventas')">
+        ${anios.map(y=>`<option value="${y}" ${y===selAnio?'selected':''}>${y}</option>`).join('')}
+      </select>
+    </div>`
+  }
+
+  const todos = (await db.animales.where('activo').equals(0).toArray()).filter(a => a.causaBaja === 'Cesión')
+  const filtrados = todos.filter(a => {
+    if (!a.fechaBaja) return modo === 'todo'
+    const d = new Date(a.fechaBaja)
+    if (modo === 'mes')  return d.getMonth()===selMes && d.getFullYear()===selAnio
+    if (modo === 'anio') return d.getFullYear()===selAnio
+    return true
+  })
+  filtrados.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
+
+  if (!filtrados.length) {
+    return segModo + selector + `<div class="empty"><div class="eico">🔄</div><p>Sin cesiones en este perío do</p></div>`
+  }
+
+  // Agrupar por fecha
+  const txMap = {}
+  for (const a of filtrados) {
+    const dateKey = a.fechaBaja ? new Date(a.fechaBaja).toISOString().slice(0,10) : '0000-00-00'
+    if (!txMap[dateKey]) txMap[dateKey] = { fechaBaja: a.fechaBaja, items: [] }
+    txMap[dateKey].items.push(a)
+  }
+  const txList = Object.values(txMap).sort((a,b) => (b.fechaBaja||0)-(a.fechaBaja||0))
+
+  let lista = ''
+  for (const tx of txList) {
+    const txAnimales = tx.items.length
+    const txFecha    = tx.fechaBaja ? fd(tx.fechaBaja) : 'Sin fecha'
+    const innerRows  = tx.items.map(a => `
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f0f0f0">
+        <div style="flex:1;min-width:0">
+          <p style="font-size:.85rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''}</p>
+          <p style="font-size:.72rem;color:#aaa">${a.categoria||''} · ${a.obsBaja||''}</p>
+        </div>
+      </div>`).join('')
+
+    lista += `<div class="card mb10" style="padding:0;overflow:hidden">
+      <button onclick="vtToggleTx(this)" style="display:flex;align-items:center;gap:10px;width:100%;border:none;background:white;padding:13px 14px;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:baseline;gap:8px">
+            <p style="font-size:.78rem;font-weight:700;color:#388E3C;background:#E8F5E9;border-radius:6px;padding:2px 8px">${txFecha}</p>
+            <p style="font-size:.75rem;color:#888">${txAnimales} animal${txAnimales>1?'es':''}</p>
+          </div>
+        </div>
+        <span class="vt-tx-ico" style="font-size:1.1rem;color:#aaa;flex-shrink:0;transition:transform .2s">▾</span>
+      </button>
+      <div class="vt-tx-detail" style="display:none;padding:0 14px 4px">${innerRows}</div>
+    </div>`
+  }
+  return segModo + selector + lista
 }
 
 async function openDetalleVenta(id) {
