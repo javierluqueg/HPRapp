@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260701-002'
+const APP_VERSION = '20260701-003'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -428,7 +428,7 @@ function scheduleRefresh() {
     const sheetAbierto = $('ov')?.classList.contains('show')
     if (sheetAbierto || _ganSelMode || _loteSelMode || _potSelMode) return
     if (Date.now() < _suppressRefreshUntil) return  // Cambio propio, ignorar
-    go(PAGE, PARAMS)
+    goRefrescar(PAGE, PARAMS)
   }, 2000)  // 2s de delay para agrupar múltiples cambios de otros dispositivos
 }
 
@@ -565,7 +565,7 @@ async function doUndo() {
   _undoOp=null                 // limpiar estado
   hideUndoToast()              // ocultar toast (ya sin _undoOp)
   try{ await fn() }catch(e){ console.error('Undo error:',e) }
-  go(PAGE, PARAMS)
+  goRefrescar(PAGE, PARAMS)
 }
 async function fsDelete(table, id) {
   await db[table].delete(id)
@@ -809,6 +809,13 @@ async function go(page, params={}) {
   }
   catch(e) { console.error('go() error:', page, e); $('pg').innerHTML=`<div style="padding:30px;text-align:center;background:white;border-radius:12px;margin:20px"><div style="font-size:2rem;margin-bottom:10px">❌</div><p style="font-weight:700;color:#C62828;margin-bottom:8px">Error: ${page}</p><p style="font-size:.85rem;color:#555;margin-bottom:16px">${e.message}</p><button onclick="go('dashboard')" class="btn btn-g">🏠 Ir al inicio</button></div>` }
   window.scrollTo(0,0)
+}
+
+// Refresca la página actual sin perder el filtro de categoría/adjudicación
+// activo en Ganado (usado por auto-sync, deshacer y pull-to-refresh)
+function goRefrescar(page, params) {
+  const p = (page==='ganado') ? {...params, _ganPage:(_ganPage||1)} : params
+  return go(page, p)
 }
 
 // ═══════════════════════════════════════════════════
@@ -8690,7 +8697,7 @@ updateOfflineBanner()
     resetPtr()
     if (dist > 80 && USER && !['login','setup','bienvenida'].includes(PAGE)) {
       showToast('Actualizando…','ok',1500)
-      setTimeout(() => go(PAGE, PARAMS), 300)
+      setTimeout(() => goRefrescar(PAGE, PARAMS), 300)
     }
   }, {passive:true})
 
