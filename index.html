@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260701-004'
+const APP_VERSION = '20260701-005'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1878,7 +1878,10 @@ async function pgGanado() {
       </button>` : ''
 
   return `${resumenGan}
-    <input id="ganBusq" class="inp mb8" placeholder="🔍 Buscar por arete, raza, color, descripción…" value="${_ganBusq}" oninput="_ganBusq=this.value;filtGanado(this.value)">
+    <div class="inp-wrap mb8">
+      <input id="ganBusq" class="inp" placeholder="🔍 Buscar por arete, raza, color, descripción…" value="${_ganBusq}" oninput="_ganBusq=this.value;filtGanado(this.value);document.getElementById('ganBusqClear').style.display=this.value?'flex':'none'">
+      <span id="ganBusqClear" onclick="limpiarBusqGanado()" style="display:${_ganBusq?'flex':'none'};position:absolute;right:10px;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;background:#ddd;color:#555;align-items:center;justify-content:center;font-size:.85rem;cursor:pointer;pointer-events:auto">✕</span>
+    </div>
     ${filtros}
     <div id="gList">${secSin}${secCon}</div>
     ${btnVerMas}`
@@ -2098,6 +2101,13 @@ async function reRenderCardsGanado(){
 
 function filtGanado(q){
   reRenderCardsGanado()
+}
+function limpiarBusqGanado(){
+  _ganBusq=''
+  const inp=$('ganBusq'); if(inp) inp.value=''
+  const x=$('ganBusqClear'); if(x) x.style.display='none'
+  reRenderCardsGanado()
+  if(inp) inp.focus()
 }
 function filtCat(cat){
   _ganFiltroCat = cat
