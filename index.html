@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260701-003'
+const APP_VERSION = '20260701-004'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -638,7 +638,7 @@ let _potTab='potreros'
 let _prodLoteId=null, _prodLoteDesde=null, _prodLoteHasta=null
 let _prodRotId=null,  _prodRotDesde=null,  _prodRotHasta=null
 let _ganSelMode=false, _ganSelected=new Set(), _ganAll=[]
-let _ganFiltroAdj=null, _ganFiltroCat=''  // null|'sin'|'con'
+let _ganFiltroAdj=null, _ganFiltroCat='', _ganBusq=''  // null|'sin'|'con'
 // IDs capturados al abrir una sheet masiva (protege contra scheduleRefresh que resetea _ganSelected)
 let _sheetBajaIds=[], _sheetLoteIds=[], _sheetLaborIds=[], _sheetLoteSnaps=[], _sheetDescIds=[], _sheetCatIds=[]
 let _sheetQuitarIds=[], _sheetQuitarSnaps=[], _aqAccion=null
@@ -1762,7 +1762,7 @@ function logOut(){USER=null;_loginUser=null;try{sessionStorage.removeItem('hpr_u
 // ═══════════════════════════════════════════════════
 async function pgGanado() {
   const esVerMas = !!PARAMS._ganPage
-  if(!esVerMas){ _ganSelMode=false; _ganSelected=new Set(); _ganFiltroAdj=null; _ganFiltroCat='' }
+  if(!esVerMas){ _ganSelMode=false; _ganSelected=new Set(); _ganFiltroAdj=null; _ganFiltroCat=''; _ganBusq='' }
   _ganPage = PARAMS._ganPage || 1
   updHdrGanado()
   const animales=await db.animales.where('activo').equals(1).toArray()
@@ -1774,8 +1774,10 @@ async function pgGanado() {
   const loteMap=Object.fromEntries(lotes.map(l=>[l.id,l]))
   const aniConLote=animales.filter(a=>a.loteId)
   const aniSinLote=animales.filter(a=>!a.loteId)
-  // Listas para armar tarjetas/paginación: respetan el filtro de categoría/adjudicación activo
-  let aniSinLoteF = aniSinLote, aniConLoteF = aniConLote
+  // Listas para armar tarjetas/paginación: respetan el filtro de categoría/adjudicación/búsqueda activo
+  const busqL = _ganBusq.toLowerCase()
+  const pasaBusq = a => !busqL || (a.arete+' '+(a.nombre||'')+' '+(a.raza||'')+' '+(a.color||'')+' '+(a.descripcion||'')+' '+(a.categoria||'')).toLowerCase().includes(busqL)
+  let aniSinLoteF = aniSinLote.filter(pasaBusq), aniConLoteF = aniConLote.filter(pasaBusq)
   if(_ganFiltroCat){ aniSinLoteF = aniSinLoteF.filter(a=>a.categoria===_ganFiltroCat); aniConLoteF = aniConLoteF.filter(a=>a.categoria===_ganFiltroCat) }
   if(_ganFiltroAdj==='sin') aniConLoteF = []
   if(_ganFiltroAdj==='con') aniSinLoteF = []
@@ -1876,7 +1878,7 @@ async function pgGanado() {
       </button>` : ''
 
   return `${resumenGan}
-    <input id="ganBusq" class="inp mb8" placeholder="🔍 Buscar por arete, raza, color, descripción…" oninput="filtGanado(this.value)">
+    <input id="ganBusq" class="inp mb8" placeholder="🔍 Buscar por arete, raza, color, descripción…" value="${_ganBusq}" oninput="_ganBusq=this.value;filtGanado(this.value)">
     ${filtros}
     <div id="gList">${secSin}${secCon}</div>
     ${btnVerMas}`
