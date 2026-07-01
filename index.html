@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260701-006'
+const APP_VERSION = '20260701-007'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6989,6 +6989,7 @@ async function exportarVentasExcel() {
   const wb = XLSX.utils.book_new()
   const rows = lista.map(a=>({
     'Arete':a.arete,'Nombre':a.nombre||'','Categoría':CAT[a.categoria]||a.categoria,
+    'Lote':a.loteNombreSalida||'',
     'Fecha Venta':a.fechaBaja?fd(a.fechaBaja):'',
     'Peso Entrada (kg)':a.pesoInicial||0,'Peso Salida (kg)':a.pesoVenta||0,
     'Δ Peso (kg)':((a.pesoVenta||0)-(a.pesoInicial||0)),
@@ -7012,7 +7013,7 @@ async function exportarVentasExcel() {
 // ═══════════════════════════════════════════════════
 // REPORTE DE RENDIMIENTO (activos + vendidos + bajas)
 // ═══════════════════════════════════════════════════
-async function renderRendimiento(){
+async function calcRendimientoFilas(){
   const [animales, lotes, pesajesAll] = await Promise.all([
     db.animales.toArray(), db.lotes.toArray(), db.pesajes.orderBy('fecha').toArray()
   ])
@@ -7020,7 +7021,7 @@ async function renderRendimiento(){
   const psMap = {}
   for(const p of pesajesAll){ (psMap[p.animalId] ||= []).push(p) }  // ya vienen ordenados por fecha asc
 
-  const filas = animales.map(a=>{
+  return animales.map(a=>{
     const ps = psMap[a.id]||[]
     const activo = a.activo===1
     const pesoInicial = a.pesoInicial || (ps.length?ps[0].pesoKg:0) || 0
@@ -7035,6 +7036,10 @@ async function renderRendimiento(){
     const estado = activo ? 'activo' : (a.causaBaja==='Venta' ? 'vendido' : 'baja')
     return {a, pesoInicial, pesoFinal, dias, ganancia, gdp, loteNom, estado, nPesajes: ps.length}
   })
+}
+
+async function renderRendimiento(){
+  const filas = await calcRendimientoFilas()
   _rendFilasCache = filas
 
   return `<div class="seg mb10">
@@ -7574,14 +7579,12 @@ async function exportarParaImportar(){
 
     // ── VENTAS_BAJAS ──
     const inactivos = await db.animales.where('activo').equals(0).toArray()
-    const todosLotes = await db.lotes.toArray()
-    const todosLotesMap = {}; todosLotes.forEach(l=>todosLotesMap[l.id]=l.nombre)
     const wsVentas = XLSX.utils.aoa_to_sheet([
       ['Arete *','Categoría','Raza','Causa Baja','Fecha Baja (DD/MM/AAAA)','Peso Venta (kg)','Valor Venta ($)','Precio/kg Venta ($)','Comprador','Lote','Peso Inicial (kg)','Precio Compra ($/kg)','Observación Baja'],
       ...inactivos.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0)).map(a=>[
         a.arete, a.categoria||'', a.raza||'', a.causaBaja||'', fd(a.fechaBaja),
         a.pesoVenta||'', a.valorVenta||'', a.precioVentaKg||'',
-        a.comprador||'', todosLotesMap[a.loteId]||'',
+        a.comprador||'', a.loteNombreSalida||'',
         a.pesoInicial||0, a.precioPorKg||'', a.obsBaja||''
       ])
     ])
@@ -7615,11 +7618,19 @@ async function exportarExcel(){
     const fdh=ts=>ts?ffdHora(ts):''
 
     // Animales
+    const loteMapXls = Object.fromEntries(lotes.map(l=>[l.id,l.nombre]))
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(animales.map(a=>({
       'Arete':a.arete,'Nombre':a.nombre||'','Categoría':CAT[a.categoria]||a.categoria,
       'Raza':a.raza||'','Color':a.color||'','Peso inicial (kg)':a.pesoInicial||0,
       'Fecha ingreso':fd(a.fechaIngreso),'Procedencia':a.procedencia||'',
-      'Descripción':a.descripcion||'','Estado':a.activo?'Activo':'Baja',
+      'Lote':a.activo?(a.loteId?(loteMapXls[a.loteId]||''):'Sin lote'):(a.loteNombreSalida||''),
+      'Descripción':a.descripcion||'',
+      'Estado':a.activo?'Activo':(a.causaBaja==='Venta'?'Vendido':'Baja'),
+      'Fecha salida':a.activo?'':fd(a.fechaBaja),
+      'Causa baja':a.activo?'':(a.causaBaja||''),
+      'Comprador':a.comprador||'',
+      'Peso venta (kg)':a.pesoVenta||'','Valor venta ($)':a.valorVenta||'','Precio venta $/kg':a.precioVentaKg||'',
+      'Observación baja':a.obsBaja||'',
       'Creado por':a.creadoPor||'','Fecha creación':fdh(a.creadoEn)
     }))),'Animales')
 
@@ -7687,6 +7698,37 @@ async function exportarExcel(){
         }))
       ),'LLUVIAS')
     }
+
+    // Rendimiento — detalle por animal (activos + vendidos + bajas)
+    const filasRend = await calcRendimientoFilas()
+    const estadoLbl = {activo:'Activo', vendido:'Vendido', baja:'Baja'}
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filasRend.map(f=>({
+      'Arete':f.a.arete,'Nombre':f.a.nombre||'','Categoría':CAT[f.a.categoria]||f.a.categoria,
+      'Estado':estadoLbl[f.estado],'Lote':f.loteNom,
+      'Peso inicial (kg)':Math.round(f.pesoInicial),'Peso final (kg)':Math.round(f.pesoFinal),
+      'Ganancia (kg)':Math.round(f.ganancia),'Días':f.dias,'GDP (g/día)':f.gdp,
+      'N° pesajes':f.nPesajes
+    }))), 'Rendimiento')
+
+    // Rendimiento — resumen por lote
+    const gruposXls = {}
+    for(const f of filasRend){ (gruposXls[f.loteNom] ||= []).push(f) }
+    const resumenLoteRows = Object.entries(gruposXls).map(([nombre,anis])=>{
+      const act = anis.filter(f=>f.estado==='activo')
+      const ven = anis.filter(f=>f.estado==='vendido')
+      const baj = anis.filter(f=>f.estado==='baja')
+      const gan = anis.reduce((s,f)=>s+f.ganancia,0)
+      const conD = anis.filter(f=>f.dias>0)
+      const gdp = conD.length ? Math.round(conD.reduce((s,f)=>s+f.gdp,0)/conD.length) : 0
+      const pesoActivo = act.reduce((s,f)=>s+f.pesoFinal,0)
+      const kgVend = ven.reduce((s,f)=>s+f.pesoFinal,0)
+      return {
+        'Lote':nombre,'N° animales':anis.length,'Activos':act.length,'Vendidos':ven.length,'Bajas':baj.length,
+        'Peso actual en finca (kg)':Math.round(pesoActivo),'Kg vendidos':Math.round(kgVend),
+        'Ganancia total (kg)':Math.round(gan),'GDP promedio (g/día)':gdp
+      }
+    }).sort((a,b)=>b['N° animales']-a['N° animales'])
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumenLoteRows), 'Rendimiento por lote')
 
     XLSX.writeFile(wb,`HPRapp-${new Date().toISOString().split('T')[0]}.xlsx`)
   }catch(e){await showAlert('Error al exportar: '+e.message)}
