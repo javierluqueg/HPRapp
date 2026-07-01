@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260701-001'
+const APP_VERSION = '20260701-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1816,13 +1816,6 @@ async function pgGanado() {
           onclick="filtCat('${c}')">${c} (${n})</span>`
       }).join('')}
     </div>
-    ${selCat ? `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding:8px 12px;background:rgba(230,81,0,.08);border-radius:8px;border:1px solid rgba(230,81,0,.2)">
-      <p style="font-size:.78rem;color:#E65100;font-weight:700">📂 ${selCat} — ${animales.filter(a=>a.categoria===selCat).length} animales</p>
-      <button onclick="selTodosCategoria('${selCat}')"
-        style="border:none;background:#E65100;color:white;border-radius:8px;padding:5px 12px;font-size:.75rem;font-weight:700;cursor:pointer">
-        ☑ Seleccionar todos
-      </button>
-    </div>` : ''}
   </div>`
 
   // Renderizar tarjetas inline (sin setTimeout) para evitar race conditions
@@ -2112,42 +2105,6 @@ function filtCat(cat){
     s.style.borderColor = active ? '#E65100' : '#ddd'
     s.style.boxShadow = active ? '0 2px 8px rgba(230,81,0,.35)' : 'none'
   })
-
-  // Mostrar/ocultar barra "Seleccionar todos" dinámicamente
-  let barra = document.getElementById('cat-sel-barra')
-  const n = cat ? _ganAll.filter(a => a.categoria === cat).length : _ganAll.length
-  const label = cat ? `📂 ${cat} — ${n} animales` : `📂 Todos — ${n} animales`
-  if (!barra) {
-    barra = document.createElement('div')
-    barra.id = 'cat-sel-barra'
-    const filtrosEl = document.getElementById('catFiltros')
-    if (filtrosEl && filtrosEl.parentNode) filtrosEl.parentNode.insertBefore(barra, filtrosEl.nextSibling)
-  }
-  barra.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding:8px 12px;background:rgba(230,81,0,.08);border-radius:8px;border:1px solid rgba(230,81,0,.2)">
-    <p style="font-size:.78rem;color:#E65100;font-weight:700">${label}</p>
-    <button onclick="selTodosCategoria('${cat}')"
-      style="border:none;background:#E65100;color:white;border-radius:8px;padding:5px 12px;font-size:.75rem;font-weight:700;cursor:pointer">
-      ☑ Seleccionar todos
-    </button>
-  </div>`
-  barra.style.display = 'block'
-}
-function selTodosCategoria(cat) {
-  if (!_ganSelMode) {
-    _ganSelMode = true
-    _ganSelected = new Set()
-    updHdrGanado()
-  }
-  // Si cat vacío = Todos; si no, filtrar por categoría
-  const ids = cat ? _ganAll.filter(a => a.categoria === cat).map(a => a.id) : _ganAll.map(a => a.id)
-  const todosSeleccionados = ids.every(id => _ganSelected.has(id))
-  if (todosSeleccionados) {
-    ids.forEach(id => _ganSelected.delete(id))  // Desmarcar todos
-  } else {
-    ids.forEach(id => _ganSelected.add(id))      // Marcar todos
-  }
-  updHdrGanado()
-  reRenderCardsGanado()
 }
 
 function filtAdjudicacion(tipo){
