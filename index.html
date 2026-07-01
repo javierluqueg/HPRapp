@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260627-006'
+const APP_VERSION = '20260701-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1754,7 +1754,8 @@ function logOut(){USER=null;_loginUser=null;try{sessionStorage.removeItem('hpr_u
 // GANADO – LISTADO
 // ═══════════════════════════════════════════════════
 async function pgGanado() {
-  _ganSelMode=false; _ganSelected=new Set(); _ganFiltroAdj=null; _ganFiltroCat=''
+  const esVerMas = !!PARAMS._ganPage
+  if(!esVerMas){ _ganSelMode=false; _ganSelected=new Set(); _ganFiltroAdj=null; _ganFiltroCat='' }
   _ganPage = PARAMS._ganPage || 1
   updHdrGanado()
   const animales=await db.animales.where('activo').equals(1).toArray()
@@ -1766,6 +1767,11 @@ async function pgGanado() {
   const loteMap=Object.fromEntries(lotes.map(l=>[l.id,l]))
   const aniConLote=animales.filter(a=>a.loteId)
   const aniSinLote=animales.filter(a=>!a.loteId)
+  // Listas para armar tarjetas/paginación: respetan el filtro de categoría/adjudicación activo
+  let aniSinLoteF = aniSinLote, aniConLoteF = aniConLote
+  if(_ganFiltroCat){ aniSinLoteF = aniSinLoteF.filter(a=>a.categoria===_ganFiltroCat); aniConLoteF = aniConLoteF.filter(a=>a.categoria===_ganFiltroCat) }
+  if(_ganFiltroAdj==='sin') aniConLoteF = []
+  if(_ganFiltroAdj==='con') aniSinLoteF = []
 
   // Último pesaje para mostrar en resumen
   let ganUltimoPesaje = 0
@@ -1837,29 +1843,30 @@ async function pgGanado() {
     </div>`
   }
 
-  const secSin=aniSinLote.length
-    ?`<div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px">
-        <span style="font-size:.72rem;font-weight:700;color:#E65100;text-transform:uppercase;letter-spacing:.06em">⚠ Sin adjudicar</span>
-        <span style="background:#FFF3E0;color:#E65100;border-radius:20px;font-size:.72rem;font-weight:700;padding:2px 8px">${aniSinLote.length}</span>
-        <div style="flex:1;height:1px;background:#FFE0B2"></div>
-      </div>${aniSinLote.map(cardGan).join('')}`
-    :`<div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px">
-        <span style="font-size:.75rem;font-weight:800;color:white;background:#2E7D32;border-radius:6px;padding:3px 10px;text-transform:uppercase;letter-spacing:.05em">✓ Todos adjudicados en lote</span>
-        <div style="flex:1;height:1px;background:#C8E6C9"></div></div>`
-
-  // Paginación
-  const todosList = [...aniSinLote, ...aniConLote]
+  // Paginación (aplicada sobre las listas ya filtradas por categoría/adjudicación)
+  const todosList = [...aniSinLoteF, ...aniConLoteF]
   const totalMostrar = _ganPage * _GAN_PER_PAGE
-  const aniSinLotePag = aniSinLote.slice(0, Math.min(aniSinLote.length, totalMostrar))
+  const aniSinLotePag = aniSinLoteF.slice(0, Math.min(aniSinLoteF.length, totalMostrar))
   const restante = totalMostrar - aniSinLotePag.length
-  const aniConLotePag = aniConLote.slice(0, Math.max(0, Math.min(aniConLote.length, restante)))
+  const aniConLotePag = aniConLoteF.slice(0, Math.max(0, Math.min(aniConLoteF.length, restante)))
   const totalMostrados = aniSinLotePag.length + aniConLotePag.length
   const hayMas = totalMostrados < todosList.length
 
+  const filtroActivo = !!(_ganFiltroCat || _ganFiltroAdj)
+  const secSin=aniSinLoteF.length
+    ?`<div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px">
+        <span style="font-size:.72rem;font-weight:700;color:#E65100;text-transform:uppercase;letter-spacing:.06em">⚠ Sin adjudicar</span>
+        <span style="background:#FFF3E0;color:#E65100;border-radius:20px;font-size:.72rem;font-weight:700;padding:2px 8px">${aniSinLoteF.length}</span>
+        <div style="flex:1;height:1px;background:#FFE0B2"></div>
+      </div>${aniSinLotePag.map(cardGan).join('')}`
+    :(filtroActivo?'':`<div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px">
+        <span style="font-size:.75rem;font-weight:800;color:white;background:#2E7D32;border-radius:6px;padding:3px 10px;text-transform:uppercase;letter-spacing:.05em">✓ Todos adjudicados en lote</span>
+        <div style="flex:1;height:1px;background:#C8E6C9"></div></div>`)
+
   const secCon=aniConLotePag.length
-    ?`<div style="display:flex;align-items:center;gap:8px;margin:${aniSinLote.length?'16px':'4px'} 0 8px">
+    ?`<div style="display:flex;align-items:center;gap:8px;margin:${aniSinLoteF.length?'16px':'4px'} 0 8px">
         <span style="font-size:.72rem;font-weight:700;color:#1565C0;text-transform:uppercase;letter-spacing:.06em">En lote</span>
-        <span style="background:#E3F2FD;color:#1565C0;border-radius:20px;font-size:.72rem;font-weight:700;padding:2px 8px">${aniConLote.length}</span>
+        <span style="background:#E3F2FD;color:#1565C0;border-radius:20px;font-size:.72rem;font-weight:700;padding:2px 8px">${aniConLoteF.length}</span>
         <div style="flex:1;height:1px;background:#BBDEFB"></div>
       </div>${aniConLotePag.map(cardGan).join('')}`:''
 
@@ -1871,7 +1878,7 @@ async function pgGanado() {
   return `${resumenGan}
     <input id="ganBusq" class="inp mb8" placeholder="🔍 Buscar por arete, raza, color, descripción…" oninput="filtGanado(this.value)">
     ${filtros}
-    <div id="gList">${secSin.replace(aniSinLote.map(cardGan).join(''), aniSinLotePag.map(cardGan).join(''))}${secCon}</div>
+    <div id="gList">${secSin}${secCon}</div>
     ${btnVerMas}`
 }
 
