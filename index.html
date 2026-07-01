@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260701-005'
+const APP_VERSION = '20260701-006'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -639,6 +639,8 @@ let _prodLoteId=null, _prodLoteDesde=null, _prodLoteHasta=null
 let _prodRotId=null,  _prodRotDesde=null,  _prodRotHasta=null
 let _ganSelMode=false, _ganSelected=new Set(), _ganAll=[]
 let _ganFiltroAdj=null, _ganFiltroCat='', _ganBusq=''  // null|'sin'|'con'
+let _rendTab='resumen', _rendEstado='todos', _rendBusq='', _rendPage=1, _rendFilasCache=null
+const _REND_PER_PAGE=40
 // IDs capturados al abrir una sheet masiva (protege contra scheduleRefresh que resetea _ganSelected)
 let _sheetBajaIds=[], _sheetLoteIds=[], _sheetLaborIds=[], _sheetLoteSnaps=[], _sheetDescIds=[], _sheetCatIds=[]
 let _sheetQuitarIds=[], _sheetQuitarSnaps=[], _aqAccion=null
@@ -2504,9 +2506,10 @@ async function saveBajaSeleccionados(){
   try{
     snapshots=await Promise.all(ids.map(id=>db.animales.get(id)))
     const _bajLoteIds=snapshots.filter(a=>a&&a.loteId).map(a=>a.loteId)
+    const _bajLotesMap = _bajLoteIds.length ? Object.fromEntries((await db.lotes.bulkGet([...new Set(_bajLoteIds)])).filter(Boolean).map(l=>[l.id,l.nombre])) : {}
     for(const snap of snapshots){
       if(!snap) continue
-      await fsUpdate('animales',snap.id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||null,loteId:null,fechaLote:null})
+      await fsUpdate('animales',snap.id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||null,loteId:null,fechaLote:null,loteIdSalida:snap.loteId||null,loteNombreSalida:snap.loteId?(_bajLotesMap[snap.loteId]||null):null})
       ok++
     }
     if(_bajLoteIds.length) await checkLoteVacio(_bajLoteIds, fechaBaja)
@@ -3128,9 +3131,11 @@ async function saveBajaAnimal(id) {
   try {
     prev = await db.animales.get(id)
     const _bajLoteId = prev ? prev.loteId : null
+    const _bajLoteNom = _bajLoteId ? (await db.lotes.get(_bajLoteId))?.nombre||null : null
     await fsUpdate('animales', id, {
       activo:0, causaBaja:causa, fechaBaja, obsBaja:obs||null,
-      loteId:null, fechaLote:null
+      loteId:null, fechaLote:null,
+      loteIdSalida:_bajLoteId||null, loteNombreSalida:_bajLoteNom
     })
     trazar('BAJA_ANIMAL','ANIMAL', id, {causa, fecha:fechaBaja})
     if (_bajLoteId) await checkLoteVacio([_bajLoteId], fechaBaja)
@@ -6761,6 +6766,7 @@ async function guardarVenta() {
   const fechaBaja = new Date(fechaStr+'T00:00:00').getTime()
 
   const _vtLoteIds = selAni.map(a => a.loteId).filter(Boolean)
+  const ahora = Date.now(), quien = USER?.nombre||'—'
   try {
     for (const a of selAni) {
       const pesoVenta = rvGetPeso(a)
@@ -6775,8 +6781,17 @@ async function guardarVenta() {
         pesoVenta, valorVenta, precioVentaKg,
         comprador: comprador||null,
         obsBaja: obs||null,
-        loteId: null, fechaLote: null
+        loteId: null, fechaLote: null,
+        loteIdSalida: a.loteId||null, loteNombreSalida: a.loteId?(a._loteNom||null):null
       })
+      // Solo en modo "Por kilo" el peso es el que el usuario ingresó/confirmó al vender:
+      // se guarda como pesaje real para que quede en el historial y en el rendimiento de la finca.
+      if (_rvModoPrecio === 'pxkg') {
+        const dup = await db.pesajes.where('animalId').equals(a.id).filter(p=>p.fecha===fechaBaja && p.pesoKg===pesoVenta).first()
+        if (!dup) {
+          await fsAdd('pesajes', {animalId:a.id, fecha:fechaBaja, pesoKg:pesoVenta, metodo:'BASCULA', cc:3, obs:'Pesaje de venta', registradoPor:quien, registradoEn:ahora})
+        }
+      }
     }
     await checkLoteVacio(_vtLoteIds, fechaBaja)
     closeSheet()
@@ -6994,12 +7009,163 @@ async function exportarVentasExcel() {
   setTimeout(()=>URL.revokeObjectURL(a.href),5000)
 }
 
+// ═══════════════════════════════════════════════════
+// REPORTE DE RENDIMIENTO (activos + vendidos + bajas)
+// ═══════════════════════════════════════════════════
+async function renderRendimiento(){
+  const [animales, lotes, pesajesAll] = await Promise.all([
+    db.animales.toArray(), db.lotes.toArray(), db.pesajes.orderBy('fecha').toArray()
+  ])
+  const loteMap = Object.fromEntries(lotes.map(l=>[l.id,l.nombre]))
+  const psMap = {}
+  for(const p of pesajesAll){ (psMap[p.animalId] ||= []).push(p) }  // ya vienen ordenados por fecha asc
+
+  const filas = animales.map(a=>{
+    const ps = psMap[a.id]||[]
+    const activo = a.activo===1
+    const pesoInicial = a.pesoInicial || (ps.length?ps[0].pesoKg:0) || 0
+    const ultimoPesaje = ps.length ? ps[ps.length-1].pesoKg : null
+    const pesoFinal = activo ? (ultimoPesaje ?? pesoInicial) : (a.pesoVenta ?? ultimoPesaje ?? pesoInicial)
+    const fechaFin = activo ? Date.now() : (a.fechaBaja || Date.now())
+    const fechaIni = a.fechaIngreso || (ps.length?ps[0].fecha:fechaFin)
+    const dias = Math.max(1, Math.round((fechaFin-fechaIni)/86400000))
+    const ganancia = pesoFinal - pesoInicial
+    const gdp = Math.round(ganancia/dias*1000)
+    const loteNom = activo ? (a.loteId ? (loteMap[a.loteId]||'Sin lote') : 'Sin lote') : (a.loteNombreSalida || 'Sin lote')
+    const estado = activo ? 'activo' : (a.causaBaja==='Venta' ? 'vendido' : 'baja')
+    return {a, pesoInicial, pesoFinal, dias, ganancia, gdp, loteNom, estado, nPesajes: ps.length}
+  })
+  _rendFilasCache = filas
+
+  return `<div class="seg mb10">
+      <button class="${_rendTab==='resumen'?'on':''}" onclick="_rendTab='resumen';go('config')">📊 Resumen por lote</button>
+      <button class="${_rendTab==='detalle'?'on':''}" onclick="_rendTab='detalle';go('config')">🐄 Detalle por animal</button>
+    </div>
+    ${_rendTab==='resumen' ? rendRenderResumen(filas) : rendRenderDetalleWrap(filas)}`
+}
+
+function rendRenderResumen(filas){
+  if(!filas.length) return '<p class="xs gray" style="text-align:center;padding:20px">Sin animales registrados</p>'
+  const activos = filas.filter(f=>f.estado==='activo')
+  const vendidos = filas.filter(f=>f.estado==='vendido')
+  const bajas = filas.filter(f=>f.estado==='baja')
+  const gananciaTotal = filas.reduce((s,f)=>s+f.ganancia,0)
+  const conDias = filas.filter(f=>f.dias>0)
+  const gdpProm = conDias.length ? Math.round(conDias.reduce((s,f)=>s+f.gdp,0)/conDias.length) : 0
+  const pesoEnFinca = activos.reduce((s,f)=>s+f.pesoFinal,0)
+  const kgVendidos = vendidos.reduce((s,f)=>s+f.pesoFinal,0)
+
+  const grupos = {}
+  for(const f of filas){ (grupos[f.loteNom] ||= []).push(f) }
+  const gruposArr = Object.entries(grupos).sort((a,b)=>b[1].length-a[1].length)
+
+  const cardsLotes = gruposArr.map(([nombre,anis])=>{
+    const act = anis.filter(f=>f.estado==='activo')
+    const sal = anis.filter(f=>f.estado!=='activo')
+    const ven = anis.filter(f=>f.estado==='vendido')
+    const gan = anis.reduce((s,f)=>s+f.ganancia,0)
+    const conD = anis.filter(f=>f.dias>0)
+    const gdp = conD.length ? Math.round(conD.reduce((s,f)=>s+f.gdp,0)/conD.length) : 0
+    const pesoActivo = act.reduce((s,f)=>s+f.pesoFinal,0)
+    const kgVend = ven.reduce((s,f)=>s+f.pesoFinal,0)
+    return `<div class="card mb8">
+      <div class="row-b mb6"><p class="bold">${nombre}</p><span class="xs gray">${anis.length} animal${anis.length>1?'es':''}</span></div>
+      <div class="row-b"><span class="xs gray">Activos / Salidos</span><span class="xs bold">${act.length} / ${sal.length}</span></div>
+      <div class="row-b"><span class="xs gray">Peso actual en finca</span><span class="xs bold">${Math.round(pesoActivo).toLocaleString('es-CO')} kg</span></div>
+      ${ven.length?`<div class="row-b"><span class="xs gray">Kg vendidos</span><span class="xs bold" style="color:#1565C0">${Math.round(kgVend).toLocaleString('es-CO')} kg</span></div>`:''}
+      <div class="row-b"><span class="xs gray">Ganancia total</span><span class="xs bold" style="color:${gan>=0?'#2E7D32':'#C62828'}">${gan>=0?'+':''}${Math.round(gan).toLocaleString('es-CO')} kg</span></div>
+      <div class="row-b"><span class="xs gray">GDP promedio</span><span class="xs bold">${gdp} g/día</span></div>
+    </div>`
+  }).join('')
+
+  return `<div class="card mb10" style="background:linear-gradient(135deg,#2E7D32,#1B5E20);color:white">
+      <p class="xs" style="opacity:.85;margin-bottom:6px">RENDIMIENTO TOTAL DE LA FINCA</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><p style="font-size:1.3rem;font-weight:800">${filas.length}</p><p class="xs" style="opacity:.85">Animales (histórico)</p></div>
+        <div><p style="font-size:1.3rem;font-weight:800">${gdpProm} g/d</p><p class="xs" style="opacity:.85">GDP promedio</p></div>
+        <div><p style="font-size:1.3rem;font-weight:800">${Math.round(pesoEnFinca).toLocaleString('es-CO')} kg</p><p class="xs" style="opacity:.85">En finca (${activos.length})</p></div>
+        <div><p style="font-size:1.3rem;font-weight:800">${Math.round(kgVendidos).toLocaleString('es-CO')} kg</p><p class="xs" style="opacity:.85">Vendidos (${vendidos.length})</p></div>
+      </div>
+      <div class="row-b" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.25)">
+        <span class="xs" style="opacity:.85">Ganancia total acumulada${bajas.length?' · '+bajas.length+' baja(s)':''}</span>
+        <span class="bold">${gananciaTotal>=0?'+':''}${Math.round(gananciaTotal).toLocaleString('es-CO')} kg</span>
+      </div>
+    </div>
+    <p class="sec">Por lote (incluye activos, vendidos y bajas)</p>
+    ${cardsLotes}`
+}
+
+function rendFiltradas(){
+  let f = _rendFilasCache || []
+  if(_rendEstado!=='todos') f = f.filter(x=>x.estado===_rendEstado)
+  if(_rendBusq){
+    const q=_rendBusq.toLowerCase()
+    f = f.filter(x=> x.a.arete.toLowerCase().includes(q) || (x.a.nombre||'').toLowerCase().includes(q) || x.loteNom.toLowerCase().includes(q))
+  }
+  return f
+}
+function rendCardAnimal(f){
+  const badge = f.estado==='activo' ? {t:'Activo',c:'#2E7D32',bg:'#E8F5E9'}
+    : f.estado==='vendido' ? {t:'Vendido',c:'#1565C0',bg:'#E3F2FD'}
+    : {t:'Baja',c:'#C62828',bg:'#FFEBEE'}
+  return `<div class="card mb8" style="padding:10px 12px">
+    <div class="row-b mb4">
+      <p class="bold">${f.a.arete}${f.a.nombre?' <span style="font-weight:400;color:#888">— '+f.a.nombre+'</span>':''}</p>
+      <span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:10px;background:${badge.bg};color:${badge.c}">${badge.t}</span>
+    </div>
+    <p class="xs gray mb4">${f.loteNom} · ${f.a.categoria||''}</p>
+    <div class="row-b"><span class="xs gray">${Math.round(f.pesoInicial)} kg → ${Math.round(f.pesoFinal)} kg</span>
+      <span class="xs bold" style="color:${f.ganancia>=0?'#2E7D32':'#C62828'}">${f.ganancia>=0?'+':''}${Math.round(f.ganancia)} kg</span></div>
+    <div class="row-b"><span class="xs gray">${f.dias} días · ${f.nPesajes} pesaje${f.nPesajes!==1?'s':''}</span><span class="xs bold">${f.gdp} g/día</span></div>
+  </div>`
+}
+function rendDetalleListaHTML(){
+  const filtradas = rendFiltradas()
+  const pag = filtradas.slice(0, _rendPage*_REND_PER_PAGE)
+  const lista = pag.length ? pag.map(rendCardAnimal).join('') : '<p class="xs gray" style="text-align:center;padding:20px">Sin animales para este filtro</p>'
+  const hayMas = pag.length < filtradas.length
+  const vermas = hayMas ? `<button class="btn btn-gray mt8" onclick="_rendPage++;rendRenderDetalleLista()">Ver más (${filtradas.length-pag.length} restantes)</button>` : ''
+  return {lista, vermas}
+}
+function rendRenderDetalleLista(){
+  const {lista, vermas} = rendDetalleListaHTML()
+  const l=$('rend-lista'); if(l) l.innerHTML=lista
+  const v=$('rend-vermas'); if(v) v.innerHTML=vermas
+  document.querySelectorAll('#rend-chips [data-e]').forEach(el=>{
+    const on = el.dataset.e===_rendEstado
+    el.style.borderColor = on?'#E65100':'#ddd'
+    el.style.background = on?'#E65100':'white'
+    el.style.color = on?'white':'#555'
+  })
+  const clr=$('rend-busq-clear'); if(clr) clr.style.display=_rendBusq?'flex':'none'
+}
+function rendLimpiarBusq(){
+  _rendBusq=''; _rendPage=1
+  const inp=$('rend-busq'); if(inp) inp.value=''
+  rendRenderDetalleLista()
+}
+function rendRenderDetalleWrap(filas){
+  _rendFilasCache = filas
+  const {lista, vermas} = rendDetalleListaHTML()
+  const estLbl={todos:'Todos',activo:'Activos',vendido:'Vendidos',baja:'Bajas'}
+  return `<div class="inp-wrap mb8">
+      <input id="rend-busq" class="inp" placeholder="🔍 Buscar por arete, nombre, lote…" value="${_rendBusq}" oninput="_rendBusq=this.value;_rendPage=1;rendRenderDetalleLista()">
+      <span id="rend-busq-clear" onclick="rendLimpiarBusq()" style="display:${_rendBusq?'flex':'none'};position:absolute;right:10px;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;background:#ddd;color:#555;align-items:center;justify-content:center;font-size:.85rem;cursor:pointer">✕</span>
+    </div>
+    <div id="rend-chips" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px">
+      ${Object.keys(estLbl).map(e=>`<span data-e="${e}" onclick="_rendEstado='${e}';_rendPage=1;rendRenderDetalleLista()" style="cursor:pointer;white-space:nowrap;padding:5px 12px;border-radius:20px;font-size:.78rem;font-weight:700;border:2px solid ${_rendEstado===e?'#E65100':'#ddd'};background:${_rendEstado===e?'#E65100':'white'};color:${_rendEstado===e?'white':'#555'}">${estLbl[e]}</span>`).join('')}
+    </div>
+    <div id="rend-lista">${lista}</div>
+    <div id="rend-vermas">${vermas}</div>`
+}
+
 async function pgConfig() {
   const tab=_tab['cfg']||'finca'
   const cfgTabStyle = t => `font-size:.92rem;font-weight:700;${tab===t?'color:#E65100;border-bottom-color:#E65100':'color:#aaa'}`
   const tabs=`<div class="tabs" style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;flex-wrap:nowrap">
     <div class="tab${tab==='finca'?' on':''}" style="${cfgTabStyle('finca')};white-space:nowrap" onclick="setTab('cfg','finca');go('config')">Finca</div>
     <div class="tab${tab==='metas'?' on':''}" style="${cfgTabStyle('metas')};white-space:nowrap" onclick="setTab('cfg','metas');go('config')">Metas</div>
+    <div class="tab${tab==='rendimiento'?' on':''}" style="${cfgTabStyle('rendimiento')};white-space:nowrap" onclick="setTab('cfg','rendimiento');go('config')">📈 Rendimiento</div>
     <div class="tab${tab==='usuarios'?' on':''}" style="${cfgTabStyle('usuarios')};white-space:nowrap" onclick="setTab('cfg','usuarios');go('config')">Usuarios</div>
     <div class="tab${tab==='backup'?' on':''}" style="${cfgTabStyle('backup')};white-space:nowrap" onclick="setTab('cfg','backup');go('config')">Backup</div>
     <div class="tab${tab==='excel'?' on':''}" style="${cfgTabStyle('excel')};white-space:nowrap" onclick="setTab('cfg','excel');go('config')">Excel</div>
@@ -7030,6 +7196,7 @@ async function pgConfig() {
       <div class="alert">Cuando el GDP promedio supere esta meta, el indicador se mostrará en verde.</div>
       <button class="btn btn-g" onclick="saveCfgMetas()">Guardar</button>`
   }
+  if(tab==='rendimiento') return tabs + await renderRendimiento()
   if(tab==='usuarios'){
     const us=await db.usuarios.where('activo').equals(1).toArray()
     const esAdmin1=USER?.rol==='Administrador 1'
