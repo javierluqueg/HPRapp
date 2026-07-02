@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260701-007'
+const APP_VERSION = '20260702-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -2773,6 +2773,7 @@ async function pgAnimalFicha({id}) {
     ${rowD('Raza',a.raza||'—')} ${rowD('Color',a.color||'—')} ${rowD('Descripción',a.descripcion||'—')}
     ${rowD('Lote',lote?lote.nombre:'Sin asignar')} ${lote&&a.fechaLote?rowD('Fecha al lote',ffd(a.fechaLote)):''}
     ${rowD('Peso inicial',`${a.pesoInicial||0} kg`)} ${rowD('Peso actual',`${pesoAct.toFixed(1)} kg`)}
+    ${rowD('Último pesaje',ult?ffd(ult.fecha):'Sin registro')}
     ${a.precioPorKg?rowD('Precio compra',`$${a.precioPorKg.toLocaleString()}/kg`):''}
     ${a.precioPorKg&&a.pesoInicial?rowD('Valor total compra',`$${(a.precioPorKg*a.pesoInicial).toLocaleString()}`,true):''}
     ${rowD('Ingreso finca',ffd(a.fechaIngreso))} ${rowD('Procedencia',a.procedencia||'—',true)}
