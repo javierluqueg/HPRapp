@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-001'
+const APP_VERSION = '20260703-003'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -7050,9 +7050,44 @@ async function renderRendimiento(){
 
   return `<div class="seg mb10">
       <button class="${_rendTab==='resumen'?'on':''}" onclick="_rendTab='resumen';go('config')">📊 Resumen por lote</button>
+      <button class="${_rendTab==='periodos'?'on':''}" onclick="_rendTab='periodos';go('config')">📅 Vendidos por período</button>
       <button class="${_rendTab==='detalle'?'on':''}" onclick="_rendTab='detalle';go('config')">🐄 Detalle por animal</button>
     </div>
-    ${_rendTab==='resumen' ? rendRenderResumen(filas) : rendRenderDetalleWrap(filas)}`
+    ${_rendTab==='resumen' ? rendRenderResumen(filas) : _rendTab==='periodos' ? rendRenderPeriodos(filas) : rendRenderDetalleWrap(filas)}`
+}
+
+function rendRenderPeriodos(filas){
+  const vendidos = filas.filter(f=>f.estado==='vendido')
+  if(!vendidos.length) return '<p class="xs gray" style="text-align:center;padding:20px">Sin ventas registradas</p>'
+
+  // Últimos 4 semestres (2 años), del más reciente al más antiguo
+  const ahora = new Date()
+  let y = ahora.getFullYear(), s = ahora.getMonth() < 6 ? 1 : 2
+  const semestres = []
+  for(let i=0;i<4;i++){
+    const inicio = new Date(s===1?y:y, s===1?0:6, 1).getTime()
+    const finExcl = new Date(s===1?y:y+1, s===1?6:0, 1).getTime()
+    semestres.push({label:`${y} · S${s}`, inicio, fin:finExcl})
+    s--
+    if(s===0){ s=2; y-- }
+  }
+
+  const bloques = semestres.map(sem=>{
+    const anis = vendidos.filter(f => f.a.fechaBaja && f.a.fechaBaja>=sem.inicio && f.a.fechaBaja<sem.fin)
+    const conD = anis.filter(f=>f.dias>0)
+    const gdp = conD.length ? Math.round(conD.reduce((s,f)=>s+f.gdp,0)/conD.length) : null
+    const kg = anis.reduce((s,f)=>s+f.pesoFinal,0)
+    const ganancia = anis.reduce((s,f)=>s+f.ganancia,0)
+    return {...sem, n:anis.length, gdp, kg, ganancia}
+  })
+
+  return bloques.map(p=>`<div class="card mb8">
+      <div class="row-b mb6"><p class="bold">${p.label}</p><span class="xs gray">${p.n} vendido${p.n!==1?'s':''}</span></div>
+      ${p.n ? `<div class="row-b"><span class="xs gray">GDP promedio</span><span class="xs bold">${p.gdp!==null?p.gdp+' g/día':'—'}</span></div>
+      <div class="row-b"><span class="xs gray">Kg vendidos</span><span class="xs bold" style="color:#1565C0">${Math.round(p.kg).toLocaleString('es-CO')} kg</span></div>
+      <div class="row-b"><span class="xs gray">Ganancia total</span><span class="xs bold" style="color:${p.ganancia>=0?'#2E7D32':'#C62828'}">${p.ganancia>=0?'+':''}${Math.round(p.ganancia).toLocaleString('es-CO')} kg</span></div>`
+      : '<p class="xs gray">Sin ventas en este período</p>'}
+    </div>`).join('')
 }
 
 function rendRenderResumen(filas){
