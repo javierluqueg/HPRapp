@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-004'
+const APP_VERSION = '20260703-005'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1155,11 +1155,12 @@ async function pgDashboard() {
       <button onclick="go('config')" style="border:none;background:#E65100;color:white;border-radius:8px;padding:7px 12px;font-size:.78rem;font-weight:700;cursor:pointer">Ir a Config</button>
     </div>` : ''
   const area=parseFloat(areaUtil)||1
-  const [animales, potreros, lotes, todosLosPesajes] = await Promise.all([
+  const [animales, potreros, lotes, todosLosPesajes, animalesInactivos] = await Promise.all([
     db.animales.where('activo').equals(1).toArray(),
     db.potreros.where('activo').equals(1).toArray(),
     db.lotes.where('activo').equals(1).toArray(),
-    db.pesajes.orderBy('fecha').toArray()  // una sola query para todos los pesajes
+    db.pesajes.orderBy('fecha').toArray(),  // una sola query para todos los pesajes
+    db.animales.where('activo').equals(0).toArray()  // vendidos/bajas — aportan kg al indicador de ganancia por período
   ])
 
   // Indexar pesajes por animalId en memoria (evita N queries individuales)
@@ -1220,13 +1221,10 @@ async function pgDashboard() {
     :Date.now()
 
   // Ganancia en período — todo en memoria, sin queries adicionales
-  let gananciaFinca=0
-  const gLoteMap={}
-  for(const a of animales){
-    const ps = pesajesPorAnimal[a.id] || []
+  function gananciaEnPeriodo(a, ps){
     const todosHasta=ps.filter(p=>p.fecha<=dHastaTs)
     const ult=todosHasta.length?todosHasta[todosHasta.length-1]:null
-    if(!ult) continue
+    if(!ult) return null
     let base
     if(dDesdeTs>0){
       const enPer=todosHasta.filter(p=>p.fecha>=dDesdeTs)
@@ -1238,10 +1236,28 @@ async function pgDashboard() {
     } else {
       base=a.pesoInicial!==undefined?a.pesoInicial:ult.pesoKg
     }
-    const gan=ult.pesoKg-base
-    if(gan>0){
+    return ult.pesoKg-base
+  }
+  let gananciaFinca=0, gananciaVendidos=0
+  const gLoteMap={}
+  for(const a of animales){
+    const ps = pesajesPorAnimal[a.id] || []
+    const gan = gananciaEnPeriodo(a, ps)
+    if(gan!==null && gan>0){
       gananciaFinca+=gan
       if(a.loteId) gLoteMap[a.loteId]=(gLoteMap[a.loteId]||0)+gan
+    }
+  }
+  // Vendidos/bajas dentro del período: su ganancia también cuenta para el kg/ha —
+  // salieron de la finca, pero la produjeron mientras estuvieron en ella.
+  for(const a of animalesInactivos){
+    const ps = pesajesPorAnimal[a.id] || []
+    const gan = gananciaEnPeriodo(a, ps)
+    if(gan!==null && gan>0){
+      gananciaFinca+=gan
+      gananciaVendidos+=gan
+      const lid=a.loteIdSalida
+      if(lid) gLoteMap[lid]=(gLoteMap[lid]||0)+gan
     }
   }
 
@@ -1338,6 +1354,7 @@ async function pgDashboard() {
         </div>
       </div>`:''}
       <div class="row-b mb4"><span class="sm gray">Ganancia total finca</span><span class="sm bold ${gananciaFinca>0?'green':'gray'}">${gananciaFinca>0?'+':''}${Math.round(gananciaFinca).toLocaleString('es-CO')} kg</span></div>
+      ${gananciaVendidos>0?`<div class="row-b mb4"><span class="sm gray">· incluye vendidos</span><span class="sm bold" style="color:#1565C0">+${Math.round(gananciaVendidos).toLocaleString('es-CO')} kg</span></div>`:''}
       ${gananciaFinca>0?`<div class="row-b mb4"><span class="sm gray">Rendimiento período</span><span class="sm bold blue">${kgHaPeriodo} kg/ha</span></div>`:''}
       ${gLoteHtml?`<p class="xs gray" style="margin-top:6px;margin-bottom:4px">Por lote:</p>${gLoteHtml}`:''}
       ${!gananciaFinca?`<p class="xs gray">Sin pesajes en el período · Ingrese pesajes para ver kg/ha</p>`:''}
