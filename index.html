@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-003'
+const APP_VERSION = '20260703-004'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -7207,7 +7207,7 @@ function rendRenderDetalleWrap(filas){
 
 async function pgConfig() {
   const tab=_tab['cfg']||'finca'
-  const cfgTabStyle = t => `font-size:.92rem;font-weight:700;${tab===t?'color:#E65100;border-bottom-color:#E65100':'color:#aaa'}`
+  const cfgTabStyle = t => `flex:0 0 auto;padding:11px 12px;font-size:.92rem;font-weight:700;${tab===t?'color:#E65100;border-bottom-color:#E65100':'color:#aaa'}`
   const tabs=`<div class="tabs" style="overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;flex-wrap:nowrap">
     <div class="tab${tab==='finca'?' on':''}" style="${cfgTabStyle('finca')};white-space:nowrap" onclick="setTab('cfg','finca');go('config')">Finca</div>
     <div class="tab${tab==='metas'?' on':''}" style="${cfgTabStyle('metas')};white-space:nowrap" onclick="setTab('cfg','metas');go('config')">Metas</div>
