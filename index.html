@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260702-002'
+const APP_VERSION = '20260703-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -426,7 +426,7 @@ function scheduleRefresh() {
   _refreshTimer = setTimeout(() => {
     // No refrescar si: sheet abierta, modo selección, o write propio reciente
     const sheetAbierto = $('ov')?.classList.contains('show')
-    if (sheetAbierto || _ganSelMode || _loteSelMode || _potSelMode) return
+    if (sheetAbierto || _ganSelMode || _loteSelMode || _potSelMode || _rvSelMode) return
     if (Date.now() < _suppressRefreshUntil) return  // Cambio propio, ignorar
     goRefrescar(PAGE, PARAMS)
   }, 2000)  // 2s de delay para agrupar múltiples cambios de otros dispositivos
@@ -6299,6 +6299,7 @@ async function openDetalleVenta(id) {
 }
 
 // ── Estado selección de animales para venta ─────────────────────
+let _rvSelMode = false       // true mientras el usuario está en la pantalla de selección de animales para venta
 let _rvSel = new Set()       // IDs seleccionados
 let _rvAnimales = []         // todos los activos cargados
 let _rvFiltrados = []        // después de búsqueda en pestaña animal
@@ -6428,6 +6429,7 @@ function rvToggleLote(loteId) {
 }
 
 async function openRegistrarVenta() {
+  _rvSelMode = true
   _rvSel = new Set()
   _rvModoPrecio = 'pxkg'
   _rvPesos = {}
@@ -6442,6 +6444,7 @@ async function openRegistrarVenta() {
 
 async function openVentaDesdeLote(loteId) {
   loteId = parseInt(loteId)
+  _rvSelMode = true
   _rvSel = new Set()
   _rvModoPrecio = 'pxkg'
   _rvPesos = {}
@@ -6458,6 +6461,7 @@ async function openVentaDesdeLote(loteId) {
 }
 
 function rvCancelarBusqueda() {
+  _rvSelMode = false
   _rvSel = new Set(); _rvPesos = {}; _rvFiltrados = []; _rvLoteExp = new Set()
   go('ventas')
 }
@@ -6795,6 +6799,7 @@ async function guardarVenta() {
       }
     }
     await checkLoteVacio(_vtLoteIds, fechaBaja)
+    _rvSelMode = false
     closeSheet()
     showToast(`✅ ${selAni.length} animal${selAni.length>1?'es':''} vendido${selAni.length>1?'s':''}`, 'ok', 3500)
     go('ventas')
@@ -8917,7 +8922,7 @@ updateOfflineBanner()
     if (!_ptActive || _ptCancelled) { resetPtr(); return }
     const dist = e.changedTouches[0].clientY - _ptStart
     resetPtr()
-    if (dist > 80 && USER && !['login','setup','bienvenida'].includes(PAGE)) {
+    if (dist > 80 && USER && !['login','setup','bienvenida'].includes(PAGE) && !_ganSelMode && !_loteSelMode && !_potSelMode && !_rvSelMode) {
       showToast('Actualizando…','ok',1500)
       setTimeout(() => goRefrescar(PAGE, PARAMS), 300)
     }
