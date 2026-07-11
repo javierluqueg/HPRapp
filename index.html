@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-006'
+const APP_VERSION = '20260703-007'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -7233,7 +7233,7 @@ function rendCardAnimal(f){
   const badge = f.estado==='activo' ? {t:'Activo',c:'#2E7D32',bg:'#E8F5E9'}
     : f.estado==='vendido' ? {t:'Vendido',c:'#1565C0',bg:'#E3F2FD'}
     : {t:'Baja',c:'#C62828',bg:'#FFEBEE'}
-  return `<div class="card mb8" style="padding:10px 12px">
+  return `<div class="card mb8" style="padding:10px 12px;cursor:pointer" onclick="go('animal-ficha',{id:${f.a.id}})">
     <div class="row-b mb4">
       <p class="bold">${f.a.arete}${f.a.nombre?' <span style="font-weight:400;color:#888">— '+f.a.nombre+'</span>':''}</p>
       <span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:10px;background:${badge.bg};color:${badge.c}">${badge.t}</span>
