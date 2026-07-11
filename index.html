@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-005'
+const APP_VERSION = '20260703-006'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -2725,9 +2725,12 @@ async function pgAnimalFicha({id}) {
   const lote=a.loteId?await db.lotes.get(a.loteId):null
   const tab=_tab['af']||'info'
   $('hdrTitle').textContent=a.arete
-  $('hdrAct').innerHTML=`<div class="row" style="gap:6px">
+  $('hdrAct').innerHTML = a.activo ? `<div class="row" style="gap:6px">
     <button class="btn btn-sm btn-b" onclick="openEditarAnimal(${id})">✏️ Editar</button>
     <button class="btn btn-sm btn-r" onclick="darBaja(${id})">Baja</button>
+  </div>` : `<div class="row" style="gap:6px">
+    <button class="btn btn-sm btn-b" onclick="openEditarAnimal(${id})">✏️ Editar</button>
+    <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border:1.5px solid #A5D6A7;font-weight:700" onclick="revertirBaja(${id})">↩️ Revertir baja</button>
   </div>`
 
   const hdr=`<div class="card card-dark">
@@ -2784,8 +2787,15 @@ async function pgAnimalFicha({id}) {
     <div class="tab${tab==='rend'?' on':''}" onclick="setTab('af','rend');go('animal-ficha',{id:${id}})">Rendimiento</div>
   </div>`
 
+  const bajaInfo = !a.activo ? `<div class="card mb8" style="background:#FFEBEE;border:1.5px solid #EF9A9A">
+    <p class="bold sm" style="color:#B71C1C;margin-bottom:4px">🔴 Animal dado de baja</p>
+    ${rowD('Causa',a.causaBaja||'—')} ${rowD('Fecha de baja',a.fechaBaja?ffd(a.fechaBaja):'—')}
+    ${a.loteNombreSalida?rowD('Lote de salida',a.loteNombreSalida):''}
+    ${rowD('Observación',a.obsBaja||'—',true)}
+  </div>` : ''
+
   let body=''
-  if(tab==='info') body=`<div class="card">
+  if(tab==='info') body=`${bajaInfo}<div class="card">
     ${rowD('Arete',a.arete)} ${rowD('Nombre',a.nombre||'—')} ${rowD('Categoría',CAT[a.categoria]||a.categoria)}
     ${rowD('Raza',a.raza||'—')} ${rowD('Color',a.color||'—')} ${rowD('Descripción',a.descripcion||'—')}
     ${rowD('Lote',lote?lote.nombre:'Sin asignar')} ${lote&&a.fechaLote?rowD('Fecha al lote',ffd(a.fechaLote)):''}
@@ -3170,6 +3180,58 @@ async function saveBajaAnimal(id) {
     })
   })
   go('ganado')
+}
+
+// Revertir una baja ya confirmada (fuera de la ventana de 6s del undo).
+// Requiere reconfirmación explícita por ser una acción delicada.
+async function revertirBaja(id) {
+  const a = await db.animales.get(id)
+  if (!a) { showToast('Animal no encontrado','err'); return }
+  if (a.activo) { showToast('Este animal no está dado de baja','err'); return }
+  showSheet(`
+    <div class="sh-title">↩️ Revertir baja<button class="sh-x" onclick="closeSheet()">✕</button></div>
+    <div style="background:#FFF3E0;border-left:4px solid #E65100;border-radius:8px;padding:11px 13px;margin-bottom:14px">
+      <p class="xs" style="color:#E65100">⚠ El animal <strong>${escH(a.arete)}</strong> volverá a estar <strong>activo</strong> en el inventario. Quedará <strong>sin lote asignado</strong> — deberás reasignarlo manualmente.</p>
+    </div>
+    <div class="card mb8">
+      ${rowD('Arete',a.arete)} ${rowD('Causa registrada',a.causaBaja||'—')}
+      ${rowD('Fecha de baja',a.fechaBaja?ffd(a.fechaBaja):'—')}
+      ${rowD('Observación',a.obsBaja||'—',true)}
+    </div>
+    <div style="display:flex;align-items:flex-start;gap:8px;margin:14px 0">
+      <input type="checkbox" id="rb-confirm" style="width:18px;height:18px;flex-shrink:0;margin-top:2px;accent-color:#E65100"
+        onchange="$('rb-btn').disabled=!this.checked">
+      <label for="rb-confirm" style="font-size:.82rem;color:#555;cursor:pointer">Confirmo que quiero revertir esta baja y reactivar el animal</label>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
+      <button class="btn btn-r" id="rb-btn" disabled onclick="ejecutarRevertirBaja(${id})">✓ Sí, revertir baja</button>
+    </div>`)
+}
+
+async function ejecutarRevertirBaja(id) {
+  const chk = $('rb-confirm')
+  if (!chk?.checked) { showToast('Marca la casilla de confirmación','err'); return }
+  const btn = $('rb-btn')
+  if (btn) { btn.disabled = true; btn.textContent = 'Revirtiendo…' }
+  let prev
+  try {
+    prev = await db.animales.get(id)
+    if (!prev) throw new Error('Animal no encontrado')
+    await fsUpdate('animales', id, {
+      activo:1, causaBaja:null, fechaBaja:null, obsBaja:null,
+      loteId:null, fechaLote:null
+    })
+    trazar('REVERTIR_BAJA','ANIMAL', id, {causaOriginal:prev.causaBaja||null, fechaBajaOriginal:prev.fechaBaja||null})
+  } catch(e) {
+    console.error('Error en ejecutarRevertirBaja:', e)
+    showToast('Error al revertir la baja','err', 4000)
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Sí, revertir baja' }
+    return
+  }
+  closeSheet()
+  showToast(`Baja de "${prev.arete}" revertida ✓`, 'ok')
+  go('animal-ficha', {id})
 }
 
 // ═══════════════════════════════════════════════════
