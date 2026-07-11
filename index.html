@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-007'
+const APP_VERSION = '20260703-008'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1261,6 +1261,22 @@ async function pgDashboard() {
     }
   }
 
+  // Pérdida por mortalidad dentro del período — el peso TOTAL del animal al morir
+  // resta al rendimiento de la finca (kg/ha), no solo deja de sumar.
+  let perdidaMortalidad = 0
+  const mortLoteMap = {}
+  for(const a of animalesInactivos){
+    if(a.causaBaja !== 'Muerte') continue
+    if(!a.fechaBaja || a.fechaBaja < dDesdeTs || a.fechaBaja > dHastaTs) continue
+    const ps = pesajesPorAnimal[a.id] || []
+    const ult = ps.length ? ps[ps.length-1] : null
+    const pesoMuerte = ult?.pesoKg ?? a.pesoInicial ?? 0
+    perdidaMortalidad += pesoMuerte
+    const lid = a.loteIdSalida
+    if(lid) mortLoteMap[lid] = (mortLoteMap[lid]||0) + pesoMuerte
+  }
+  const gananciaNetaFinca = gananciaFinca - perdidaMortalidad
+
   // Lotes con peso — en memoria
   const loteMap2={}; lotes.forEach(l=>loteMap2[l.id]=l)
   let lotesHtml='', gLoteHtml=''
@@ -1276,12 +1292,18 @@ async function pgDashboard() {
       <span class="sm bold">${aLote.length} anim · <span class="green">${Math.round(pLote).toLocaleString('es-CO')} kg</span></span>
     </div>`
   }
-  for(const [lid,gan] of Object.entries(gLoteMap)){
+  // Combinar ganancias y pérdidas por lote en un solo mapa neto
+  const netLoteMap = {...gLoteMap}
+  for(const [lid,perd] of Object.entries(mortLoteMap)){
+    netLoteMap[lid] = (netLoteMap[lid]||0) - perd
+  }
+  for(const [lid,gan] of Object.entries(netLoteMap)){
     const l=loteMap2[parseInt(lid)]
-    gLoteHtml+=`<div class="row-b" style="padding:3px 0"><span class="xs">${l?.nombre||'—'}</span><span class="xs bold green">+${Math.round(gan).toLocaleString('es-CO')} kg</span></div>`
+    gLoteHtml+=`<div class="row-b" style="padding:3px 0"><span class="xs">${l?.nombre||'—'}</span><span class="xs bold" style="color:${gan>=0?'#2E7D32':'#C62828'}">${gan>=0?'+':''}${Math.round(gan).toLocaleString('es-CO')} kg</span></div>`
   }
 
-  const kgHaPeriodo=gananciaFinca>0?(gananciaFinca/area).toFixed(1):'0'
+  const kgHaPeriodoNum = area>0 ? (gananciaNetaFinca/area) : 0
+  const kgHaPeriodo = Math.abs(kgHaPeriodoNum).toFixed(1)
   const gdpColor=gdpProm===null?'gray':gdpProm>=metaN?'green':'orange'
   const dSegBtns=dPeriodos.map(p=>`<button class="${p.v===dPSel?'on':''}" onclick="_seg['dp']=${p.v};go('dashboard')">${p.l}</button>`).join('')
 
@@ -1355,9 +1377,10 @@ async function pgDashboard() {
       </div>`:''}
       <div class="row-b mb4"><span class="sm gray">Ganancia total finca</span><span class="sm bold ${gananciaFinca>0?'green':'gray'}">${gananciaFinca>0?'+':''}${Math.round(gananciaFinca).toLocaleString('es-CO')} kg</span></div>
       ${gananciaVendidos>0?`<div class="row-b mb4"><span class="sm gray">· incluye vendidos</span><span class="sm bold" style="color:#1565C0">+${Math.round(gananciaVendidos).toLocaleString('es-CO')} kg</span></div>`:''}
-      ${gananciaFinca>0?`<div class="row-b mb4"><span class="sm gray">Rendimiento período</span><span class="sm bold blue">${kgHaPeriodo} kg/ha</span></div>`:''}
+      ${perdidaMortalidad>0?`<div class="row-b mb4"><span class="sm gray">🔴 Pérdida por mortalidad</span><span class="sm bold" style="color:#C62828">-${Math.round(perdidaMortalidad).toLocaleString('es-CO')} kg</span></div>`:''}
+      ${(gananciaFinca>0||perdidaMortalidad>0)?`<div class="row-b mb4"><span class="sm gray">Rendimiento período ${perdidaMortalidad>0?'(neto)':''}</span><span class="sm bold" style="color:${gananciaNetaFinca>=0?'#1565C0':'#C62828'}">${gananciaNetaFinca>=0?'':'-'}${kgHaPeriodo} kg/ha</span></div>`:''}
       ${gLoteHtml?`<p class="xs gray" style="margin-top:6px;margin-bottom:4px">Por lote:</p>${gLoteHtml}`:''}
-      ${!gananciaFinca?`<p class="xs gray">Sin pesajes en el período · Ingrese pesajes para ver kg/ha</p>`:''}
+      ${(!gananciaFinca&&!perdidaMortalidad)?`<p class="xs gray">Sin pesajes en el período · Ingrese pesajes para ver kg/ha</p>`:''}
     </div>
 
     <div class="g3 mb8">
@@ -2479,12 +2502,17 @@ async function saveCatSeleccionados() {
   go('ganado')
 }
 
-function openBajaSeleccionados(){
+async function openBajaSeleccionados(){
   if(_ganSelected.size===0){showToast('Selecciona al menos un animal','info');return}
   _sheetBajaIds=[..._ganSelected]
   const n=_sheetBajaIds.length
   const causas=['Muerte','Cesión']
   const hoy=new Date().toISOString().split('T')[0]
+  const anis = await Promise.all(_sheetBajaIds.map(async id=>{
+    const a = await db.animales.get(id)
+    const ult = await getPesoActual(id)
+    return {id, arete:a?.arete||'?', pesoAct: ult?.pesoKg || a?.pesoInicial || 0}
+  }))
   showSheet(`
     <div style="padding:4px 0 8px;border-bottom:1px solid #eee;margin-bottom:14px">
       <p class="bold" style="font-size:1rem">Dar baja — ${n} animal${n>1?'es':''}</p>
@@ -2498,6 +2526,17 @@ function openBajaSeleccionados(){
     </div>
     <div class="field"><label>Fecha de baja</label>
       <input id="bj-fecha" class="inp" type="date" value="${hoy}">
+    </div>
+    <div class="field"><label>Peso nuevo (opcional, por animal)</label>
+      <p class="xs gray" style="margin-bottom:6px">Déjalo vacío para usar el último peso registrado de cada uno.</p>
+      ${anis.map(a=>`
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f5f5f5">
+          <div style="flex:1;min-width:0">
+            <p class="sm bold">${escH(a.arete)}</p>
+            <p class="xs gray">Último: ${a.pesoAct?a.pesoAct.toFixed(1)+' kg':'sin registro'}</p>
+          </div>
+          <input id="bjp-${a.id}" class="inp" type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="kg" style="width:84px;text-align:right;flex-shrink:0">
+        </div>`).join('')}
     </div>
     <div class="field"><label>Observaciones</label>
       <textarea id="bj-obs" class="inp" rows="2" placeholder="Detalles adicionales…" style="resize:none"></textarea>
@@ -2519,13 +2558,20 @@ async function saveBajaSeleccionados(){
   const ids=_sheetBajaIds; if(!ids.length){closeSheet();return}
   const btn=document.querySelector('#ov .btn-r')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
-  let snapshots=[], ok=0
+  let snapshots=[], ok=0, pesajesCreados=[]
   try{
     snapshots=await Promise.all(ids.map(id=>db.animales.get(id)))
     const _bajLoteIds=snapshots.filter(a=>a&&a.loteId).map(a=>a.loteId)
     const _bajLotesMap = _bajLoteIds.length ? Object.fromEntries((await db.lotes.bulkGet([...new Set(_bajLoteIds)])).filter(Boolean).map(l=>[l.id,l.nombre])) : {}
+    const ahora=Date.now(), quien=USER?.nombre||'—'
     for(const snap of snapshots){
       if(!snap) continue
+      const pesoInput = $('bjp-'+snap.id)?.value
+      const pesoNuevo = pesoInput ? parseFloat(String(pesoInput).replace(',','.')) : null
+      if(pesoNuevo && pesoNuevo>0){
+        const pid = await fsAdd('pesajes',{animalId:snap.id, fecha:fechaBaja, pesoKg:pesoNuevo, metodo:'BASCULA', cc:3, obs:'Pesaje de baja', registradoPor:quien, registradoEn:ahora})
+        pesajesCreados.push(pid)
+      }
       await fsUpdate('animales',snap.id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||null,loteId:null,fechaLote:null,loteIdSalida:snap.loteId||null,loteNombreSalida:snap.loteId?(_bajLotesMap[snap.loteId]||null):null})
       ok++
     }
@@ -2547,6 +2593,7 @@ async function saveBajaSeleccionados(){
         obsBaja:null, loteId:prev.loteId||null, fechaLote:prev.fechaLote||null
       })
     }
+    for(const pid of pesajesCreados) await fsDelete('pesajes', pid)
   })
   go('ganado')
 }
@@ -3116,7 +3163,9 @@ async function saveEditarAnimal(id) {
 
 function escH(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 
-function darBaja(id) {
+async function darBaja(id) {
+  const a = await db.animales.get(id)
+  const ult = a ? await getPesoActual(id) : null
   const causas = ['Muerte','Cesión']
   const hoy = new Date().toISOString().split('T')[0]
   showSheet(`
@@ -3130,6 +3179,14 @@ function darBaja(id) {
     <div class="field"><label>Fecha de baja</label>
       <input id="bj1-fecha" class="inp" type="date" value="${hoy}">
     </div>
+    <div class="field"><label>¿Hay un peso nuevo?</label>
+      <div class="seg" style="margin-bottom:8px">
+        <button type="button" id="bj1-pesoNo" class="on" onclick="bj1TogglePeso(false)">No, usar último${ult?' ('+ult.pesoKg.toFixed(1)+' kg)':''}</button>
+        <button type="button" id="bj1-pesoSi" onclick="bj1TogglePeso(true)">Sí, pesar ahora</button>
+      </div>
+      <p class="xs gray" style="margin-bottom:8px">${ult?'Último pesaje: '+ult.pesoKg.toFixed(1)+' kg · '+ffd(ult.fecha):'Sin pesajes registrados — se usará el peso inicial'}</p>
+      <input id="bj1-peso" class="inp" type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="Peso actual en kg" style="display:none">
+    </div>
     <div class="field"><label>Observaciones</label>
       <textarea id="bj1-obs" class="inp" rows="2" placeholder="Detalles adicionales…" style="resize:none"></textarea>
     </div>
@@ -3141,6 +3198,12 @@ function darBaja(id) {
       <button class="btn btn-r" id="bj1-btn" onclick="saveBajaAnimal(${id})">✓ Confirmar baja</button>
     </div>`)
 }
+function bj1TogglePeso(nuevo){
+  const btnSi=$('bj1-pesoSi'), btnNo=$('bj1-pesoNo'), inp=$('bj1-peso')
+  if(btnSi) btnSi.className = nuevo?'on':''
+  if(btnNo) btnNo.className = nuevo?'':'on'
+  if(inp){ inp.style.display = nuevo?'block':'none'; if(nuevo) inp.focus() }
+}
 
 async function saveBajaAnimal(id) {
   const causa = $('bj1-causa')?.value
@@ -3150,22 +3213,36 @@ async function saveBajaAnimal(id) {
     showToast('Selecciona la causa de baja','err')
     return
   }
+  const hayPesoNuevo = $('bj1-pesoSi')?.className === 'on'
+  let pesoNuevo = null
+  if (hayPesoNuevo) {
+    pesoNuevo = parseFloat(String($('bj1-peso')?.value||'').replace(',','.'))
+    if (!pesoNuevo || pesoNuevo<=0) {
+      const f=$('bj1-peso'); if(f){f.style.border='2px solid #C62828';f.focus()}
+      showToast('Ingresa el peso o marca "No, usar último"','err')
+      return
+    }
+  }
   const fechaStr = $('bj1-fecha')?.value
   const obs = $('bj1-obs')?.value?.trim() || ''
   const fechaBaja = fechaStr ? new Date(fechaStr+'T00:00:00').getTime() : Date.now()
   const btn = $('bj1-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
-  let prev
+  let prev, pesajeId
   try {
     prev = await db.animales.get(id)
     const _bajLoteId = prev ? prev.loteId : null
     const _bajLoteNom = _bajLoteId ? (await db.lotes.get(_bajLoteId))?.nombre||null : null
+    if (pesoNuevo) {
+      const ahora=Date.now(), quien=USER?.nombre||'—'
+      pesajeId = await fsAdd('pesajes', {animalId:id, fecha:fechaBaja, pesoKg:pesoNuevo, metodo:'BASCULA', cc:3, obs:'Pesaje de baja', registradoPor:quien, registradoEn:ahora})
+    }
     await fsUpdate('animales', id, {
       activo:0, causaBaja:causa, fechaBaja, obsBaja:obs||null,
       loteId:null, fechaLote:null,
       loteIdSalida:_bajLoteId||null, loteNombreSalida:_bajLoteNom
     })
-    trazar('BAJA_ANIMAL','ANIMAL', id, {causa, fecha:fechaBaja})
+    trazar('BAJA_ANIMAL','ANIMAL', id, {causa, fecha:fechaBaja, pesoAlSalir:pesoNuevo||undefined})
     if (_bajLoteId) await checkLoteVacio([_bajLoteId], fechaBaja)
   } catch(e) {
     showToast('Error al dar de baja','err', 4000)
@@ -3178,6 +3255,7 @@ async function saveBajaAnimal(id) {
       activo:1, causaBaja:null, fechaBaja:null, obsBaja:null,
       loteId:prev.loteId||null, fechaLote:prev.fechaLote||null
     })
+    if (pesajeId) await fsDelete('pesajes', pesajeId)
   })
   go('ganado')
 }
@@ -3462,6 +3540,11 @@ async function openAccionQuitarLote(){
   _sheetQuitarIds=ids
   _aqAccion=null
   _sheetQuitarSnaps=await Promise.all(ids.map(id=>db.animales.get(id)))
+  const pesosActuales = await Promise.all(_sheetQuitarSnaps.map(async a=>{
+    if(!a) return 0
+    const ult = await getPesoActual(a.id)
+    return ult?.pesoKg || a.pesoInicial || 0
+  }))
   const n=ids.length
   const lotes=await db.lotes.where('activo').equals(1).toArray()
   const lotesOpts=lotes.filter(l=>l.id!==_editLoteId).map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')
@@ -3503,6 +3586,17 @@ async function openAccionQuitarLote(){
       </div>
       <div class="field"><label>Fecha</label>
         <input id="aq-fecha" class="inp" type="date" value="${hoy}">
+      </div>
+      <div class="field"><label>Peso nuevo (opcional, por animal)</label>
+        <p class="xs gray" style="margin-bottom:6px">Déjalo vacío para usar el último peso registrado de cada uno.</p>
+        ${_sheetQuitarSnaps.map((a,i)=> a ? `
+          <div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f5f5f5">
+            <div style="flex:1;min-width:0">
+              <p class="sm bold">${escH(a.arete)}</p>
+              <p class="xs gray">Último: ${pesosActuales[i]?pesosActuales[i].toFixed(1)+' kg':'sin registro'}</p>
+            </div>
+            <input id="aqp-${a.id}" class="inp" type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="kg" style="width:84px;text-align:right;flex-shrink:0">
+          </div>` : '').join('')}
       </div>
       <div class="field"><label>Observaciones</label>
         <textarea id="aq-obs" class="inp" rows="2" placeholder="Detalles adicionales…" style="resize:none"></textarea>
@@ -3581,8 +3675,18 @@ async function ejecutarQuitarBaja(){
   const btn=document.querySelector('#ov .btn-r')
   if(btn){btn.disabled=true;btn.textContent='Dando de baja…'}
   const _qbLoteIds=snapshots.filter(a=>a&&a.loteId).map(a=>a.loteId)
+  const pesajesCreados=[]
   try{
-    for(const id of ids) await fsUpdate('animales',id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||undefined,loteId:undefined,fechaLote:undefined})
+    const ahora=Date.now(), quien=USER?.nombre||'—'
+    for(const id of ids){
+      const pesoInput = $('aqp-'+id)?.value
+      const pesoNuevo = pesoInput ? parseFloat(String(pesoInput).replace(',','.')) : null
+      if(pesoNuevo && pesoNuevo>0){
+        const pid = await fsAdd('pesajes',{animalId:id, fecha:fechaBaja, pesoKg:pesoNuevo, metodo:'BASCULA', cc:3, obs:'Pesaje de baja', registradoPor:quien, registradoEn:ahora})
+        pesajesCreados.push(pid)
+      }
+      await fsUpdate('animales',id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||undefined,loteId:undefined,fechaLote:undefined})
+    }
     if(_qbLoteIds.length) await checkLoteVacio(_qbLoteIds, fechaBaja)
   }catch(e){
     showToast('Error al dar de baja','err',4000)
@@ -3595,6 +3699,7 @@ async function ejecutarQuitarBaja(){
       if(!prev) continue
       await fsUpdate('animales',prev.id,{activo:1,causaBaja:undefined,fechaBaja:undefined,obsBaja:undefined,loteId:prev.loteId,fechaLote:prev.fechaLote})
     }
+    for(const pid of pesajesCreados) await fsDelete('pesajes', pid)
   })
   closeSheet()
   _sheetQuitarIds=[]; _sheetQuitarSnaps=[]; _editLoteSelQuitar=new Set()
@@ -7174,7 +7279,10 @@ function rendRenderResumen(filas){
   const activos = filas.filter(f=>f.estado==='activo')
   const vendidos = filas.filter(f=>f.estado==='vendido')
   const bajas = filas.filter(f=>f.estado==='baja')
+  const muertes = filas.filter(f=>f.a.causaBaja==='Muerte')
   const gananciaTotal = filas.reduce((s,f)=>s+f.ganancia,0)
+  const perdidaMortalidadTotal = muertes.reduce((s,f)=>s+f.pesoFinal,0)
+  const gananciaNetaTotal = gananciaTotal - perdidaMortalidadTotal
   const conDias = filas.filter(f=>f.dias>0)
   const gdpProm = conDias.length ? Math.round(conDias.reduce((s,f)=>s+f.gdp,0)/conDias.length) : 0
   const pesoEnFinca = activos.reduce((s,f)=>s+f.pesoFinal,0)
@@ -7188,7 +7296,10 @@ function rendRenderResumen(filas){
     const act = anis.filter(f=>f.estado==='activo')
     const sal = anis.filter(f=>f.estado!=='activo')
     const ven = anis.filter(f=>f.estado==='vendido')
+    const muer = anis.filter(f=>f.a.causaBaja==='Muerte')
     const gan = anis.reduce((s,f)=>s+f.ganancia,0)
+    const perdMort = muer.reduce((s,f)=>s+f.pesoFinal,0)
+    const ganNeto = gan - perdMort
     const conD = anis.filter(f=>f.dias>0)
     const gdp = conD.length ? Math.round(conD.reduce((s,f)=>s+f.gdp,0)/conD.length) : 0
     const pesoActivo = act.reduce((s,f)=>s+f.pesoFinal,0)
@@ -7198,7 +7309,8 @@ function rendRenderResumen(filas){
       <div class="row-b"><span class="xs gray">Activos / Salidos</span><span class="xs bold">${act.length} / ${sal.length}</span></div>
       <div class="row-b"><span class="xs gray">Peso actual en finca</span><span class="xs bold">${Math.round(pesoActivo).toLocaleString('es-CO')} kg</span></div>
       ${ven.length?`<div class="row-b"><span class="xs gray">Kg vendidos</span><span class="xs bold" style="color:#1565C0">${Math.round(kgVend).toLocaleString('es-CO')} kg</span></div>`:''}
-      <div class="row-b"><span class="xs gray">Ganancia total</span><span class="xs bold" style="color:${gan>=0?'#2E7D32':'#C62828'}">${gan>=0?'+':''}${Math.round(gan).toLocaleString('es-CO')} kg</span></div>
+      ${perdMort>0?`<div class="row-b"><span class="xs gray">🔴 Pérdida por mortalidad</span><span class="xs bold" style="color:#C62828">-${Math.round(perdMort).toLocaleString('es-CO')} kg</span></div>`:''}
+      <div class="row-b"><span class="xs gray">Ganancia ${perdMort>0?'neta':'total'}</span><span class="xs bold" style="color:${ganNeto>=0?'#2E7D32':'#C62828'}">${ganNeto>=0?'+':''}${Math.round(ganNeto).toLocaleString('es-CO')} kg</span></div>
       <div class="row-b"><span class="xs gray">GDP promedio</span><span class="xs bold">${gdp} g/día</span></div>
     </div>`
   }).join('')
@@ -7211,9 +7323,13 @@ function rendRenderResumen(filas){
         <div><p style="font-size:1.3rem;font-weight:800">${Math.round(pesoEnFinca).toLocaleString('es-CO')} kg</p><p class="xs" style="opacity:.85">En finca (${activos.length})</p></div>
         <div><p style="font-size:1.3rem;font-weight:800">${Math.round(kgVendidos).toLocaleString('es-CO')} kg</p><p class="xs" style="opacity:.85">Vendidos (${vendidos.length})</p></div>
       </div>
+      ${perdidaMortalidadTotal>0?`<div class="row-b" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.25)">
+        <span class="xs" style="opacity:.85">🔴 Pérdida por mortalidad${muertes.length?' · '+muertes.length+' animal'+(muertes.length>1?'es':''):''}</span>
+        <span class="bold" style="color:#FFAB91">-${Math.round(perdidaMortalidadTotal).toLocaleString('es-CO')} kg</span>
+      </div>`:''}
       <div class="row-b" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.25)">
-        <span class="xs" style="opacity:.85">Ganancia total acumulada${bajas.length?' · '+bajas.length+' baja(s)':''}</span>
-        <span class="bold">${gananciaTotal>=0?'+':''}${Math.round(gananciaTotal).toLocaleString('es-CO')} kg</span>
+        <span class="xs" style="opacity:.85">Ganancia ${perdidaMortalidadTotal>0?'neta':'total'} acumulada${bajas.length?' · '+bajas.length+' baja(s)':''}</span>
+        <span class="bold">${gananciaNetaTotal>=0?'+':''}${Math.round(gananciaNetaTotal).toLocaleString('es-CO')} kg</span>
       </div>
     </div>
     <p class="sec">Por lote (incluye activos, vendidos y bajas)</p>
