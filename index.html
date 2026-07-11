@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-009'
+const APP_VERSION = '20260703-010'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1239,14 +1239,10 @@ async function pgDashboard() {
     return ult.pesoKg-base
   }
   let gananciaFinca=0, gananciaVendidos=0
-  const gLoteMap={}
   for(const a of animales){
     const ps = pesajesPorAnimal[a.id] || []
     const gan = gananciaEnPeriodo(a, ps)
-    if(gan!==null && gan>0){
-      gananciaFinca+=gan
-      if(a.loteId) gLoteMap[a.loteId]=(gLoteMap[a.loteId]||0)+gan
-    }
+    if(gan!==null && gan>0) gananciaFinca+=gan
   }
   // Vendidos/bajas dentro del período: su ganancia también cuenta para el kg/ha —
   // salieron de la finca, pero la produjeron mientras estuvieron en ella.
@@ -1256,15 +1252,12 @@ async function pgDashboard() {
     if(gan!==null && gan>0){
       gananciaFinca+=gan
       gananciaVendidos+=gan
-      const lid=a.loteIdSalida
-      if(lid) gLoteMap[lid]=(gLoteMap[lid]||0)+gan
     }
   }
 
   // Pérdida por mortalidad dentro del período — el peso TOTAL del animal al morir
   // resta al rendimiento de la finca (kg/ha), no solo deja de sumar.
   let perdidaMortalidad = 0
-  const mortLoteMap = {}
   for(const a of animalesInactivos){
     if(a.causaBaja !== 'Muerte') continue
     if(!a.fechaBaja || a.fechaBaja < dDesdeTs || a.fechaBaja > dHastaTs) continue
@@ -1272,35 +1265,8 @@ async function pgDashboard() {
     const ult = ps.length ? ps[ps.length-1] : null
     const pesoMuerte = ult?.pesoKg ?? a.pesoInicial ?? 0
     perdidaMortalidad += pesoMuerte
-    const lid = a.loteIdSalida
-    if(lid) mortLoteMap[lid] = (mortLoteMap[lid]||0) + pesoMuerte
   }
   const gananciaNetaFinca = gananciaFinca - perdidaMortalidad
-
-  // Lotes con peso — en memoria
-  const loteMap2={}; lotes.forEach(l=>loteMap2[l.id]=l)
-  let lotesHtml='', gLoteHtml=''
-  for(const l of lotes.slice(0,6)){
-    const aLote=animales.filter(a=>a.loteId===l.id)
-    let pLote=0
-    for(const a of aLote){
-      const ps=pesajesPorAnimal[a.id]||[]
-      pLote+=(ps.length?ps[ps.length-1].pesoKg:(a.pesoInicial||0))
-    }
-    lotesHtml+=`<div class="row-b" style="padding:6px 0;border-bottom:1px solid #f0f0f0">
-      <span class="sm">${l.nombre}</span>
-      <span class="sm bold">${aLote.length} anim · <span class="green">${Math.round(pLote).toLocaleString('es-CO')} kg</span></span>
-    </div>`
-  }
-  // Combinar ganancias y pérdidas por lote en un solo mapa neto
-  const netLoteMap = {...gLoteMap}
-  for(const [lid,perd] of Object.entries(mortLoteMap)){
-    netLoteMap[lid] = (netLoteMap[lid]||0) - perd
-  }
-  for(const [lid,gan] of Object.entries(netLoteMap)){
-    const l=loteMap2[parseInt(lid)]
-    gLoteHtml+=`<div class="row-b" style="padding:3px 0"><span class="xs">${l?.nombre||'—'}</span><span class="xs bold" style="color:${gan>=0?'#2E7D32':'#C62828'}">${gan>=0?'+':''}${Math.round(gan).toLocaleString('es-CO')} kg</span></div>`
-  }
 
   const kgHaPeriodoNum = area>0 ? (gananciaNetaFinca/area) : 0
   const kgHaPeriodo = Math.abs(kgHaPeriodoNum).toFixed(1)
@@ -1379,7 +1345,6 @@ async function pgDashboard() {
       ${gananciaVendidos>0?`<div class="row-b mb4"><span class="sm gray">· incluye vendidos</span><span class="sm bold" style="color:#1565C0">+${Math.round(gananciaVendidos).toLocaleString('es-CO')} kg</span></div>`:''}
       ${perdidaMortalidad>0?`<div class="row-b mb4"><span class="sm gray">🔴 Pérdida por mortalidad</span><span class="sm bold" style="color:#C62828">-${Math.round(perdidaMortalidad).toLocaleString('es-CO')} kg</span></div>`:''}
       ${(gananciaFinca>0||perdidaMortalidad>0)?`<div class="row-b mb4"><span class="sm gray">Rendimiento período ${perdidaMortalidad>0?'(neto)':''}</span><span class="sm bold" style="color:${gananciaNetaFinca>=0?'#1565C0':'#C62828'}">${gananciaNetaFinca>=0?'':'-'}${kgHaPeriodo} kg/ha</span></div>`:''}
-      ${gLoteHtml?`<p class="xs gray" style="margin-top:6px;margin-bottom:4px">Por lote:</p>${gLoteHtml}`:''}
       ${(!gananciaFinca&&!perdidaMortalidad)?`<p class="xs gray">Sin pesajes en el período · Ingrese pesajes para ver kg/ha</p>`:''}
     </div>
 
