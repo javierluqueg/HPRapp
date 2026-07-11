@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f334.png">
 <script>
-const APP_VERSION = '20260703-008'
+const APP_VERSION = '20260703-009'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1808,6 +1808,13 @@ async function pgGanado() {
   _ganPage = PARAMS._ganPage || 1
   updHdrGanado()
   const animales=await db.animales.where('activo').equals(1).toArray()
+  if(animales.length){
+    // Último peso registrado por animal — una sola consulta batch (evita N queries)
+    const todosPesajes = await db.pesajes.orderBy('fecha').toArray()
+    const ultPesoMap = {}
+    for(const p of todosPesajes){ ultPesoMap[p.animalId] = p.pesoKg }  // ya vienen ordenados por fecha asc → el último sobreescribe
+    for(const a of animales){ a._pesoAct = ultPesoMap[a.id] ?? a.pesoInicial ?? 0 }
+  }
   _ganAll=animales
   if(!animales.length) return `<div class="empty"><div class="eico">🐄</div><p>Sin animales registrados</p>
     <button class="btn btn-g mt12" style="max-width:220px;margin:12px auto 0" onclick="go('animal-nuevo')">+ Agregar animal</button></div>`
@@ -1882,7 +1889,7 @@ async function pgGanado() {
           </div>
           <p class="xs gray mt8">${a.raza||'Sin raza'} · ${lote?lote.nombre:'Sin lote'}</p>
         </div>
-        <div class="right" style="flex-shrink:0;margin-left:8px"><p class="bold green">${a.pesoInicial||0} kg</p><p class="xs gray">peso reg.</p></div>
+        <div class="right" style="flex-shrink:0;margin-left:8px"><p class="bold green">${a._pesoAct??a.pesoInicial??0} kg</p><p class="xs gray">peso reg.</p></div>
       </div>
     </div>`
   }
@@ -2097,7 +2104,7 @@ async function reRenderCardsGanado(){
             <p class="xs gray mt8">${a.raza||'Sin raza'} · ${lote?lote.nombre:'Sin lote'}</p>
           </div>
         </div>
-        <div class="right" style="flex-shrink:0;margin-left:8px"><p class="bold green">${a.pesoInicial||0} kg</p><p class="xs gray">peso reg.</p></div>
+        <div class="right" style="flex-shrink:0;margin-left:8px"><p class="bold green">${a._pesoAct??a.pesoInicial??0} kg</p><p class="xs gray">peso reg.</p></div>
       </div>
     </div>`
   }
