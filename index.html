@@ -1382,7 +1382,6 @@ async function pgDashboard() {
         </div>
       </div>`:''}
       <div class="row-b mb4"><span class="sm gray">Ganancia total finca</span><span class="sm bold ${gananciaFinca>0?'green':'gray'}">${gananciaFinca>0?'+':''}${Math.round(gananciaFinca).toLocaleString('es-CO')} kg</span></div>
-      ${gananciaVendidos>0?`<div class="row-b mb4"><span class="sm gray">· incluye vendidos</span><span class="sm bold" style="color:#1565C0">+${Math.round(gananciaVendidos).toLocaleString('es-CO')} kg</span></div>`:''}
       ${perdidaMortalidad>0?`<div class="row-b mb4"><span class="sm gray">🔴 Pérdida por mortalidad</span><span class="sm bold" style="color:#C62828">-${Math.round(perdidaMortalidad).toLocaleString('es-CO')} kg</span></div>`:''}
       ${(gananciaFinca>0||perdidaMortalidad>0)?`<div class="row-b mb4"><span class="sm gray">Rendimiento período ${perdidaMortalidad>0?'(neto)':''}</span><span class="sm bold" style="color:${gananciaNetaFinca>=0?'#1565C0':'#C62828'}">${gananciaNetaFinca>=0?'':'-'}${kgHaPeriodo} kg/ha</span></div>`:''}
       ${(!gananciaFinca&&!perdidaMortalidad)?`<p class="xs gray">Sin pesajes en el período · Ingrese pesajes para ver kg/ha</p>`:''}
