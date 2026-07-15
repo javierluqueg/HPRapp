@@ -6464,6 +6464,7 @@ let _rvPesos = {}            // { [id]: kg } pesos editados en modo pxkg
 let _rvTab = 'lotes'         // 'lotes' | 'animales'
 let _rvLotes = []            // lotes con sus animales para pestaña lotes
 let _rvLoteExp = new Set()   // IDs de lotes expandidos
+let _rvHistPes = {}          // { [animalId]: pesajes[] } cache para el resumen de ganancia de la venta
 
 async function _rvCargarAnimales() {
   const activos = await db.animales.where('activo').equals(1).toArray()
@@ -6592,6 +6593,7 @@ async function openRegistrarVenta() {
   _rvFiltrados = []
   _rvTab = 'lotes'
   _rvLoteExp = new Set()
+  _rvHistPes = {}
   const activos = await db.animales.where('activo').equals(1).toArray()
   if (!activos.length) { showToast('No hay animales activos','err'); return }
   await _rvCargarAnimales()
@@ -6607,6 +6609,7 @@ async function openVentaDesdeLote(loteId) {
   _rvFiltrados = []
   _rvTab = 'lotes'
   _rvLoteExp = new Set([loteId])   // ese lote expandido
+  _rvHistPes = {}
   const activos = await db.animales.where('activo').equals(1).toArray()
   if (!activos.length) { showToast('No hay animales activos','err'); return }
   await _rvCargarAnimales()
@@ -6622,13 +6625,14 @@ function rvCancelarBusqueda() {
   go('ventas')
 }
 
-function rvAbrirSheet() {
+async function rvAbrirSheet() {
   if (!_rvSel.size) { showToast('Selecciona al menos un animal','err'); return }
   const hoy = toD(Date.now())
   showSheet(`
     <div class="sh-title">💰 Registrar Venta<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <p class="xs bold" style="color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Animales seleccionados</p>
     <div id="rv-sel-lista" style="border:1.5px solid #A5D6A7;border-radius:10px;overflow:hidden;margin-bottom:14px"></div>
+    <div id="rv-resumen-gan" style="margin-bottom:14px"><p class="xs gray">Calculando ganancia de peso…</p></div>
     <p class="xs bold" style="color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Precio de venta</p>
     <div class="seg mb10">
       <button id="rv-tab-pxkg" class="on" onclick="rvSetModo('pxkg')">💲 Por kilo</button>
@@ -6646,7 +6650,7 @@ function rvAbrirSheet() {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
       <div class="field"><label>Fecha venta *</label>
-        <input id="rv-fecha" class="inp" type="date" value="${hoy}"></div>
+        <input id="rv-fecha" class="inp" type="date" value="${hoy}" oninput="rvRenderResumenGanancia()"></div>
       <div class="field"><label>Comprador</label>
         <input id="rv-comprador" class="inp" placeholder="Opcional"></div>
     </div>
@@ -6657,6 +6661,79 @@ function rvAbrirSheet() {
       <button class="btn btn-g" id="rv-btn" onclick="guardarVenta()">✓ Registrar venta</button>
     </div>`)
   rvUpdSeleccionados()
+  await rvCargarHistPesajes([..._rvSel])
+  rvRenderResumenGanancia()
+}
+
+// Carga (y cachea) el historial de pesajes de cada animal, para no re-consultar
+// la base de datos en cada tecla mientras se ajustan pesos o la fecha de venta.
+async function rvCargarHistPesajes(ids) {
+  const faltan = ids.filter(id => !_rvHistPes[id])
+  if (!faltan.length) return
+  const resultados = await Promise.all(faltan.map(id => db.pesajes.where('animalId').equals(id).sortBy('fecha')))
+  faltan.forEach((id,i) => { _rvHistPes[id] = resultados[i] })
+}
+
+// Resumen de ganancia de peso del grupo antes de vender:
+// primer pesaje (ingreso a la finca) → pesaje anterior → este último pesaje (el de venta)
+function rvRenderResumenGanancia() {
+  const el = document.getElementById('rv-resumen-gan')
+  if (!el) return
+  const selAni = _rvAnimales.filter(a => _rvSel.has(a.id))
+  if (!selAni.length) { el.innerHTML = ''; return }
+  const fechaStr = document.getElementById('rv-fecha')?.value
+  const fechaVentaTs = fechaStr ? fromD(fechaStr) : Date.now()
+  const fmtKg = v => (v>=0?'+':'-') + Math.abs(v).toLocaleString('es-CO',{minimumFractionDigits:1,maximumFractionDigits:1})
+  const fmt1 = v => v.toLocaleString('es-CO',{minimumFractionDigits:1,maximumFractionDigits:1})
+
+  const filas = selAni.map(a => {
+    const ps = _rvHistPes[a.id] || []
+    const pesoVenta = rvGetPeso(a)
+    const pesoInicial = a.pesoInicial != null ? a.pesoInicial : (ps.length ? ps[0].pesoKg : pesoVenta)
+    const fechaIngreso = a.fechaIngreso || (ps.length ? ps[0].fecha : null)
+    const anterior = ps.length ? ps[ps.length-1] : null
+    const pesoAnterior = anterior ? anterior.pesoKg : pesoInicial
+    const fechaAnterior = anterior ? anterior.fecha : fechaIngreso
+    const gananciaTotal = pesoVenta - pesoInicial
+    const diasTotal = fechaIngreso ? Math.round((fechaVentaTs - fechaIngreso) / 86400000) : null
+    const gdpTotal = (diasTotal && diasTotal > 0) ? Math.round(gananciaTotal / diasTotal * 1000) : null
+    const gananciaReciente = pesoVenta - pesoAnterior
+    const diasReciente = fechaAnterior ? Math.round((fechaVentaTs - fechaAnterior) / 86400000) : null
+    const gdpReciente = (diasReciente && diasReciente > 0) ? Math.round(gananciaReciente / diasReciente * 1000) : null
+    return { a, pesoInicial, pesoAnterior, pesoVenta, gananciaTotal, gdpTotal, gdpReciente }
+  })
+
+  const gananciaGrupo = filas.reduce((s,f) => s + f.gananciaTotal, 0)
+  const conGT = filas.filter(f => f.gdpTotal !== null)
+  const gdpGrupoTotal = conGT.length ? Math.round(conGT.reduce((s,f) => s + f.gdpTotal, 0) / conGT.length) : null
+  const conGR = filas.filter(f => f.gdpReciente !== null)
+  const gdpGrupoReciente = conGR.length ? Math.round(conGR.reduce((s,f) => s + f.gdpReciente, 0) / conGR.length) : null
+
+  el.innerHTML = `
+    <div style="background:#E3F2FD;border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <p class="xs bold" style="color:#1565C0;margin-bottom:6px">📈 Ganancia de peso del grupo (${filas.length})</p>
+      <div style="font-size:.8rem;color:#0D47A1;line-height:1.7">
+        <div class="row-b"><span>Ganancia total</span><strong>${fmtKg(gananciaGrupo)} kg</strong></div>
+        <div class="row-b"><span>GDP prom. (desde ingreso)</span><strong>${gdpGrupoTotal!==null?gdpGrupoTotal+' g/día':'—'}</strong></div>
+        <div class="row-b"><span>GDP prom. (reciente)</span><strong>${gdpGrupoReciente!==null?gdpGrupoReciente+' g/día':'—'}</strong></div>
+      </div>
+    </div>
+    <details style="border:1px solid #E0E0E0;border-radius:10px;overflow:hidden">
+      <summary style="padding:8px 10px;font-size:.78rem;font-weight:700;color:#555;cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between">
+        <span>Detalle por animal</span><span style="font-size:.7rem;color:#999">toca para ver</span>
+      </summary>
+      ${filas.map((f,i) => `
+        <div style="padding:7px 10px;${i<filas.length-1?'border-bottom:1px solid #f2f2f2':''}">
+          <div class="row-b">
+            <span style="font-size:.82rem;font-weight:700">${escH(f.a.arete)}</span>
+            <span style="font-size:.82rem;font-weight:700;color:${f.gananciaTotal>=0?'#2E7D32':'#C62828'}">${fmtKg(f.gananciaTotal)} kg</span>
+          </div>
+          <p style="font-size:.68rem;color:#888;margin-top:1px">
+            Inicial ${fmt1(f.pesoInicial)} → Anterior ${fmt1(f.pesoAnterior)} → Venta ${fmt1(f.pesoVenta)} kg
+            · GDP total ${f.gdpTotal!==null?f.gdpTotal+'g/d':'—'} · reciente ${f.gdpReciente!==null?f.gdpReciente+'g/d':'—'}
+          </p>
+        </div>`).join('')}
+    </details>`
 }
 
 function rvFiltrar() {
@@ -6833,6 +6910,7 @@ function rvPesoInput(id, val) {
   if (!isNaN(v) && v > 0) _rvPesos[id] = v
   else delete _rvPesos[id]
   rvUpdResumen()
+  rvRenderResumenGanancia()
   // Actualizar solo el total del pie sin re-renderizar toda la lista
   const selAni = _rvAnimales.filter(a => _rvSel.has(a.id))
   const pesoTot = selAni.reduce((s,a) => s + rvGetPeso(a), 0)
@@ -6849,7 +6927,7 @@ function rvUpdSeleccionados() {
   const modoKg  = _rvModoPrecio === 'pxkg'
   lista.innerHTML = selAni.map((a,i) => `
     <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;${i<selAni.length-1?'border-bottom:1px solid #E8F5E9':''}">
-      <button onclick="rvToggle(${a.id});rvUpdSeleccionados();rvUpdResumen()" style="border:none;background:#FFEBEE;color:#C62828;border-radius:50%;width:22px;height:22px;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>
+      <button onclick="rvToggle(${a.id});rvUpdSeleccionados();rvUpdResumen();rvRenderResumenGanancia()" style="border:none;background:#FFEBEE;color:#C62828;border-radius:50%;width:22px;height:22px;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>
       <div style="flex:1;min-width:0">
         <p style="font-size:.83rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">'+a.nombre+'</span>':''}</p>
         <p style="font-size:.7rem;color:#888">${a._loteNom} · ${a.categoria||''}</p>
