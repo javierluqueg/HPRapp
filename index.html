@@ -282,6 +282,21 @@ button{cursor:pointer}
       history.pushState({hprapp:true}, '', location.href)
     })
   } catch(e) { /* Si el navegador bloquea pushState (ej. file://), no hacer nada */ }
+
+  // Safari reconoce el gesto de "volver atrás" apenas el dedo toca los ~24px
+  // del borde izquierdo/derecho de la pantalla — antes de que el popstate de
+  // arriba pueda actuar. Por eso se intercepta el arrastre (touchmove) que
+  // empieza en esa franja, para que el navegador nunca llegue a interpretarlo
+  // como el gesto de navegación.
+  const EDGE_PX = 24
+  let _edgeTouch = false
+  document.addEventListener('touchstart', e => {
+    const x = e.touches[0].clientX
+    _edgeTouch = x < EDGE_PX || x > window.innerWidth - EDGE_PX
+  }, {passive:true})
+  document.addEventListener('touchmove', e => {
+    if (_edgeTouch && e.cancelable) e.preventDefault()
+  }, {passive:false})
 })()
 
 // ═══════════════════════════════════════════════════
@@ -6174,6 +6189,35 @@ async function pgVentas() {
   }
   const txList = Object.values(txMap).sort((a,b) => (b.fechaBaja||0)-(a.fechaBaja||0))
 
+  // GDP por animal — se calcula desde ingreso (pesoInicial→pesoVenta) y también
+  // "reciente" (desde el pesaje anterior a la venta). Se trae el historial de
+  // pesajes de todos los animales filtrados en una sola consulta indexada.
+  const idsFiltrados = filtrados.map(a => a.id)
+  const histPesajes = idsFiltrados.length
+    ? await db.pesajes.where('animalId').anyOf(idsFiltrados).sortBy('fecha')
+    : []
+  const histPorAnimal = {}
+  for (const p of histPesajes) {
+    if (!histPorAnimal[p.animalId]) histPorAnimal[p.animalId] = []
+    histPorAnimal[p.animalId].push(p)
+  }
+  function _gdpVenta(a) {
+    const ps = histPorAnimal[a.id] || []
+    const pesoVenta = a.pesoVenta || 0
+    const pesoInicial = a.pesoInicial != null ? a.pesoInicial : pesoVenta
+    const previos = a.fechaBaja ? ps.filter(p => p.fecha < a.fechaBaja) : ps.slice(0,-1)
+    const anterior = previos.length ? previos[previos.length-1] : null
+    const pesoAnterior = anterior ? anterior.pesoKg : pesoInicial
+    const fechaAnterior = anterior ? anterior.fecha : a.fechaIngreso
+    const gananciaTotal = pesoVenta - pesoInicial
+    const diasTotal = (a.fechaIngreso && a.fechaBaja) ? Math.round((a.fechaBaja - a.fechaIngreso)/86400000) : null
+    const gdpTotal = (diasTotal && diasTotal>0) ? Math.round(gananciaTotal/diasTotal*1000) : null
+    const gananciaReciente = pesoVenta - pesoAnterior
+    const diasReciente = (fechaAnterior && a.fechaBaja) ? Math.round((a.fechaBaja - fechaAnterior)/86400000) : null
+    const gdpReciente = (diasReciente && diasReciente>0) ? Math.round(gananciaReciente/diasReciente*1000) : null
+    return { gananciaTotal, gdpTotal, gdpReciente }
+  }
+
   // Botón eliminar seleccionados
   const barraElim = `<div id="vt-barra-elim" style="display:none;background:#FFEBEE;border:1.5px solid #EF9A9A;border-radius:10px;padding:8px 12px;margin-bottom:10px;align-items:center;justify-content:space-between">
     <span class="xs bold" style="color:#C62828" id="vt-barra-cnt">0 seleccionadas</span>
@@ -6191,13 +6235,18 @@ async function pgVentas() {
     const txPxkg     = txPeso > 0 ? Math.round(txValor/txPeso) : null
     const txFecha    = tx.fechaBaja ? fd(tx.fechaBaja) : 'Sin fecha'
 
-    const innerRows = tx.items.map(a => {
+    const gdpsItem = tx.items.map(a => ({ a, ...(_gdpVenta(a)) }))
+    const conGdp   = gdpsItem.filter(x => x.gdpTotal !== null)
+    const txGdpProm = conGdp.length ? Math.round(conGdp.reduce((s,x)=>s+x.gdpTotal,0)/conGdp.length) : null
+
+    const innerRows = gdpsItem.map(({a, gananciaTotal, gdpTotal, gdpReciente}) => {
       const valV = a.valorVenta || 0
       return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f0f0f0">
         <div id="vt-chk-${a.id}" onclick="vtToggleSelEl(${a.id},this)" style="width:20px;height:20px;border-radius:50%;border:2px solid #ddd;flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer"></div>
         <div style="flex:1;min-width:0">
           <p style="font-size:.85rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''}</p>
-          <p style="font-size:.72rem;color:#aaa">${a.categoria||''} · ${a.pesoVenta?a.pesoVenta+' kg':'sin peso'}</p>
+          <p style="font-size:.72rem;color:#aaa">${a.categoria||''} · ${a.pesoVenta?a.pesoVenta+' kg':'sin peso'}${gananciaTotal?' · '+(gananciaTotal>=0?'+':'')+Math.round(gananciaTotal)+'kg':''}</p>
+          <p style="font-size:.68rem;color:#1565C0;margin-top:1px">${gdpTotal!==null?'GDP total '+gdpTotal+'g/d':''}${gdpTotal!==null&&gdpReciente!==null?' · ':''}${gdpReciente!==null?'reciente '+gdpReciente+'g/d':''}</p>
         </div>
         <p style="font-size:.88rem;font-weight:800;color:#1565C0;flex-shrink:0;margin-right:6px">${valV?fmt(valV):''}</p>
         <button onclick="openDetalleVenta(${a.id})" style="border:1.5px solid #e0e0e0;background:white;color:#555;border-radius:8px;padding:5px 10px;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0">Ver</button>
@@ -6214,6 +6263,7 @@ async function pgVentas() {
           <div style="display:flex;align-items:center;gap:8px;margin-top:3px;flex-wrap:wrap">
             <span style="font-size:.78rem;font-weight:700;color:#388E3C;background:#E8F5E9;border-radius:6px;padding:2px 8px">${txFecha}</span>
             ${tx.comprador?'<span style="font-size:.75rem;color:#666">👤 '+tx.comprador+'</span>':''}
+            ${txGdpProm!==null?'<span style="font-size:.75rem;color:#1565C0">📈 GDP prom. '+txGdpProm+'g/d</span>':''}
           </div>
         </div>
         <span class="vt-tx-ico" style="font-size:1.1rem;color:#aaa;flex-shrink:0;transition:transform .2s">▾</span>
