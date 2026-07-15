@@ -651,7 +651,7 @@ let _sheetQuitarIds=[], _sheetQuitarSnaps=[], _aqAccion=null
 const $ = id => document.getElementById(id)
 const ffd = ts => ts ? new Date(+ts).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '—'
 const ffdHora = ts => ts ? new Date(+ts).toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'
-const toD = ts => new Date(+ts).toISOString().split('T')[0]
+const toD = ts => { const d=new Date(+ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0') }
 const fromD = s => new Date(s+'T00:00:00').getTime()
 const diasDesde = ts => Math.max(0, Math.round((Date.now()-+ts)/86400000))
 const fmtDias = n => n === 0 ? '< 1 día' : n + (n === 1 ? ' día' : ' días')
@@ -1210,7 +1210,7 @@ async function pgDashboard() {
   const dPeriodos=[{v:30,l:'30d'},{v:90,l:'90d'},{v:180,l:'6m'},{v:365,l:'1a'},{v:0,l:'Todo'},{v:-1,l:'📅 Fechas'}]
   const dPSel=parseInt(_seg['dp']??'90')
   const esCustom=dPSel===-1
-  const hoyStr=new Date().toISOString().split('T')[0]
+  const hoyStr=toD(Date.now())
   const dDesde=esCustom?(_seg['dp_desde']||''):''
   const dHasta=esCustom?(_seg['dp_hasta']||hoyStr):''
   const dDesdeTs=esCustom
@@ -1692,7 +1692,7 @@ async function eliminarLluvia(id) {
 }
 
 function openRegistrarLluvia() {
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = toD(Date.now())
   showSheet(`
     <div class="sh-title">🌧 Registrar lluvia<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <div class="field">
@@ -2161,7 +2161,7 @@ function openLaborSeleccionados() {
   if (_ganSelected.size === 0) { showToast('Selecciona al menos un animal','info'); return }
   _sheetLaborIds = [..._ganSelected]
   const n = _sheetLaborIds.length
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = toD(Date.now())
   showSheet(`
     <div class="sh-title">💉 Labor masiva — ${n} animal${n>1?'es':''}<button class="sh-x" onclick="closeSheet()">✕</button></div>
 
@@ -2479,7 +2479,7 @@ async function openBajaSeleccionados(){
   _sheetBajaIds=[..._ganSelected]
   const n=_sheetBajaIds.length
   const causas=['Muerte','Cesión']
-  const hoy=new Date().toISOString().split('T')[0]
+  const hoy=toD(Date.now())
   const anis = await Promise.all(_sheetBajaIds.map(async id=>{
     const a = await db.animales.get(id)
     const ult = await getPesoActual(id)
@@ -2584,7 +2584,7 @@ async function openLoteSeleccionados(){
   else if(tienenLote===n) subTitle=`Los ${n} animal${n>1?'es':''} cambiarán de lote`
   else subTitle=`${n} animal${n>1?'es':''} sin lote asignado`
   const loteOpts=lotes.map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')
-  const hoy=new Date().toISOString().split('T')[0]
+  const hoy=toD(Date.now())
   showSheet(`
     <div style="padding:4px 0 10px;border-bottom:1px solid #eee;margin-bottom:14px">
       <p class="bold" style="font-size:1rem">Asignar lote — ${n} animal${n>1?'es':''}</p>
@@ -3139,7 +3139,7 @@ async function darBaja(id) {
   const a = await db.animales.get(id)
   const ult = a ? await getPesoActual(id) : null
   const causas = ['Muerte','Cesión']
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = toD(Date.now())
   showSheet(`
     <div class="sh-title">🔴 Dar de baja<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <div class="field"><label>Causa de baja *</label>
@@ -3521,7 +3521,7 @@ async function openAccionQuitarLote(){
   const lotes=await db.lotes.where('activo').equals(1).toArray()
   const lotesOpts=lotes.filter(l=>l.id!==_editLoteId).map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')
   const causas=['Muerte','Venta','Cesión']
-  const hoy=new Date().toISOString().split('T')[0]
+  const hoy=toD(Date.now())
   showSheet(`
     <div style="padding:4px 0 8px;border-bottom:1px solid #eee;margin-bottom:14px">
       <p class="bold" style="font-size:1rem">Quitar del lote — ${n} animal${n>1?'es':''}</p>
@@ -4268,7 +4268,7 @@ async function openLaborLoteFicha(loteId, modoSel=false) {
   _lfSelMode = modoSel
   _lfSelected = modoSel ? new Set() : new Set(animales.map(a=>a.id))
   _lfLoteId = parseInt(loteId)
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = toD(Date.now())
   const n = animales.length
 
   const listaAnimalesHTML = modoSel ? `
@@ -5639,7 +5639,7 @@ async function pgPotreroFicha({id}) {
 }
 
 function repararFechaIngreso(potreroId, cicloId) {
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = toD(Date.now())
   showSheet(`
     <div class="sh-title">📅 Ingresar fecha real<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <p class="sm gray mb14">¿En qué fecha ingresó realmente el lote a este potrero?</p>
@@ -5681,7 +5681,7 @@ async function forzarDisponible(potreroId, cicloId) {
 }
 
 function openNuevaLaborPotrero(potreroId) {
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = toD(Date.now())
   showSheet(`
     <div class="sh-title">🛠 Registrar labor<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <input type="hidden" id="lp-tipo" value="">
@@ -5791,7 +5791,7 @@ async function openEditarLaborPotrero(laborId, potreroId) {
   const l = await db.laboresPotrero.get(laborId)
   if (!l) { showToast('Labor no encontrada','err'); return }
   const TIPOS_LP = {CERCA:'🔧 Cerca', GUADANA:'🌿 Guadaña', FUMIGACION:'🧴 Fumigación', TOCONEO:'🪓 Toconeo', SIEMBRA:'🌱 Siembra', RESIEMBRA:'🌾 Resiembra'}
-  const toDateStr = ts => ts ? new Date(ts).toISOString().split('T')[0] : ''
+  const toDateStr = ts => ts ? toD(ts) : ''
   showSheet(`
     <div class="sh-title">✏️ Editar labor<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <input type="hidden" id="lp-tipo" value="${l.tipo}">
@@ -6151,7 +6151,7 @@ async function pgVentas() {
   // Agrupar por TRANSACCIÓN (fecha + comprador)
   const txMap = {}
   for (const a of filtrados) {
-    const dateKey = a.fechaBaja ? new Date(a.fechaBaja).toISOString().slice(0,10) : '0000-00-00'
+    const dateKey = a.fechaBaja ? toD(a.fechaBaja) : '0000-00-00'
     const buyKey  = (a.comprador||'').trim().toLowerCase()
     const txKey   = dateKey + '|' + buyKey
     if (!txMap[txKey]) txMap[txKey] = { fechaBaja: a.fechaBaja, comprador: a.comprador||null, items: [] }
@@ -6363,7 +6363,7 @@ async function _pgCesiones() {
   // Agrupar por fecha
   const txMap = {}
   for (const a of filtrados) {
-    const dateKey = a.fechaBaja ? new Date(a.fechaBaja).toISOString().slice(0,10) : '0000-00-00'
+    const dateKey = a.fechaBaja ? toD(a.fechaBaja) : '0000-00-00'
     if (!txMap[dateKey]) txMap[dateKey] = { fechaBaja: a.fechaBaja, items: [] }
     txMap[dateKey].items.push(a)
   }
@@ -6624,7 +6624,7 @@ function rvCancelarBusqueda() {
 
 function rvAbrirSheet() {
   if (!_rvSel.size) { showToast('Selecciona al menos un animal','err'); return }
-  const hoy = new Date().toISOString().split('T')[0]
+  const hoy = toD(Date.now())
   showSheet(`
     <div class="sh-title">💰 Registrar Venta<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <p class="xs bold" style="color:#555;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Animales seleccionados</p>
@@ -7221,7 +7221,7 @@ async function exportarVentasExcel() {
   XLSX.utils.book_append_sheet(wb, ws, 'Ventas')
   const buf = XLSX.write(wb,{bookType:'xlsx',type:'array'})
   const blob = new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
-  const fname = `HPRapp-Ventas-${new Date().toISOString().split('T')[0]}.xlsx`
+  const fname = `HPRapp-Ventas-${toD(Date.now())}.xlsx`
   if (navigator.canShare&&navigator.canShare({files:[new File([blob],fname)]})){
     try{await navigator.share({files:[new File([blob],fname)],title:'Ventas HPRapp'});return}catch(e){if(e.name==='AbortError')return}
   }
@@ -7864,7 +7864,7 @@ async function exportarParaImportar(){
     wsPes['!cols']=[{wch:14},{wch:10},{wch:14},{wch:30}]
     XLSX.utils.book_append_sheet(wb, wsPes, 'PESAJES')
 
-    const fecha = new Date().toISOString().split('T')[0]
+    const fecha = toD(Date.now())
     XLSX.writeFile(wb, `HPRapp-Exportacion-${fecha}.xlsx`)
     showToast('✅ Exportación lista','ok')
   }catch(e){ await showAlert('Error al exportar: '+e.message) }
@@ -7995,7 +7995,7 @@ async function exportarExcel(){
     }).sort((a,b)=>b['N° animales']-a['N° animales'])
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumenLoteRows), 'Rendimiento por lote')
 
-    XLSX.writeFile(wb,`HPRapp-${new Date().toISOString().split('T')[0]}.xlsx`)
+    XLSX.writeFile(wb,`HPRapp-${toD(Date.now())}.xlsx`)
   }catch(e){await showAlert('Error al exportar: '+e.message)}
 }
 
@@ -8518,14 +8518,14 @@ async function compartirArchivo(tipo) {
       ])
       const data = JSON.stringify({v:3,app:'HPRapp',ts:Date.now(),animales,pesajes,labores,potreros,lotes,ciclos,lluvias,usuarios,config,laboresPotrero,rotaciones},null,2)
       blob = new Blob([data], {type:'application/json'})
-      filename = `HPRapp-backup-${new Date().toISOString().split('T')[0]}.json`
+      filename = `HPRapp-backup-${toD(Date.now())}.json`
     } else if (tipo === 'excel') {
       // Reusar exportarExcel pero retornar blob en vez de descargar
       blob = await generarExcelBlob()
-      filename = `HPRapp-datos-${new Date().toISOString().split('T')[0]}.xlsx`
+      filename = `HPRapp-datos-${toD(Date.now())}.xlsx`
     } else if (tipo === 'pdf') {
       blob = await generarPdfBlob()
-      filename = `HPRapp-reporte-${new Date().toISOString().split('T')[0]}.pdf`
+      filename = `HPRapp-reporte-${toD(Date.now())}.pdf`
     }
     if (!blob) return
     // Intentar Web Share API (abre menú compartir en celular)
@@ -8722,7 +8722,7 @@ async function exportarBackup(){
   const data=JSON.stringify({v:3,app:'HPRapp',ts:Date.now(),animales,pesajes,labores,potreros,lotes,ciclos,lluvias,usuarios,config,laboresPotrero,rotaciones},null,2)
   const a=document.createElement('a')
   a.href=URL.createObjectURL(new Blob([data],{type:'application/json'}))
-  a.download=`HPRapp-backup-${new Date().toISOString().split('T')[0]}.json`
+  a.download=`HPRapp-backup-${toD(Date.now())}.json`
   a.click()
 }
 async function importarBackup(input){
