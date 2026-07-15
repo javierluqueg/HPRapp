@@ -9223,7 +9223,7 @@ updateOfflineBanner()
 
 // ── Pull to refresh ───────────────────────────────────────
 ;(()=>{
-  let _ptStart = 0, _ptActive = false, _ptCancelled = false
+  let _ptStart = 0, _ptStartX = 0, _ptActive = false, _ptCancelled = false
   const PG = document.getElementById('pg')
   const IND = document.createElement('div')
   IND.id = 'ptr-ind'
@@ -9237,17 +9237,40 @@ updateOfflineBanner()
     IND.textContent = '↓'
   }
 
+  // Detecta si el toque empezó dentro de una lista/fila con su propio scroll
+  // (chips, tabs, listas de selección, tablas, etc.) para no confundir ese
+  // desplazamiento interno con el gesto de "pull to refresh" de toda la página.
+  function _ptrEnScrollAnidado(target) {
+    let el = target
+    while (el && el !== PG && el !== document.body) {
+      const style = getComputedStyle(el)
+      const scrollableY = el.scrollHeight > el.clientHeight + 1 && /(auto|scroll)/.test(style.overflowY)
+      const scrollableX = el.scrollWidth > el.clientWidth + 1 && /(auto|scroll)/.test(style.overflowX)
+      if (scrollableY || scrollableX) return el
+      el = el.parentElement
+    }
+    return null
+  }
+
   PG.addEventListener('touchstart', e => {
     _ptCancelled = false
-    if (PG.scrollTop === 0) { _ptStart = e.touches[0].clientY; _ptActive = true }
-    else { _ptActive = false }
+    const anidado = _ptrEnScrollAnidado(e.target)
+    if (anidado) { _ptActive = false; return }
+    if (PG.scrollTop === 0) {
+      _ptStart = e.touches[0].clientY
+      _ptStartX = e.touches[0].clientX
+      _ptActive = true
+    } else { _ptActive = false }
   }, {passive:true})
 
   PG.addEventListener('touchmove', e => {
     if (!_ptActive) return
     if (PG.scrollTop > 5) { _ptCancelled = true; resetPtr(); return }
-    const dist = e.touches[0].clientY - _ptStart
+    const dist  = e.touches[0].clientY - _ptStart
+    const distX = Math.abs(e.touches[0].clientX - _ptStartX)
     if (dist < 0) { _ptCancelled = true; resetPtr(); return }
+    // Gesto predominantemente horizontal o diagonal → no es un pull-to-refresh
+    if (distX > 30 && distX > dist) { _ptCancelled = true; resetPtr(); return }
     const capped = Math.min(dist, 90)
     if (capped > 10) {
       IND.style.transform = `translateX(-50%) translateY(${Math.min(capped-10,50)}px)`
@@ -9259,7 +9282,7 @@ updateOfflineBanner()
     if (!_ptActive || _ptCancelled) { resetPtr(); return }
     const dist = e.changedTouches[0].clientY - _ptStart
     resetPtr()
-    if (dist > 80 && USER && !['login','setup','bienvenida'].includes(PAGE) && !_ganSelMode && !_loteSelMode && !_potSelMode && !_rvSelMode) {
+    if (dist > 100 && USER && !['login','setup','bienvenida'].includes(PAGE) && !_ganSelMode && !_loteSelMode && !_potSelMode && !_rvSelMode) {
       showToast('Actualizando…','ok',1500)
       setTimeout(() => goRefrescar(PAGE, PARAMS), 300)
     }
