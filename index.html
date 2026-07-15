@@ -6540,7 +6540,7 @@ function rvRenderTabLotes() {
       html += `<div style="border-top:1px solid #e8e8e8">`
       for (const a of lote.animales) {
         const sel = _rvSel.has(a.id)
-        html += `<button onclick="rvToggle(${a.id})" style="display:flex;align-items:center;gap:10px;padding:8px 12px;width:100%;border:none;border-bottom:1px solid #f4f4f4;background:${sel?'#F1F8E9':'white'};text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        html += `<button onclick="rvRowClick(${a.id})" style="display:flex;align-items:center;gap:10px;padding:8px 12px;width:100%;border:none;border-bottom:1px solid #f4f4f4;background:${sel?'#F1F8E9':'white'};text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
           <div style="width:20px;height:20px;border-radius:50%;border:2px solid ${sel?'#2E7D32':'#ccc'};background:${sel?'#2E7D32':'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
             ${sel?'<span style="color:white;font-size:11px;font-weight:700">✓</span>':''}
           </div>
@@ -6548,7 +6548,7 @@ function rvRenderTabLotes() {
             <p style="font-size:.83rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''} <span style="font-size:.63rem;background:#E3F2FD;color:#1565C0;border-radius:4px;padding:1px 5px">${a.categoria||''}</span></p>
             <p style="font-size:.7rem;color:#888">${a.raza||''}</p>
           </div>
-          <p style="font-size:.82rem;font-weight:700;color:#333;flex-shrink:0">${a._pesoAct.toFixed(1)} kg</p>
+          <p style="font-size:.82rem;font-weight:700;color:${sel&&_rvPesos[a.id]!==undefined?'#1565C0':'#333'};flex-shrink:0">${(sel?rvGetPeso(a):a._pesoAct).toFixed(1)} kg${sel&&_rvPesos[a.id]!==undefined?' ✏️':''}</p>
         </button>`
       }
       html += `</div>`
@@ -6693,7 +6693,7 @@ function rvRenderLista() {
     html += `<div style="padding:6px 10px;background:#f5f5f5;font-size:.72rem;font-weight:700;color:#555;letter-spacing:.04em;text-transform:uppercase">${lnom}</div>`
     for (const a of animals) {
       const sel = _rvSel.has(a.id)
-      html += `<button onclick="rvToggle(${a.id})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;width:100%;border:none;border-bottom:1px solid #f0f0f0;background:${sel?'#E8F5E9':'white'};text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
+      html += `<button onclick="rvRowClick(${a.id})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;width:100%;border:none;border-bottom:1px solid #f0f0f0;background:${sel?'#E8F5E9':'white'};text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent">
         <div style="width:22px;height:22px;border-radius:50%;border:2px solid ${sel?'#2E7D32':'#ccc'};background:${sel?'#2E7D32':'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
           ${sel?'<span style="color:white;font-size:12px;font-weight:700;line-height:1">✓</span>':''}
         </div>
@@ -6701,7 +6701,7 @@ function rvRenderLista() {
           <p style="font-size:.85rem;font-weight:700">${a.arete}${a.nombre?' <span style="font-weight:400;color:#888">— '+a.nombre+'</span>':''} <span style="font-size:.65rem;background:#E3F2FD;color:#1565C0;border-radius:4px;padding:1px 5px">${a.categoria||''}</span></p>
           <p style="font-size:.72rem;color:#888">${a.raza||''}</p>
         </div>
-        <p style="font-size:.82rem;font-weight:700;color:#333;flex-shrink:0">${a._pesoAct.toFixed(1)} kg</p>
+        <p style="font-size:.82rem;font-weight:700;color:${sel&&_rvPesos[a.id]!==undefined?'#1565C0':'#333'};flex-shrink:0">${(sel?rvGetPeso(a):a._pesoAct).toFixed(1)} kg${sel&&_rvPesos[a.id]!==undefined?' ✏️':''}</p>
       </button>`
     }
   }
@@ -6710,19 +6710,76 @@ function rvRenderLista() {
   rvUpdBtnContinuar()
 }
 
+function rvRefrescarVista() {
+  if (_rvTab === 'lotes') rvRenderTabLotes()
+  else rvRenderLista()
+  rvUpdChips()
+  rvUpdBtnContinuar()
+  rvUpdSelPreviaCount()
+}
+
 function rvToggle(id) {
   if (_rvSel.has(id)) _rvSel.delete(id); else _rvSel.add(id)
-  if (_rvTab === 'lotes') {
-    rvRenderTabLotes()
-    rvUpdChips()
-    rvUpdBtnContinuar()
-    rvUpdSelPreviaCount()
+  rvRefrescarVista()
+}
+
+// Toque sobre una fila de animal en la lista de selección:
+// - si ya estaba seleccionado, se quita directamente (sin preguntar)
+// - si no estaba seleccionado, primero se pregunta por el peso de venta
+function rvRowClick(id) {
+  if (_rvSel.has(id)) {
+    _rvSel.delete(id)
+    delete _rvPesos[id]
+    rvRefrescarVista()
   } else {
-    rvRenderLista()
-    rvUpdChips()
-    rvUpdBtnContinuar()
-    rvUpdSelPreviaCount()
+    rvAbrirPesoPrompt(id)
   }
+}
+
+function rvAbrirPesoPrompt(id) {
+  const a = _rvAnimales.find(x => x.id === id)
+  if (!a) return
+  showSheet(`
+    <div class="sh-title">${escH(a.arete)}${a.nombre?' — '+escH(a.nombre):''}<button class="sh-x" onclick="closeSheet()">✕</button></div>
+    <p class="xs gray" style="margin-bottom:14px">Último peso registrado: <strong>${a._pesoAct.toFixed(1)} kg</strong></p>
+    <p class="sm bold" style="margin-bottom:10px">¿Hay peso nuevo de venta para este animal?</p>
+    <div id="rv-peso-prompt-body">
+      <div class="btn-row" style="flex-direction:column;gap:8px">
+        <button class="btn btn-g" onclick="rvMostrarInputPeso(${id})">✓ Sí, ingresar peso nuevo</button>
+        <button class="btn btn-gray" onclick="rvUsarMismoPeso(${id})">No, usar el mismo (${a._pesoAct.toFixed(1)} kg)</button>
+      </div>
+    </div>`)
+}
+
+function rvUsarMismoPeso(id) {
+  delete _rvPesos[id]
+  _rvSel.add(id)
+  closeSheet()
+  rvRefrescarVista()
+}
+
+function rvMostrarInputPeso(id) {
+  const a = _rvAnimales.find(x => x.id === id)
+  const body = document.getElementById('rv-peso-prompt-body')
+  if (!body || !a) return
+  body.innerHTML = `
+    <div class="field"><label>Peso nuevo de venta (kg) *</label>
+      <div class="inp-wrap"><input id="rv-peso-nuevo-inp" class="inp" type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="kg" onkeydown="if(event.key==='Enter')rvGuardarPesoNuevo(${id})"><span class="inp-suf">kg</span></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-gray" onclick="rvAbrirPesoPrompt(${id})">← Atrás</button>
+      <button class="btn btn-g" onclick="rvGuardarPesoNuevo(${id})">✓ Guardar y seleccionar</button>
+    </div>`
+  setTimeout(() => document.getElementById('rv-peso-nuevo-inp')?.focus(), 60)
+}
+
+function rvGuardarPesoNuevo(id) {
+  const v = parseFloat(String(document.getElementById('rv-peso-nuevo-inp')?.value||'').replace(',','.'))
+  if (!v || v <= 0) { showToast('Ingresa un peso válido','err'); return }
+  _rvPesos[id] = v
+  _rvSel.add(id)
+  closeSheet()
+  rvRefrescarVista()
 }
 
 function rvUpdBtnContinuar() {
