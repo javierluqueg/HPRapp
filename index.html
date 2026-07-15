@@ -51,7 +51,7 @@ document.getElementById('pwaManifest').href=URL.createObjectURL(_mb)
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:16px;-webkit-text-size-adjust:100%}
-body{font-family:system-ui,-apple-system,sans-serif;color:#1a1a1a;min-height:100dvh;overscroll-behavior:none;background:#1a3a1a url('fondo.jpg') center/cover no-repeat fixed}
+body{font-family:system-ui,-apple-system,sans-serif;color:#1a1a1a;min-height:100dvh;overscroll-behavior:none;touch-action:pan-y;background:#1a3a1a url('fondo.jpg') center/cover no-repeat fixed}
 input,select,textarea,button{font:inherit}
 button{cursor:pointer}
 
@@ -140,7 +140,8 @@ button{cursor:pointer}
 .pbar-fill{height:100%;border-radius:4px;transition:width .4s}
 
 /* Tabs */
-.tabs{display:flex;border-bottom:2px solid #eee;margin-bottom:14px;overflow-x:auto}
+.tabs{display:flex;border-bottom:2px solid #eee;margin-bottom:14px;overflow-x:auto;touch-action:pan-x pan-y}
+[style*="overflow-x:auto"]{touch-action:pan-x pan-y}
 .tab{flex:1;min-width:70px;padding:11px 4px;text-align:center;font-size:.8rem;font-weight:600;color:#aaa;cursor:pointer;border-bottom:2.5px solid transparent;margin-bottom:-2px;white-space:nowrap}
 .tab.on{color:#1565C0;border-bottom-color:#1565C0}
 
@@ -268,6 +269,20 @@ button{cursor:pointer}
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script>
 'use strict'
+
+// ── Bloqueo del gesto "deslizar desde el borde para volver atrás" (Safari/iOS) ──
+// Como esta app es de una sola página sin navegación real por URL, ese gesto
+// nativo del navegador saca al usuario de la app hacia la página anterior del
+// historial. Se coloca una entrada extra en el historial y, si el gesto la
+// consume (popstate), se vuelve a colocar de inmediato para neutralizarlo.
+;(() => {
+  try {
+    history.pushState({hprapp:true}, '', location.href)
+    window.addEventListener('popstate', () => {
+      history.pushState({hprapp:true}, '', location.href)
+    })
+  } catch(e) { /* Si el navegador bloquea pushState (ej. file://), no hacer nada */ }
+})()
 
 // ═══════════════════════════════════════════════════
 // BASE DE DATOS
