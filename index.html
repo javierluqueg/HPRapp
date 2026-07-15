@@ -460,14 +460,29 @@ document.addEventListener('touchstart', () => { _touchActivo = true },  {passive
 document.addEventListener('touchend',   () => { _touchActivo = false }, {passive:true})
 document.addEventListener('touchcancel',() => { _touchActivo = false }, {passive:true})
 
+// Un scroll fuerte sigue moviéndose por inercia (momentum) incluso después de
+// soltar el dedo — ahí _touchActivo ya es false pero la pantalla sigue en
+// movimiento. Se detecta esa inercia con el propio evento de scroll: mientras
+// siga habiendo eventos de scroll, se considera "en movimiento" y se espera
+// a que esté quieta unos milisegundos antes de permitir el auto-refresco.
+let _scrollActivo = false, _scrollIdleTimer = null
+;(() => {
+  const pgEl = document.getElementById('pg')
+  if (pgEl) pgEl.addEventListener('scroll', () => {
+    _scrollActivo = true
+    clearTimeout(_scrollIdleTimer)
+    _scrollIdleTimer = setTimeout(() => { _scrollActivo = false }, 500)
+  }, {passive:true})
+})()
+
 function scheduleRefresh() {
   if (_refreshTimer) clearTimeout(_refreshTimer)
   _refreshTimer = setTimeout(() => {
-    // No refrescar si: sheet abierta, modo selección, write propio reciente, o dedo en pantalla
+    // No refrescar si: sheet abierta, modo selección, write propio reciente, o pantalla en movimiento
     const sheetAbierto = $('ov')?.classList.contains('show')
     if (sheetAbierto || _ganSelMode || _loteSelMode || _potSelMode || _rvSelMode) return
     if (Date.now() < _suppressRefreshUntil) return  // Cambio propio, ignorar
-    if (_touchActivo) { scheduleRefresh(); return }  // Dedo en pantalla: reintentar más tarde, no interrumpir
+    if (_touchActivo || _scrollActivo) { scheduleRefresh(); return }  // Dedo o inercia activos: reintentar más tarde, no interrumpir
     goRefrescar(PAGE, PARAMS)
   }, 2000)  // 2s de delay para agrupar múltiples cambios de otros dispositivos
 }
