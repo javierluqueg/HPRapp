@@ -451,13 +451,23 @@ const SYNC_TABLES = ['animales','pesajes','labores','potreros','lotes','ciclos',
 let _unsubscribers = []
 let _suppressRefreshUntil = 0  // Evitar re-render por writes propios
 
+// El usuario puede tener el dedo tocando la pantalla (scroll) justo cuando llega
+// una sincronización en tiempo real. Si en ese momento se recarga la pantalla,
+// el scroll se corta y se siente como si "volviera atrás". Por eso se evita
+// recargar mientras hay un toque activo, y se reintenta apenas se suelte.
+let _touchActivo = false
+document.addEventListener('touchstart', () => { _touchActivo = true },  {passive:true})
+document.addEventListener('touchend',   () => { _touchActivo = false }, {passive:true})
+document.addEventListener('touchcancel',() => { _touchActivo = false }, {passive:true})
+
 function scheduleRefresh() {
   if (_refreshTimer) clearTimeout(_refreshTimer)
   _refreshTimer = setTimeout(() => {
-    // No refrescar si: sheet abierta, modo selección, o write propio reciente
+    // No refrescar si: sheet abierta, modo selección, write propio reciente, o dedo en pantalla
     const sheetAbierto = $('ov')?.classList.contains('show')
     if (sheetAbierto || _ganSelMode || _loteSelMode || _potSelMode || _rvSelMode) return
     if (Date.now() < _suppressRefreshUntil) return  // Cambio propio, ignorar
+    if (_touchActivo) { scheduleRefresh(); return }  // Dedo en pantalla: reintentar más tarde, no interrumpir
     goRefrescar(PAGE, PARAMS)
   }, 2000)  // 2s de delay para agrupar múltiples cambios de otros dispositivos
 }
