@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260715-004">
 <script>
-const APP_VERSION = '20260715-004'
+const APP_VERSION = '20260716-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -236,7 +236,6 @@ button{cursor:pointer}
   <a data-p="ganado"><span class="ico">🐄</span>Ganado</a>
   <a data-p="lotes"><span class="ico">📋</span>Lotes</a>
   <a data-p="potreros"><span class="ico">🌿</span>Potreros</a>
-  <a data-p="rotaciones"><span class="ico">🔄</span>Rotaciones</a>
   <a data-p="ventas"><span class="ico">💰</span>Ventas</a>
   <a data-p="config"><span class="ico">⚙️</span>Config</a>
 </nav>
@@ -822,7 +821,7 @@ const TITLES = {
   dashboard:'HPRapp', ganado:'Ganado', 'animal-nuevo':'Nuevo animal', 'animal-ficha':'Animal',
   lotes:'Lotes', 'lote-nuevo':'Nuevo lote', 'lote-ficha':'Lote',
   potreros:'Potreros', 'potrero-nuevo':'Nuevo potrero', 'potrero-ficha':'Potrero',
-  rotaciones:'Rotaciones', 'rotacion-nueva':'Nueva rotación', 'rotacion-ficha':'Rotación',
+  'rotacion-nueva':'Nueva rotación', 'rotacion-ficha':'Rotación',
   ventas:'💰 Ventas', config:'Configuración', lluvias:'🌧 Lluvias', bienvenida:'Bienvenida'
 }
 const NO_NAV = new Set(['setup','login'])
@@ -830,7 +829,7 @@ const BACK_P = new Set(['animal-nuevo','animal-ficha','potrero-nuevo','potrero-f
 const NAV_MAP = {
   dashboard:'dashboard', ganado:'ganado', 'animal-nuevo':'ganado', 'animal-ficha':'ganado',
   lotes:'lotes','lote-nuevo':'lotes','lote-ficha':'lotes',
-  rotaciones:'rotaciones','rotacion-nueva':'rotaciones','rotacion-ficha':'rotaciones',
+  'rotacion-nueva':'potreros','rotacion-ficha':'potreros',
   potreros:'potreros','potrero-nuevo':'potreros','potrero-ficha':'potreros',
   ventas:'ventas', config:'config', lluvias:'lluvias'
 }
@@ -850,7 +849,7 @@ async function go(page, params={}) {
     setup:pgSetup, login:pgLogin, dashboard:pgDashboard,
     ganado:pgGanado, 'animal-nuevo':pgAnimalNuevo, 'animal-ficha':pgAnimalFicha,
     lotes:pgLotes, 'lote-nuevo':pgLoteNuevo, 'lote-ficha':pgLoteFicha,
-    rotaciones:pgRotaciones, 'rotacion-nueva':pgRotacionNueva, 'rotacion-ficha':pgRotacionFicha,
+    'rotacion-nueva':pgRotacionNueva, 'rotacion-ficha':pgRotacionFicha,
     potreros:pgPotreros, 'potrero-nuevo':pgPotreroNuevo, 'potrero-ficha':pgPotreroFicha,
     ventas:pgVentas, config:pgConfig, lluvias:pgLluvias, bienvenida:pgBienvenida,
   }
@@ -3421,11 +3420,6 @@ async function pgLotes() {
 // ═══════════════════════════════════════════════════
 // ROTACIONES — PÁGINA PRINCIPAL
 // ═══════════════════════════════════════════════════
-async function pgRotaciones() {
-  $('hdrAct').innerHTML=`<button class="btn btn-sm btn-g" onclick="go('rotacion-nueva')">+ Nueva</button>`
-  return await renderRotacionesList()
-}
-
 function activarSelLotes(){ _loteSelMode=true; _loteSelected.clear(); go('lotes') }
 function cancelarSelLotes(){ _loteSelMode=false; _loteSelected.clear(); go('lotes') }
 function filtrarLotes(q){
@@ -4755,7 +4749,20 @@ async function saveAgregarAnimal(){
 // ═══════════════════════════════════════════════════
 // POTREROS – LISTADO
 // ═══════════════════════════════════════════════════
+function _potTabsHtml() {
+  return `<div style="display:flex;border-bottom:2px solid #eee;margin-bottom:12px">
+    <button onclick="switchPotTab('potreros')" style="flex:1;padding:10px 6px;border:none;background:none;font-weight:800;font-size:.82rem;cursor:pointer;color:${_potTab==='potreros'?'#2E7D32':'#999'};border-bottom:3px solid ${_potTab==='potreros'?'#2E7D32':'transparent'};margin-bottom:-2px">🌿 Potreros</button>
+    <button onclick="switchPotTab('rotaciones')" style="flex:1;padding:10px 6px;border:none;background:none;font-weight:800;font-size:.82rem;cursor:pointer;color:${_potTab==='rotaciones'?'#1565C0':'#999'};border-bottom:3px solid ${_potTab==='rotaciones'?'#1565C0':'transparent'};margin-bottom:-2px">🔄 Rotaciones</button>
+  </div>`
+}
+function switchPotTab(tab){ _potTab=tab; go('potreros') }
+
 async function pgPotreros() {
+  if(_potTab==='rotaciones'){
+    $('hdrAct').innerHTML=`<button class="btn btn-sm btn-g" onclick="go('rotacion-nueva')">+ Nueva</button>`
+    return _potTabsHtml() + await renderRotacionesList()
+  }
+
   if(_potSelMode){
     const n=_potSelected.size
     $('hdrAct').innerHTML=`
@@ -4772,7 +4779,7 @@ async function pgPotreros() {
   }
 
   const pots=await db.potreros.where('activo').equals(1).toArray()
-  if(!pots.length) return `<div class="empty"><div class="eico">🌿</div><p>Sin potreros registrados</p>
+  if(!pots.length) return _potTabsHtml() + `<div class="empty"><div class="eico">🌿</div><p>Sin potreros registrados</p>
     <button class="btn btn-g mt12" style="max-width:220px;margin:12px auto 0" onclick="go('potrero-nuevo')">+ Agregar potrero</button></div>`
 
   const mkCard=async p=>{
@@ -4875,6 +4882,7 @@ async function pgPotreros() {
   </div>`
 
   return (
+    _potTabsHtml() +
     resumenSem +
     leyenda +
     busqInput +
@@ -4957,7 +4965,7 @@ async function renderRotacionesList() {
     <input id="rot-search" class="inp" placeholder="🔍 Buscar rotación…" value="${escH(_seg['rot_q']||'')}"
       style="flex:1;padding:9px 12px;font-size:.85rem"
       oninput="_seg['rot_q']=this.value;renderRotacionesList().then(h=>{const c=document.getElementById('rot-list');if(c)c.innerHTML=h||'<p class=\'xs gray\'>Sin resultados</p>'})">
-    ${_qRot?`<button class="btn btn-gray btn-sm" onclick="_seg['rot_q']='';go('rotaciones')">✕</button>`:''}
+    ${_qRot?`<button class="btn btn-gray btn-sm" onclick="_seg['rot_q']='';go('potreros')">✕</button>`:''}
   </div>
   <div id="rot-list">`
 
@@ -8950,9 +8958,10 @@ $('btnBack').addEventListener('click',()=>{
   const back={
     'animal-nuevo':'ganado','animal-ficha':'ganado',
     'lote-nuevo':'lotes','lote-ficha':'lotes',
-    'rotacion-nueva':'rotaciones','rotacion-ficha':'rotaciones',
+    'rotacion-nueva':'potreros','rotacion-ficha':'potreros',
     'potrero-nuevo':'potreros','potrero-ficha':'potreros',
   }
+  if(PAGE==='rotacion-nueva'||PAGE==='rotacion-ficha') _potTab='rotaciones'
   go(back[PAGE]||'dashboard')
 })
 document.querySelectorAll('#nav a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();go(a.dataset.p)}))
