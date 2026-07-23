@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260716-002'
+const APP_VERSION = '20260722-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -8032,11 +8032,19 @@ async function exportarParaImportar(){
     wsVentas['!autofilter']={ref:'A1:M'+(inactivos.length+1)}
     XLSX.utils.book_append_sheet(wb, wsVentas, 'VENTAS_BAJAS')
 
-    // ── PESAJES (plantilla vacía para importar pesajes masivos) ──
+    // ── PESAJES (histórico de pesajes de animales activos + plantilla para nuevos) ──
+    const areteMapById = {}; animales.forEach(a=>areteMapById[a.id]=a.arete)
+    const animalIds = animales.map(a=>a.id)
+    const todosPesajes = animalIds.length ? await db.pesajes.where('animalId').anyOf(animalIds).toArray() : []
+    const pesajesOrdenados = todosPesajes
+      .filter(p=>areteMapById[p.animalId])
+      .sort((a,b)=> String(areteMapById[a.animalId]).localeCompare(String(areteMapById[b.animalId])) || (a.fecha-b.fecha))
     const wsPes = XLSX.utils.aoa_to_sheet([
       ['Arete / Número *','Peso (kg) *','Fecha (DD/MM/AAAA) *','Observación'],
+      ...pesajesOrdenados.map(p=>[areteMapById[p.animalId], p.pesoKg, fd(p.fecha), p.obs||''])
     ])
     wsPes['!cols']=[{wch:14},{wch:10},{wch:14},{wch:30}]
+    wsPes['!autofilter']={ref:'A1:D'+(pesajesOrdenados.length+1)}
     XLSX.utils.book_append_sheet(wb, wsPes, 'PESAJES')
 
     const fecha = toD(Date.now())
