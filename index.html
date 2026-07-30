@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260722-001'
+const APP_VERSION = '20260729-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -4135,16 +4135,16 @@ async function pgLoteFicha({id}) {
   // Tabla de categorías
   const catOrden=['HC','MC','HL','ML','NV','VH','VP','T','MCB']
   const catFilas=catOrden.filter(k=>catCount[k]).map(k=>
-    `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #f0f0f0">
-      <span style="font-size:.8rem;color:#555">${CAT[k]||k}</span>
-      <span style="font-size:.85rem;font-weight:700;color:#1a1a1a">${catCount[k]}</span>
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0">
+      <span style="font-size:1rem;color:#555">${CAT[k]||k}</span>
+      <span style="font-size:1.05rem;font-weight:700;color:#1a1a1a">${catCount[k]}</span>
     </div>`
   ).join('')
   // Si hay categorías no estándar
   const catExtra=Object.keys(catCount).filter(k=>!catOrden.includes(k)).map(k=>
-    `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #f0f0f0">
-      <span style="font-size:.8rem;color:#555">${k}</span>
-      <span style="font-size:.85rem;font-weight:700">${catCount[k]}</span>
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0">
+      <span style="font-size:1rem;color:#555">${k}</span>
+      <span style="font-size:1.05rem;font-weight:700">${catCount[k]}</span>
     </div>`
   ).join('')
 
@@ -4176,7 +4176,7 @@ async function pgLoteFicha({id}) {
         ${gdpProm!==null?`<p class="sub xs">GDP prom: ${gdpProm} g/día</p>`:''}
       </div>
       <div style="text-align:right">
-        <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.8rem">${pot?'En '+pot.nombre:'Sin potrero'}</span>
+        <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:1.05rem;padding:6px 10px">${pot?'En '+pot.nombre:'Sin potrero'}</span>
         ${pot&&cicloActivo?`<p style="font-size:.7rem;color:#90CAF9;margin-top:3px;font-weight:600">${diasDesde(cicloActivo.fechaEntrada)} días</p>`:''}
       </div>
     </div>
@@ -4184,9 +4184,9 @@ async function pgLoteFicha({id}) {
   ${animales.length?`<div class="card mb10">
     <p class="bold sm mb8">🐄 Animales por categoría</p>
     ${catFilas}${catExtra}
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0 0">
-      <span style="font-size:.8rem;font-weight:700;color:#555">TOTAL</span>
-      <span style="font-size:.9rem;font-weight:700;color:#1565C0">${animales.length}</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 0">
+      <span style="font-size:1rem;font-weight:700;color:#555">TOTAL</span>
+      <span style="font-size:1.1rem;font-weight:700;color:#1565C0">${animales.length}</span>
     </div>
   </div>`:''}
   <div class="btn-row mb12">
