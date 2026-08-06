@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260806-002'
+const APP_VERSION = '20260806-003'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -707,7 +707,7 @@ const ffd = ts => ts ? new Date(+ts).toLocaleDateString('es-CO',{day:'2-digit',m
 const ffdHora = ts => ts ? new Date(+ts).toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'
 const toD = ts => { const d=new Date(+ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0') }
 const fromD = s => new Date(s+'T00:00:00').getTime()
-const diasDesde = ts => Math.max(0, Math.round((Date.now()-+ts)/86400000))
+const diasDesde = ts => Math.max(0, Math.floor((Date.now()-+ts)/86400000))
 const fmtDias = n => n === 0 ? '< 1 día' : n + (n === 1 ? ' día' : ' días')
 
 async function hPin(pin) {
