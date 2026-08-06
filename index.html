@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260806-001'
+const APP_VERSION = '20260806-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -2681,6 +2681,7 @@ async function saveLoteSeleccionados(){
     loteNom=lote?.nombre||'lote'
     for(const id of ids) await fsUpdate('animales',id,{loteId,fechaLote})
     if(_slLoteIds.length) await checkLoteVacio(_slLoteIds, fechaLote)
+    await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     console.error('Error en saveLoteSeleccionados:',e)
     showToast('Error al asignar lote','err',5000)
@@ -2769,6 +2770,7 @@ async function saveAnimal() {
     const ahora=Date.now(), quien=USER?.nombre||'—'
     if(pesoIni>0) pesoId=await fsAdd('pesajes',{animalId:id,fecha:fromD($('an-fpeso')?.value),pesoKg:pesoIni,metodo:'BASCULA',cc:3,obs:'Pesaje inicial',registradoPor:quien,registradoEn:ahora})
     laborId=await fsAdd('labores',{animalId:id,fecha:fromD($('an-fpeso')?.value),tipo:$('an-lab')?.value||'PESAJE',pesoKg:pesoIni,obs:'Registro inicial',registradoPor:quien,registradoEn:ahora})
+    if(loteId) await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     console.error('saveAnimal:',e)
     showToast('Error al guardar animal','err',5000)
@@ -3106,6 +3108,7 @@ async function saveCambiarLote(id) {
     loteId=$('cl-lote').value?parseInt($('cl-lote').value):undefined
     await fsUpdate('animales',id,{loteId,fechaLote:loteId?fromD($('cl-f').value):undefined})
     if(prev&&prev.loteId&&prev.loteId!==loteId) await checkLoteVacio([prev.loteId], Date.now())
+    if(loteId) await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     showToast('Error al cambiar lote','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Guardar'}
@@ -3663,6 +3666,7 @@ async function ejecutarQuitarMoverLote(){
     const lote=await db.lotes.get(loteId)
     loteNom=lote?.nombre||'lote'
     if(_mvLoteIds.length) await checkLoteVacio(_mvLoteIds, Date.now())
+    await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     showToast('Error al mover animales','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Confirmar'}
@@ -4755,6 +4759,11 @@ async function saveAgregarAnimal(){
       snaps.push({id:anId,loteId:prev?.loteId,fechaLote:prev?.fechaLote})
       await fsUpdate('animales',anId,{loteId:_aniLoteId,fechaLote:Date.now()})
     }
+    // Si algún animal venía de otro lote, revisar si ese lote quedó vacío
+    const loteIdsOrigen=[...new Set(snaps.map(s=>s.loteId).filter(l=>l && l!==_aniLoteId))]
+    if(loteIdsOrigen.length) await checkLoteVacio(loteIdsOrigen, Date.now())
+    // Refrescar el conteo del lote destino (por si ya está ocupando un potrero)
+    await sincronizarNumAnimalesLote(_aniLoteId)
   }catch(e){
     showToast('Error al agregar animales','err',4000)
     if(btn){btn.disabled=false;btn.textContent=`Agregar ${ids.length} al lote`}
@@ -7162,12 +7171,31 @@ async function cerrarCiclosActivosLote(loteId, fechaTs, excluirPotreroId) {
   return cerrados
 }
 
+// Recalcula el número REAL de animales activos de un lote y lo refleja en su
+// ciclo activo (si tiene) y en el potrero que ocupa (si está OCUPADO).
+// Existe porque agregar/quitar/mover animales de un lote que ya está en un
+// potrero no actualizaba automáticamente esos conteos, dejándolos congelados
+// desde que se creó el ciclo.
+async function sincronizarNumAnimalesLote(loteId) {
+  if (!loteId) return
+  const real = await db.animales.where({ activo: 1, loteId }).count()
+  const ciclo = await db.ciclos.where({ loteId, activo: 1 }).first()
+  if (!ciclo) return
+  if (ciclo.numAnimales !== real) {
+    await fsUpdate('ciclos', ciclo.id, { numAnimales: real })
+  }
+  const pot = await db.potreros.get(ciclo.potreroId)
+  if (pot && pot.estado === 'OCUPADO' && pot.numAnimales !== real) {
+    await fsUpdate('potreros', ciclo.potreroId, { numAnimales: real })
+  }
+}
+
 // Auto-descanso: lote vacío → potrero EN_DESCANSO
 async function checkLoteVacio(loteIds, fechaTs) {
   const ids = [...new Set(loteIds.filter(Boolean))]
   for (const loteId of ids) {
     const restantes = await db.animales.where({ activo: 1, loteId }).count()
-    if (restantes > 0) continue
+    if (restantes > 0) { await sincronizarNumAnimalesLote(loteId); continue }
     const cerrados = await cerrarCiclosActivosLote(loteId, fechaTs)
     if (!cerrados.length) continue
     for (const ciclo of cerrados) {
