@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260807-001'
+const APP_VERSION = '20260807-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -7162,16 +7162,79 @@ async function cerrarCiclosActivosLote(loteId, fechaTs, excluirPotreroId) {
   for (const c of activos) {
     if (excluirPotreroId && c.potreroId === excluirPotreroId) continue
     await fsUpdate('ciclos', c.id, { activo: 0, fechaSalida: fecha })
-    await fsUpdate('potreros', c.potreroId, {
-      estado: 'EN_DESCANSO', numAnimales: 0,
-      loteActual: null, fechaSalida: fecha
-    })
     cerrados.push(c)
+    // Blindaje: este ciclo puede ser un huérfano antiguo (p.ej. de antes de
+    // esta corrección) que coexistía con una ocupación real y posterior del
+    // mismo potrero. Antes de tocar el estado del potrero, verificamos si
+    // existe otro ciclo con una fecha de ENTRADA más reciente que la de este
+    // — esa fecha nunca se modifica en ningún flujo, así que es la referencia
+    // confiable de cuál fue realmente el último ocupante. Si existe uno más
+    // reciente, ese define el estado real del potrero y no lo pisamos aquí.
+    const otrosCiclosPotrero = await db.ciclos.where({ potreroId: c.potreroId }).toArray()
+    const hayUnoMasReciente = otrosCiclosPotrero.some(o => o.id !== c.id && (o.fechaEntrada || 0) > (c.fechaEntrada || 0))
+    if (!hayUnoMasReciente) {
+      await fsUpdate('potreros', c.potreroId, {
+        estado: 'EN_DESCANSO', numAnimales: 0,
+        loteActual: null, fechaSalida: fecha
+      })
+    }
   }
   return cerrados
 }
 
-// Recalcula el número REAL de animales activos de un lote y lo refleja en su
+// Verificación de integridad de potreros, disponible desde Configuración sin
+// necesidad de consola. Usa como referencia la fecha de ENTRADA del ciclo más
+// reciente de cada potrero (dato que ningún flujo modifica nunca), en vez de
+// la fecha de salida (que sí se pudo pisar por ciclos huérfanos históricos).
+// Solo reporta diferencias mayores a 1 día, para no generar ruido con
+// desfases mínimos de redondeo de horas dentro del mismo día.
+async function ejecutarVerificacionIntegridad() {
+  const el = document.getElementById('integridad-resultados')
+  if (el) el.innerHTML = '<p class="xs gray center" style="padding:16px">⏳ Verificando…</p>'
+  const todosCiclosI = await db.ciclos.toArray()
+  const potrerosI = await db.potreros.where('activo').equals(1).toArray()
+  const lotesI = await db.lotes.toArray()
+  const lotesMapI = Object.fromEntries(lotesI.map(l => [l.id, l.nombre]))
+  const hallazgosI = []
+
+  for (const p of potrerosI) {
+    const ciclosDeEste = todosCiclosI.filter(c => c.potreroId === p.id && c.fechaEntrada)
+    if (!ciclosDeEste.length) continue
+    const ultimoReal = ciclosDeEste.reduce((mx, c) => c.fechaEntrada > mx.fechaEntrada ? c : mx)
+
+    if (ultimoReal.activo === 1 && p.estado !== 'OCUPADO') {
+      hallazgosI.push({
+        potrero: p.nombre, lote: lotesMapI[ultimoReal.loteId] || '',
+        tipo: 'Debería estar OCUPADO', detalle: `Estado actual: ${ESTADO_POT[p.estado] || p.estado}`
+      })
+    }
+    if (ultimoReal.activo !== 1 && p.estado === 'EN_DESCANSO' && ultimoReal.fechaSalida) {
+      const diffDias = Math.round(((p.fechaSalida || 0) - ultimoReal.fechaSalida) / 86400000)
+      if (Math.abs(diffDias) > 1) {
+        hallazgosI.push({
+          potrero: p.nombre, lote: lotesMapI[ultimoReal.loteId] || '',
+          tipo: 'Fecha de descanso no coincide con el historial',
+          detalle: `Muestra desde ${p.fechaSalida ? new Date(p.fechaSalida).toLocaleDateString('es-CO') : '—'}, el historial indica ${new Date(ultimoReal.fechaSalida).toLocaleDateString('es-CO')}`
+        })
+      }
+    }
+  }
+
+  if (!el) return
+  if (!hallazgosI.length) {
+    el.innerHTML = `<div class="card mb8" style="background:#E8F5E9;border-left:4px solid #2E7D32">
+      <p class="bold sm" style="color:#2E7D32">✅ Todo en orden</p>
+      <p class="xs gray mt4">No se encontraron inconsistencias mayores a 1 día entre el estado mostrado y el historial de ciclos.</p>
+    </div>`
+    return
+  }
+  el.innerHTML = `<p class="xs gray mb8">${hallazgosI.length} hallazgo${hallazgosI.length > 1 ? 's' : ''}</p>` +
+    hallazgosI.map(h => `<div class="card mb8" style="border-left:4px solid #E65100">
+      <p class="bold sm">${escH(h.potrero)}${h.lote ? ` <span class="xs gray">· ${escH(h.lote)}</span>` : ''}</p>
+      <p class="xs" style="color:#E65100;margin-top:2px">${escH(h.tipo)}</p>
+      <p class="xs gray mt4">${escH(h.detalle)}</p>
+    </div>`).join('')
+}
 // ciclo activo (si tiene) y en el potrero que ocupa (si está OCUPADO).
 // Existe porque agregar/quitar/mover animales de un lote que ya está en un
 // potrero no actualizaba automáticamente esos conteos, dejándolos congelados
@@ -7688,6 +7751,7 @@ async function pgConfig() {
     <div class="tab${tab==='finca'?' on':''}" style="${cfgTabStyle('finca')};white-space:nowrap" onclick="setTab('cfg','finca');go('config')">Finca</div>
     <div class="tab${tab==='metas'?' on':''}" style="${cfgTabStyle('metas')};white-space:nowrap" onclick="setTab('cfg','metas');go('config')">Metas</div>
     <div class="tab${tab==='rendimiento'?' on':''}" style="${cfgTabStyle('rendimiento')};white-space:nowrap" onclick="setTab('cfg','rendimiento');go('config')">📈 Rendimiento</div>
+    <div class="tab${tab==='integridad'?' on':''}" style="${cfgTabStyle('integridad')};white-space:nowrap" onclick="setTab('cfg','integridad');go('config')">🔍 Integridad</div>
     <div class="tab${tab==='usuarios'?' on':''}" style="${cfgTabStyle('usuarios')};white-space:nowrap" onclick="setTab('cfg','usuarios');go('config')">Usuarios</div>
     <div class="tab${tab==='backup'?' on':''}" style="${cfgTabStyle('backup')};white-space:nowrap" onclick="setTab('cfg','backup');go('config')">Backup</div>
     <div class="tab${tab==='excel'?' on':''}" style="${cfgTabStyle('excel')};white-space:nowrap" onclick="setTab('cfg','excel');go('config')">Excel</div>
@@ -7719,6 +7783,15 @@ async function pgConfig() {
       <button class="btn btn-g" onclick="saveCfgMetas()">Guardar</button>`
   }
   if(tab==='rendimiento') return tabs + await renderRendimiento()
+  if(tab==='integridad'){
+    return tabs + `
+      <div class="card mb10">
+        <p class="bold sm mb8">🔍 Verificación de integridad de potreros</p>
+        <p class="xs gray mb12">Revisa que el estado y los días mostrados de cada potrero coincidan con el historial real de ciclos. Útil si notas un potrero con días de ocupación o descanso que no cuadran.</p>
+        <button class="btn btn-b" onclick="ejecutarVerificacionIntegridad()">▶ Ejecutar verificación</button>
+      </div>
+      <div id="integridad-resultados"></div>`
+  }
   if(tab==='usuarios'){
     const us=await db.usuarios.where('activo').equals(1).toArray()
     const esAdmin1=USER?.rol==='Administrador 1'
