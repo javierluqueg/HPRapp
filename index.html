@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260807-002'
+const APP_VERSION = '20260829-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -3371,16 +3371,24 @@ async function pgLotes() {
     const aLote=animales.filter(a=>a.loteId===l.id)
     let pesoLote=0
     for(const a of aLote){const ult=await getPesoActual(a.id);pesoLote+=(ult?.pesoKg||a.pesoInicial||0)}
-    const cicloActivo=await db.ciclos.where({loteId:l.id,activo:1}).first()
-    const pot=cicloActivo?await db.potreros.get(cicloActivo.potreroId):null
+    const ciclosActivosL=await db.ciclos.where({loteId:l.id,activo:1}).toArray()
+    const paresL=(await Promise.all(ciclosActivosL.map(async c=>({ciclo:c,pot:await db.potreros.get(c.potreroId)})))).filter(x=>x.pot)
+    const potrerosL=paresL.map(x=>x.pot)
+    const cicloActivo=paresL[0]?.ciclo||null
+    const pot=paresL[0]?.pot||null
     const sel=_loteSelected.has(l.id)
     const catCount={}
     aLote.forEach(a=>{const c=a.categoria||'?';catCount[c]=(catCount[c]||0)+1})
     const catChips=catOrden.filter(k=>catCount[k]).map(k=>`<span style="font-size:.8rem;background:#EEF2FF;color:#3949AB;border-radius:5px;padding:3px 7px;font-weight:700">${k}:${catCount[k]}</span>`).join(' ')
     const diasPot = cicloActivo ? diasDesde(cicloActivo.fechaEntrada) : 0
-    const promLote = aLote.length ? pesoLote/aLote.length : 0
-    const resumen=`<span style="font-weight:700;color:#1a1a1a;font-size:.95rem">${aLote.length}</span> <span style="font-size:.85rem">anim</span> · <span style="color:#388E3C;font-weight:700;font-size:.95rem">${Math.round(pesoLote).toLocaleString('es-CO')} kg</span>${aLote.length?` <span style="font-size:.8rem;color:#888">(${Math.round(promLote).toLocaleString('es-CO')} kg/anim prom.)</span>`:''}`
-    const busqData=`${l.nombre} ${pot?.nombre||''}`.toLowerCase()
+    const badgeTxt = paresL.length>1
+      ? `🔀 ${paresL.length} potreros`
+      : (pot?'En '+pot.nombre+'<span style="color:#1565C0;font-weight:700"> · '+diasPot+'d</span>':'Sin potrero')
+    const multiPotreroLine = paresL.length>1
+      ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:5px">${paresL.map(({ciclo,pot})=>`<span style="font-size:.72rem;background:#FFF3E0;color:#E65100;border-radius:5px;padding:3px 7px;font-weight:700">${escH(pot.nombre)} · ${diasDesde(ciclo.fechaEntrada)}d</span>`).join('')}</div>`
+      : ''
+    const resumen=`<span style="font-weight:700;color:#1a1a1a;font-size:.95rem">${aLote.length}</span> <span style="font-size:.85rem">anim</span> · <span style="color:#388E3C;font-weight:700;font-size:.95rem">${Math.round(pesoLote).toLocaleString('es-CO')} kg</span>`
+    const busqData=`${l.nombre} ${potrerosL.map(p=>p.nombre).join(' ')}`.toLowerCase()
     if(_loteSelMode){
       return `<div class="card border-l4 lote-card ${sel?'bl-red':'bl-blue'}" data-busq="${busqData}" style="cursor:pointer;padding:12px 14px;margin-bottom:7px;${sel?'background:#FFF5F5':''}" onclick="toggleLoteSel(${l.id})">
         <div style="display:flex;align-items:center;gap:10px">
@@ -3390,9 +3398,10 @@ async function pgLotes() {
           <div style="flex:1;min-width:0">
             <p style="font-size:1.05rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.nombre}</p>
             <p style="font-size:.88rem;color:#777;margin-top:4px">${resumen}</p>
+            ${multiPotreroLine}
             ${catChips?`<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:5px">${catChips}</div>`:''}
           </div>
-          <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.85rem;padding:5px 9px;flex-shrink:0">${pot?'En '+pot.nombre+'<span style="color:#1565C0;font-weight:700"> · '+diasPot+'d</span>':'Sin potrero'}</span>
+          <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.85rem;padding:5px 9px;flex-shrink:0">${badgeTxt}</span>
         </div>
       </div>`
     }
@@ -3401,9 +3410,10 @@ async function pgLotes() {
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
             <p style="font-size:1.08rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.nombre}</p>
-            <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.85rem;padding:5px 9px;flex-shrink:0">${pot?'En '+pot.nombre+'<span style="color:#1565C0;font-weight:700"> · '+diasPot+'d</span>':'Sin potrero'}</span>
+            <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.85rem;padding:5px 9px;flex-shrink:0">${badgeTxt}</span>
           </div>
           <p style="font-size:.9rem;color:#777;margin-top:5px">${resumen}</p>
+          ${multiPotreroLine}
           ${catChips?`<div style="margin-top:7px;display:flex;flex-wrap:wrap;gap:5px">${catChips}</div>`:''}
         </div>
         <span style="color:#ccc;font-size:1.2rem;flex-shrink:0">›</span>
@@ -3481,7 +3491,9 @@ async function openEditarLote(id){
   const l=await db.lotes.get(id)
   if(!l){showToast('Lote no encontrado','err');return}
   _editLoteAnimales=await db.animales.where({activo:1,loteId:id}).toArray()
-  const cicloActivo=await db.ciclos.where({loteId:id,activo:1}).first()
+  const ciclosActivosEdit=await db.ciclos.where({loteId:id,activo:1}).toArray()
+  const cicloActivo=ciclosActivosEdit.length===1?ciclosActivosEdit[0]:null
+  const multiPotreroEdit=ciclosActivosEdit.length>1
   const potrerosDisp=await db.potreros.where('activo').equals(1).toArray()
   const cats=[...new Set(_editLoteAnimales.map(a=>a.categoria||'').filter(Boolean))].sort()
   const optsCat=`<option value="">Todas (${_editLoteAnimales.length})</option>`+cats.map(c=>`<option value="${c}">${CAT[c]||c} (${_editLoteAnimales.filter(a=>a.categoria===c).length})</option>`).join('')
@@ -3515,6 +3527,10 @@ async function openEditarLote(id){
         </select></div>
       <div class="field"><label>Fecha de ingreso al potrero</label>
         <input id="el-pot-fecha" class="inp" type="date" value="${toD(cicloActivo.fechaEntrada)}"></div>
+    </div>` : ''}
+    ${multiPotreroEdit ? `<div style="border-top:1.5px solid #eee;margin:14px 0 10px;padding-top:14px">
+      <p style="font-size:.78rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px">📍 Potreros actuales</p>
+      <p class="xs gray">Este lote está en ${ciclosActivosEdit.length} potreros. Usa "🔄 Rotar potrero" o "🚪 Liberar" desde la ficha del lote para gestionarlos — aquí no se pueden editar.</p>
     </div>` : ''}
     <button class="btn btn-b" onclick="saveEditarLote(${id})">Guardar cambios</button>`)
   filtrarEditLote()
@@ -3783,16 +3799,10 @@ async function saveEditarLote(id){
     if (potEl && fechaEl) {
       const nuevoPotId  = parseInt(potEl.value)
       const nuevaFecha  = fromD(fechaEl.value)
-      // Si el lote tiene más de un ciclo "activo" (huérfanos de bugs previos),
-      // se toma el más reciente como el real y se cierran los demás como huérfanos.
-      const ciclosActivosLote = await db.ciclos.where({loteId:id,activo:1}).sortBy('fechaEntrada')
-      const cicloActivo = ciclosActivosLote.length ? ciclosActivosLote[ciclosActivosLote.length-1] : null
-      if (ciclosActivosLote.length > 1) {
-        for (const huerfano of ciclosActivosLote.slice(0, -1)) {
-          await fsUpdate('ciclos', huerfano.id, {activo:0, fechaSalida: nuevaFecha || Date.now()})
-          await fsUpdate('potreros', huerfano.potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:null, fechaSalida: nuevaFecha || Date.now()})
-        }
-      }
+      // El campo de potrero solo se muestra cuando el lote tiene exactamente
+      // un ciclo activo (ver openEditarLote) — si tiene varios (multi-potrero
+      // intencional), este bloque no se renderiza y no se toca nada aquí.
+      const cicloActivo = await db.ciclos.where({loteId:id,activo:1}).first()
       if (cicloActivo) {
         const potCambio   = nuevoPotId !== cicloActivo.potreroId
         const fechaCambio = nuevaFecha && nuevaFecha !== cicloActivo.fechaEntrada
@@ -4128,8 +4138,10 @@ async function pgLoteFicha({id}) {
   }
   const animales=await db.animales.where({activo:1,loteId:id}).toArray()
   const todosAnimales=await db.animales.where('activo').equals(1).toArray()
-  const cicloActivo=await db.ciclos.where({loteId:id,activo:1}).first()
-  const pot=cicloActivo?await db.potreros.get(cicloActivo.potreroId):null
+  const ciclosActivosLote=await db.ciclos.where({loteId:id,activo:1}).toArray()
+  const potrerosLote=(await Promise.all(ciclosActivosLote.map(async c=>({ciclo:c,pot:await db.potreros.get(c.potreroId)})))).filter(x=>x.pot)
+  const cicloActivo=potrerosLote[0]?.ciclo||null
+  const pot=potrerosLote[0]?.pot||null
 
   let pesoTotal=0, gdpSum=0, gdpN=0, ultimoPesajeLoteTs=0
   const catCount={}
@@ -4182,16 +4194,26 @@ async function pgLoteFicha({id}) {
       <div>
         <p class="sub">${animales.length} animal${animales.length!==1?'es':''} en el lote</p>
         <p style="font-size:1.5rem;font-weight:700;margin-top:2px">${Math.round(pesoTotal).toLocaleString('es-CO')} kg</p>
-        ${animales.length?`<p class="sub xs" style="margin-top:2px">Promedio: ${Math.round(pesoTotal/animales.length).toLocaleString('es-CO')} kg/animal</p>`:''}
         <p class="sub xs" style="margin-top:3px">Último pesaje: ${ultimoPesajeLoteTs?ffd(ultimoPesajeLoteTs):'Sin pesajes'}</p>
         ${gdpProm!==null?`<p class="sub xs">GDP prom: ${gdpProm} g/día</p>`:''}
       </div>
       <div style="text-align:right">
-        <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:1.05rem;padding:6px 10px">${pot?'En '+pot.nombre:'Sin potrero'}</span>
-        ${pot&&cicloActivo?`<p style="font-size:.7rem;color:#90CAF9;margin-top:3px;font-weight:600">${diasDesde(cicloActivo.fechaEntrada)} días</p>`:''}
+        ${potrerosLote.length>1
+          ? `<span class="badge bg-orange" style="font-size:1.05rem;padding:6px 10px">🔀 ${potrerosLote.length} potreros</span>`
+          : `<span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:1.05rem;padding:6px 10px">${pot?'En '+pot.nombre:'Sin potrero'}</span>
+             ${pot&&cicloActivo?`<p style="font-size:.7rem;color:#90CAF9;margin-top:3px;font-weight:600">${diasDesde(cicloActivo.fechaEntrada)} días</p>`:''}`
+        }
       </div>
     </div>
   </div>
+  ${potrerosLote.length>1?`<div class="card mb10">
+    <p class="bold sm mb8">🔀 Potreros ocupados (${potrerosLote.length})</p>
+    ${potrerosLote.map(({ciclo,pot})=>`
+      <div class="row-b" style="padding:7px 0;border-bottom:1px solid #f0f0f0">
+        <div><p class="sm bold">${escH(pot.nombre)}</p><p class="xs gray">${diasDesde(ciclo.fechaEntrada)} días de ocupación</p></div>
+        <button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${ciclo.id},${pot.id})">🚪 Liberar</button>
+      </div>`).join('')}
+  </div>`:''}
   ${animales.length?`<div class="card mb10">
     <p class="bold sm mb8">🐄 Animales por categoría</p>
     ${catFilas}${catExtra}
@@ -4201,10 +4223,12 @@ async function pgLoteFicha({id}) {
     </div>
   </div>`:''}
   <div class="btn-row mb12">
-    ${pot
+    ${potrerosLote.length===1
       ? `<button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${cicloActivo.id},${pot.id})">🚪 Sacar</button>
-         <button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id},${cicloActivo.id},${pot.id})">🔄 Rotar potrero</button>`
-      : `<button class="btn btn-g btn-sm" onclick="openIngresarLote(${id})">🌿 Ingresar a potrero</button>`
+         <button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id})">🔄 Rotar potrero</button>`
+      : potrerosLote.length>1
+        ? `<button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id})">🔄 Rotar potreros</button>`
+        : `<button class="btn btn-g btn-sm" onclick="openIngresarLote(${id})">🌿 Ingresar a potrero</button>`
     }
     <button class="btn btn-out btn-sm" onclick="openAgregarAnimal(${id})">+ Animal</button>
     ${animales.length?`<button class="btn btn-sm btn-p" onclick="openVentaDesdeLote(${id})">💰 Venta</button>`:''}
@@ -4527,41 +4551,84 @@ async function sacarLoteDelPotrero(loteId,cicloId,potreroId) {
   go('lote-ficha',{id:loteId})
 }
 
-async function openCambiarPotrero(loteId,cicloId,potreroActualId) {
-  const pots = await db.potreros.where('activo').equals(1).toArray()
-  const dispon = pots.filter(p => p.estado !== 'OCUPADO').sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}))
-  const potActual = await db.potreros.get(potreroActualId)
-  if (!dispon.length) { showToast('No hay potreros disponibles para rotar','err',3500); return }
-  window._cpPotreros = dispon
-  window._cpSelId = null
-  const listHtml = dispon.map(p=>`
-    <div class="cp-item" data-id="${p.id}" data-nom="${escH(p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''))}" onclick="cpSeleccionar(${p.id},this)">
-      <span class="cp-nom">${escH(p.nombre)}</span>
-      <span class="cp-ha">${p.areaHa?.toFixed(1)||0} ha</span>
-    </div>`).join('')
+async function openCambiarPotrero(loteId) {
+  const ciclosActuales = await db.ciclos.where({loteId,activo:1}).toArray()
+  const potActuales = (await Promise.all(ciclosActuales.map(c=>db.potreros.get(c.potreroId)))).filter(Boolean)
+  window._cpLoteId = loteId
+  window._cpIdsActuales = new Set(potActuales.map(p=>p.id))
+  window._cpMulti = false
+  window._cpSelIds = new Set()
+  const nombresActuales = potActuales.map(p=>p.nombre).join(', ') || '—'
   showSheet(`
     <div class="sh-title">🔄 Rotar potrero<button class="sh-x" onclick="closeSheet()">✕</button></div>
-    <p class="sm gray mb12">Potrero actual: <strong>${escH(potActual?.nombre||'—')}</strong></p>
+    <p class="sm gray mb12">Potrero(s) actual(es): <strong>${escH(nombresActuales)}</strong></p>
+    <div style="display:flex;align-items:center;justify-content:space-between;background:#FFF3E0;border-radius:10px;padding:10px 12px;margin-bottom:12px;cursor:pointer" onclick="cpToggleMulti()">
+      <span class="sm bold" style="color:#E65100">🔀 Dividir en varios potreros (por sequía)</span>
+      <div id="cp-switch" style="width:40px;height:22px;border-radius:11px;background:#ccc;position:relative;flex-shrink:0;transition:.15s">
+        <div style="width:18px;height:18px;border-radius:50%;background:white;position:absolute;top:2px;left:2px;transition:.15s"></div>
+      </div>
+    </div>
     <div class="field">
-      <label>Nuevo potrero *</label>
+      <label id="cp-label">Nuevo potrero *</label>
       <div style="position:relative;margin-bottom:8px">
         <input id="cp-buscar" class="inp" type="text" placeholder="🔍 Buscar potrero…" oninput="cpFiltrar()" autocomplete="off" style="padding-right:34px;">
         <button id="cp-clear" type="button" onclick="cpLimpiarBusqueda()" style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:#ddd;color:#555;width:24px;height:24px;border-radius:50%;font-size:.8rem;font-weight:700;cursor:pointer;line-height:1">✕</button>
       </div>
-      <div id="cp-lista" style="max-height:220px;overflow-y:auto;border:1.5px solid #e0e0e0;border-radius:10px;background:#f8f8f8;">${listHtml}</div>
+      <div id="cp-lista" style="max-height:260px;overflow-y:auto;border:1.5px solid #e0e0e0;border-radius:10px;background:#f8f8f8;"></div>
       <p id="cp-sin" class="sm gray" style="display:none;margin-top:6px;text-align:center;">Sin resultados</p>
     </div>
     <div class="field"><label>Fecha de rotación</label>
       <input id="cp-f" class="inp" type="date" value="${toD(Date.now())}"></div>
     <div class="btn-row">
       <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
-      <button class="btn btn-b" onclick="saveCambiarPotrero(${loteId},${cicloId},${potreroActualId})">Confirmar rotación</button>
+      <button class="btn btn-b" onclick="saveCambiarPotrero(${loteId})">Confirmar rotación</button>
     </div>`)
+  await cpRenderLista()
 }
-function cpSeleccionar(id, el) {
-  window._cpSelId = id
-  document.querySelectorAll('.cp-item').forEach(e=>e.classList.remove('cp-sel'))
-  el.classList.add('cp-sel')
+async function cpRenderLista() {
+  const idsActuales = window._cpIdsActuales
+  const pots = await db.potreros.where('activo').equals(1).toArray()
+  // Modo simple: solo potreros libres (rotación 1→1, como siempre).
+  // Modo dividir: además incluye los que ya ocupa este lote, para poder dejarlos marcados sin reiniciar sus días.
+  const dispon = pots.filter(p => p.estado !== 'OCUPADO' || (window._cpMulti && idsActuales.has(p.id)))
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}))
+  const lista = $('cp-lista')
+  if (!lista) return
+  if (!dispon.length) { lista.innerHTML = '<p class="sm gray" style="padding:14px;text-align:center">No hay potreros disponibles</p>'; return }
+  lista.innerHTML = dispon.map(p=>`
+    <div class="cp-item ${window._cpSelIds.has(p.id)?'cp-sel':''}" data-id="${p.id}" data-nom="${escH(p.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''))}" onclick="cpToggle(${p.id},this)">
+      <span class="cp-nom">${escH(p.nombre)}${idsActuales.has(p.id)?' <span class="xs gray">(actual)</span>':''}</span>
+      <span class="cp-ha">${p.areaHa?.toFixed(1)||0} ha</span>
+    </div>`).join('')
+}
+function cpToggleMulti() {
+  window._cpMulti = !window._cpMulti
+  const sw = $('cp-switch'), dot = sw?.firstElementChild, label = $('cp-label')
+  if (window._cpMulti) {
+    if(sw) sw.style.background = '#E65100'
+    if (dot) dot.style.left = '20px'
+    if (label) label.textContent = 'Potreros destino * (varios)'
+    window._cpSelIds = new Set(window._cpIdsActuales) // preselecciona los actuales
+  } else {
+    if(sw) sw.style.background = '#ccc'
+    if (dot) dot.style.left = '2px'
+    if (label) label.textContent = 'Nuevo potrero *'
+    window._cpSelIds = new Set()
+  }
+  cpFiltrarLimpiar()
+  cpRenderLista()
+}
+function cpFiltrarLimpiar(){ const inp=$('cp-buscar'); if(inp) inp.value='' }
+function cpToggle(id, el) {
+  id = parseInt(id)
+  if (window._cpMulti) {
+    if (window._cpSelIds.has(id)) { window._cpSelIds.delete(id); el.classList.remove('cp-sel') }
+    else { window._cpSelIds.add(id); el.classList.add('cp-sel') }
+  } else {
+    window._cpSelIds = new Set([id])
+    document.querySelectorAll('.cp-item').forEach(e=>e.classList.remove('cp-sel'))
+    el.classList.add('cp-sel')
+  }
 }
 function cpFiltrar() {
   const q = ($('cp-buscar')?.value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
@@ -4577,11 +4644,6 @@ function cpFiltrar() {
   if (sin) sin.style.display = visibles === 0 ? '' : 'none'
   const clearBtn = $('cp-clear')
   if (clearBtn) clearBtn.style.display = q ? '' : 'none'
-  // Si el ítem seleccionado quedó oculto, deseleccionar
-  if (window._cpSelId) {
-    const selEl = document.querySelector(`.cp-item[data-id="${window._cpSelId}"]`)
-    if (selEl && selEl.style.display === 'none') { window._cpSelId = null; selEl.classList.remove('cp-sel') }
-  }
 }
 function cpLimpiarBusqueda() {
   const inp = $('cp-buscar')
@@ -4589,34 +4651,34 @@ function cpLimpiarBusqueda() {
   cpFiltrar()
 }
 
-async function saveCambiarPotrero(loteId,cicloId,potreroActualId) {
-  const potId = window._cpSelId ? parseInt(window._cpSelId) : 0
-  if (!potId) { const lista=$('cp-lista');if(lista){lista.style.border='2px solid #C62828'};showToast('Selecciona un potrero','err'); return }
-  const potActual = await db.potreros.get(potreroActualId)
-  const potNuevo = await db.potreros.get(potId)
+async function saveCambiarPotrero(loteId) {
+  const selIds = [...(window._cpSelIds||new Set())]
+  if (!selIds.length) { const lista=$('cp-lista');if(lista){lista.style.border='2px solid #C62828'};showToast('Selecciona al menos un potrero','err'); return }
   const fecha = fromD($('cp-f').value) || Date.now()
-  const ok = await showConfirm(`¿Rotar el lote de "${potActual?.nombre||'—'}" a "${potNuevo?.nombre||'—'}"?\n\n📅 Fecha: ${ffd(fecha)}`)
+  const ciclosActuales = await db.ciclos.where({loteId,activo:1}).toArray()
+  const idsActuales = new Set(ciclosActuales.map(c=>c.potreroId))
+  const aLiberar = ciclosActuales.filter(c=>!selIds.includes(c.potreroId))
+  const aAbrir = selIds.filter(pid=>!idsActuales.has(pid))
+  const potsDestino = (await Promise.all(selIds.map(pid=>db.potreros.get(pid)))).filter(Boolean)
+  const nombresDestino = potsDestino.map(p=>p.nombre).join(', ')
+  const ok = await showConfirm(`¿Confirmar que el lote quede en: ${nombresDestino}?\n\n📅 Fecha: ${ffd(fecha)}`)
   if (!ok) return
   const btn = document.querySelector('#ov .btn-b')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
   try {
     const lote     = await db.lotes.get(loteId)
     const animales = await db.animales.where({activo:1,loteId}).toArray()
-    // Cerrar TODOS los ciclos activos del lote (evita huérfanos por operaciones previas incompletas)
-    const ciclosActivos = await db.ciclos.where({loteId,activo:1}).toArray()
-    for (const c of ciclosActivos) {
+    // Cerrar solo los potreros que el lote deja de ocupar
+    for (const c of aLiberar) {
       const dias = diasDesde(c.fechaEntrada)
       await fsUpdate('ciclos', c.id, {activo:0, fechaSalida:fecha, diasOcupacion:dias})
-      // Si había un ciclo activo en otro potrero distinto al actual, también ponerlo en descanso
-      if (c.potreroId !== potreroActualId) {
-        await fsUpdate('potreros', c.potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:null, fechaSalida:fecha})
-      }
+      await fsUpdate('potreros', c.potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:null, fechaSalida:fecha})
     }
-    // Poner potrero actual en descanso
-    await fsUpdate('potreros', potreroActualId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:null, fechaSalida:fecha})
-    // Abrir nuevo ciclo en potrero destino
-    await fsAdd('ciclos', {potreroId:potId, loteId, nombreLote:lote.nombre, numAnimales:animales.length, fechaEntrada:fecha, activo:1, obs:''})
-    await fsUpdate('potreros', potId, {estado:'OCUPADO', numAnimales:animales.length, loteActual:loteId, fechaSalida:undefined})
+    // Abrir ciclo en cada potrero nuevo (los que ya estaban activos no se tocan: conservan sus días)
+    for (const pid of aAbrir) {
+      await fsAdd('ciclos', {potreroId:pid, loteId, nombreLote:lote.nombre, numAnimales:animales.length, fechaEntrada:fecha, activo:1, obs:''})
+      await fsUpdate('potreros', pid, {estado:'OCUPADO', numAnimales:animales.length, loteActual:loteId, fechaSalida:undefined})
+    }
     closeSheet()
     showToast('✅ Rotación registrada','ok',3000)
     go('lote-ficha',{id:loteId})
@@ -6091,9 +6153,9 @@ async function sacarYMover(potreroId, cicloId, nuevoPotId) {
     await fsUpdate('ciclos', cicloId, {activo:0, fechaSalida:ahora, diasOcupacion:dias})
     // Potrero anterior → descanso
     await fsUpdate('potreros', potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:undefined, fechaSalida:ahora})
-    // Barrida defensiva: cierra cualquier otro ciclo huérfano del mismo lote
-    // en otros potreros (excluyendo el que ya acabamos de cerrar arriba)
-    await cerrarCiclosActivosLote(ciclo.loteId, ahora, potreroId)
+    // Nota: ya no se hace barrida defensiva de otros ciclos del lote aquí —
+    // el lote puede tener legítimamente otros potreros activos simultáneos
+    // (ver openCambiarPotrero) y cerrarlos de rebote corrompería esos datos.
     // Abrir nuevo ciclo en potrero destino
     const nuevoCicloId = await fsAdd('ciclos', {
       potreroId:nuevoPotId, loteId:ciclo.loteId, nombreLote:ciclo.nombreLote,
@@ -6121,8 +6183,8 @@ async function ejecutarSalidaPotrero(potreroId, cicloId) {
   try {
     await fsUpdate('ciclos', cicloId, {activo:0, fechaSalida:ahora, diasOcupacion:dias})
     await fsUpdate('potreros', potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:undefined, fechaSalida:ahora})
-    // Barrida defensiva: cierra cualquier otro ciclo huérfano del mismo lote
-    await cerrarCiclosActivosLote(ciclo.loteId, ahora, potreroId)
+    // Nota: ya no se hace barrida defensiva de otros ciclos del lote aquí —
+    // el lote puede tener legítimamente otros potreros activos simultáneos.
   } catch(e) { showToast('Error al sacar lote','err',4000); return }
   pushUndo(`Salida de "${ciclo.nombreLote||'lote'}" revertida`, async () => {
     await fsUpdate('ciclos', cicloId, {activo:1, fechaSalida:undefined, diasOcupacion:undefined})
@@ -7244,14 +7306,15 @@ async function ejecutarVerificacionIntegridad() {
 async function sincronizarNumAnimalesLote(loteId) {
   if (!loteId) return
   const real = await db.animales.where({ activo: 1, loteId }).count()
-  const ciclo = await db.ciclos.where({ loteId, activo: 1 }).first()
-  if (!ciclo) return
-  if (ciclo.numAnimales !== real) {
-    await fsUpdate('ciclos', ciclo.id, { numAnimales: real })
-  }
-  const pot = await db.potreros.get(ciclo.potreroId)
-  if (pot && pot.estado === 'OCUPADO' && pot.numAnimales !== real) {
-    await fsUpdate('potreros', ciclo.potreroId, { numAnimales: real })
+  const ciclos = await db.ciclos.where({ loteId, activo: 1 }).toArray()
+  for (const ciclo of ciclos) {
+    if (ciclo.numAnimales !== real) {
+      await fsUpdate('ciclos', ciclo.id, { numAnimales: real })
+    }
+    const pot = await db.potreros.get(ciclo.potreroId)
+    if (pot && pot.estado === 'OCUPADO' && pot.numAnimales !== real) {
+      await fsUpdate('potreros', ciclo.potreroId, { numAnimales: real })
+    }
   }
 }
 
