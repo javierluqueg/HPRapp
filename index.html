@@ -4196,6 +4196,7 @@ async function pgLoteFicha({id}) {
       <div>
         <p class="sub">${animales.length} animal${animales.length!==1?'es':''} en el lote</p>
         <p style="font-size:1.5rem;font-weight:700;margin-top:2px">${Math.round(pesoTotal).toLocaleString('es-CO')} kg</p>
+        ${animales.length?`<p class="sub xs" style="margin-top:2px">Promedio: ${Math.round(pesoTotal/animales.length).toLocaleString('es-CO')} kg/animal</p>`:''}
         <p class="sub xs" style="margin-top:3px">Último pesaje: ${ultimoPesajeLoteTs?ffd(ultimoPesajeLoteTs):'Sin pesajes'}</p>
         ${gdpProm!==null?`<p class="sub xs">GDP prom: ${gdpProm} g/día</p>`:''}
       </div>
