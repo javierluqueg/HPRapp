@@ -7825,6 +7825,7 @@ async function pgConfig() {
     <div class="tab${tab==='backup'?' on':''}" style="${cfgTabStyle('backup')};white-space:nowrap" onclick="setTab('cfg','backup');go('config')">Backup</div>
     <div class="tab${tab==='excel'?' on':''}" style="${cfgTabStyle('excel')};white-space:nowrap" onclick="setTab('cfg','excel');go('config')">Excel</div>
     <div class="tab${tab==='resetear'?' on':''}" style="${cfgTabStyle('resetear')};white-space:nowrap;color:#B71C1C" onclick="setTab('cfg','resetear');go('config')">🗑 Resetear</div>
+    <div class="tab${tab==='migracion'?' on':''}" style="${cfgTabStyle('migracion')};white-space:nowrap;color:#E65100" onclick="setTab('cfg','migracion');go('config')">⚠️ Migración</div>
   </div>`
 
   if(tab==='finca'){
@@ -7860,6 +7861,29 @@ async function pgConfig() {
         <button class="btn btn-b" onclick="ejecutarVerificacionIntegridad()">▶ Ejecutar verificación</button>
       </div>
       <div id="integridad-resultados"></div>`
+  }
+  if(tab==='migracion'){
+    return tabs + `
+      <div class="card mb10" style="background:#FFF3E0;border-left:4px solid #E65100">
+        <p class="bold sm" style="color:#E65100">⚠️ Migración temporal — venta 28/08/2026</p>
+        <p class="xs gray mt4">Bloque agregado por Claude a pedido de Javier para registrar las ventas de esta semana (Sugamagdalena, Doradaexpo, Orozco) según lo cuadrado en el Excel "GPD por Cliente". Se retira del código una vez ejecutado. Toca "Validar" en cada grupo para ver el resultado contra los datos en vivo antes de confirmar.</p>
+      </div>
+      <div class="card mb10">
+        <p class="bold sm mb8">1️⃣ Sugamagdalena — 30 animales, hoy</p>
+        <button class="btn btn-b" style="width:100%" onclick="migMostrarResumen('sugamagdalena')">▶ Validar</button>
+        <div id="mig-resultados-sugamagdalena" class="mt10"></div>
+      </div>
+      <div class="card mb10">
+        <p class="bold sm mb8">2️⃣ Doradaexpo — 30 animales, hoy</p>
+        <button class="btn btn-b" style="width:100%" onclick="migMostrarResumen('doradaexpo')">▶ Validar</button>
+        <div id="mig-resultados-doradaexpo" class="mt10"></div>
+      </div>
+      <div class="card mb10" style="border-left:4px solid #C62828">
+        <p class="bold sm mb4">3️⃣ Claudia Orozco — 16 animales</p>
+        <p class="xs" style="color:#C62828;margin-bottom:8px">⛔ NO ejecutar hasta el lunes 31/08/2026, cuando confirmes que canceló y retiró los animales.</p>
+        <button class="btn btn-b" style="width:100%" onclick="migMostrarResumen('orozco')">▶ Validar</button>
+        <div id="mig-resultados-orozco" class="mt10"></div>
+      </div>`
   }
   if(tab==='usuarios'){
     const us=await db.usuarios.where('activo').equals(1).toArray()
@@ -9615,6 +9639,182 @@ updateOfflineBanner()
 
   PG.addEventListener('touchcancel', resetPtr, {passive:true})
 })()
+
+// ═══════════════════════════════════════════════════
+// MIGRACIÓN TEMPORAL — VENTA 28/08/2026 (Sugamagdalena, Doradaexpo, Orozco)
+// Agregado por Claude a pedido de Javier (sesión Cowork). RETIRAR ESTE BLOQUE
+// COMPLETO (y la pestaña 'migracion' en pgConfig) una vez ejecutados los 3 grupos.
+// ═══════════════════════════════════════════════════
+  const _migSuga = [
+    {arete:'557', pesoVenta:396},
+    {arete:'14A', pesoVenta:375},
+    {arete:'69V', pesoVenta:380},
+    {arete:'221', pesoVenta:430},
+    {arete:'2354-923', pesoVenta:425},
+    {arete:'010-03', pesoVenta:378},
+    {arete:'2816-14', pesoVenta:380},
+    {arete:'560', pesoVenta:426},
+    {arete:'013-24', pesoVenta:365},
+    {arete:'312-24', pesoVenta:358},
+    {arete:'650-54', pesoVenta:338},
+    {arete:'20A', pesoVenta:330},
+    {arete:'190-83', pesoVenta:375},
+    {arete:'79V', pesoVenta:353},
+    {arete:'198-83', pesoVenta:378},
+    {arete:'503-63', pesoVenta:400},
+    {arete:'87V', pesoVenta:370},
+    {arete:'49-24', pesoVenta:360},
+    {arete:'13A', pesoVenta:356},
+    {arete:'022-24', pesoVenta:350},
+    {arete:'73V', pesoVenta:357},
+    {arete:'1090-4', pesoVenta:350},
+    {arete:'99V', pesoVenta:348},
+    {arete:'92V', pesoVenta:370},
+    {arete:'21A', pesoVenta:337},
+    {arete:'95V', pesoVenta:315},
+    {arete:'98V', pesoVenta:335},
+    {arete:'554', pesoVenta:360},
+    {arete:'93V', pesoVenta:338},
+    {arete:'18A', pesoVenta:338},
+  ]
+
+  const _migDora = [
+    {arete:'2466-03', pesoVenta:410},
+    {arete:'152-84', pesoVenta:422},
+    {arete:'2513-74', pesoVenta:377},
+    {arete:'140-24', pesoVenta:324},
+    {arete:'003-24', pesoVenta:333},
+    {arete:'800-12', pesoVenta:417},
+    {arete:'550', pesoVenta:403},
+    {arete:'616', pesoVenta:364},
+    {arete:'193-24', pesoVenta:356},
+    {arete:'196-83', pesoVenta:347},
+    {arete:'610', pesoVenta:338},
+    {arete:'347-23', pesoVenta:307},
+    {arete:'2466-54', pesoVenta:350},
+    {arete:'364-33', pesoVenta:330},
+    {arete:'84-93', pesoVenta:392},
+    {arete:'511-63', pesoVenta:400},
+    {arete:'609', pesoVenta:305},
+    {arete:'602', pesoVenta:342},
+    {arete:'11-14', pesoVenta:390},
+    {arete:'043-113', pesoVenta:360},
+    {arete:'2511-74', pesoVenta:320},
+    {arete:'552', pesoVenta:356},
+    {arete:'619', pesoVenta:325},
+    {arete:'620', pesoVenta:380},
+    {arete:'007V', pesoVenta:335},
+    {arete:'028-73', pesoVenta:360},
+    {arete:'615', pesoVenta:337},
+    {arete:'624', pesoVenta:327},
+    {arete:'603', pesoVenta:310},
+    {arete:'022-44', pesoVenta:337},
+  ]
+
+  const _migOrozco = [
+    {arete:'4468-14', pesoVenta:423},
+    {arete:'551', pesoVenta:413},
+    {arete:'032-14', pesoVenta:400},
+    {arete:'553', pesoVenta:390},
+    {arete:'240-210', pesoVenta:432},
+    {arete:'845-3', pesoVenta:392},
+    {arete:'964-D3', pesoVenta:383},
+    {arete:'171-3', pesoVenta:403},
+    {arete:'16A', pesoVenta:356},
+    {arete:'1814-204', pesoVenta:380},
+    {arete:'622', pesoVenta:340},
+    {arete:'612', pesoVenta:380},
+    {arete:'1412-73', pesoVenta:340},
+    {arete:'950-D3', pesoVenta:382},
+    {arete:'505-83', pesoVenta:440},
+    {arete:'031-43', pesoVenta:365},
+  ]
+
+  const _migGrupos = {
+    sugamagdalena: { nombre:'Sugamagdalena', comprador:'Sugamagdalena', pxkg:8002.942120134901, fecha:'2026-08-28', obs:'potrero báscula', cfgKey:'migracion_venta_sugamagdalena_28ago2026', animales:_migSuga },
+    doradaexpo:    { nombre:'Doradaexpo',    comprador:'Doradaexpo',    pxkg:7425.429416181716, fecha:'2026-08-28', obs:'potrero báscula', cfgKey:'migracion_venta_doradaexpo_28ago2026', animales:_migDora },
+    orozco:        { nombre:'Claudia Orozco', comprador:'Claudia Orozco', pxkg:9200, fecha:'2026-08-31', obs:'potrero báscula', cfgKey:'migracion_venta_orozco_31ago2026', animales:_migOrozco },
+  }
+
+  async function migValidarGrupo(key) {
+    const g = _migGrupos[key]
+    const ya = await getCfg(g.cfgKey)
+    const resultados = []
+    for (const item of g.animales) {
+      const a = await db.animales.where('arete').equals(item.arete).first()
+      if (!a) { resultados.push({...item, estado:'NO_ENCONTRADO'}); continue }
+      if (!a.activo) { resultados.push({...item, estado:'YA_INACTIVO', causaBaja:a.causaBaja||'?'}); continue }
+      const lote = a.loteId ? await db.lotes.get(a.loteId) : null
+      resultados.push({...item, estado:'OK', id:a.id, loteId:a.loteId||null, loteNom:lote?lote.nombre:null})
+    }
+    return { ya, resultados }
+  }
+
+  async function migMostrarResumen(key) {
+    const g = _migGrupos[key]
+    const el = document.getElementById('mig-resultados-'+key)
+    if (el) el.innerHTML = '<p class="xs gray center" style="padding:12px">⏳ Validando contra la base de datos en vivo…</p>'
+    const { ya, resultados } = await migValidarGrupo(key)
+    const ok = resultados.filter(r => r.estado === 'OK')
+    const problemas = resultados.filter(r => r.estado !== 'OK')
+    const pesoTot = ok.reduce((s,r) => s + r.pesoVenta, 0)
+    const valorTot = ok.reduce((s,r) => s + Math.round(g.pxkg * r.pesoVenta), 0)
+    if (!el) return
+    el.innerHTML = `
+      ${ya ? `<div class="card mb8" style="background:#E8F5E9;border-left:4px solid #2E7D32"><p class="xs bold" style="color:#2E7D32">✅ Este grupo ya fue ejecutado (${escH(ya)})</p></div>` : ''}
+      <div class="card mb8">
+        <p class="bold sm">${escH(g.nombre)} — ${ok.length}/${resultados.length} animales OK</p>
+        <p class="xs gray mt4">Peso total: ${pesoTot.toLocaleString('es-CO')} kg · $${g.pxkg.toLocaleString('es-CO',{maximumFractionDigits:2})}/kg · Valor total ≈ $${valorTot.toLocaleString('es-CO')}</p>
+        <p class="xs gray mt4">Fecha de baja: ${g.fecha} · Comprador: ${escH(g.comprador)} · Causa: Venta</p>
+      </div>
+      ${problemas.length ? `<div class="card mb8" style="border-left:4px solid #C62828">
+        <p class="bold sm" style="color:#C62828">⚠ ${problemas.length} con problema (no se tocarán)</p>
+        ${problemas.map(p => `<p class="xs gray mt2">${escH(p.arete)} — ${p.estado==='NO_ENCONTRADO' ? 'arete no encontrado en la app' : 'ya está inactivo ('+escH(p.causaBaja)+')'}</p>`).join('')}
+      </div>` : ''}
+      ${(!ya && ok.length) ? `<button class="btn btn-r" style="width:100%" onclick="migEjecutarGrupo('${key}')">✓ Confirmar y registrar venta de ${ok.length} animales</button>` : ''}
+    `
+  }
+
+  async function migEjecutarGrupo(key) {
+    const g = _migGrupos[key]
+    const totalAprox = Math.round(g.pxkg * g.animales.reduce((s,a) => s + a.pesoVenta, 0))
+    const conf = await showConfirm(`¿Confirmas registrar la VENTA de ${g.animales.length} animales a "${g.comprador}" (fecha ${g.fecha}) por un total aproximado de $${totalAprox.toLocaleString('es-CO')}?\n\nCada animal quedará inactivo con causa "Venta". Se puede revertir individualmente desde su ficha si algo sale mal.`)
+    if (!conf) return
+    const { resultados } = await migValidarGrupo(key)
+    const validos = resultados.filter(r => r.estado === 'OK')
+    if (!validos.length) { showToast('No hay animales válidos para procesar','err'); return }
+    const fechaBaja = fromD(g.fecha)
+    const ahora = Date.now(), quien = USER?.nombre || 'Migración'
+    const loteIds = []
+    let procesados = 0
+    for (const r of validos) {
+      const a = await db.animales.get(r.id)
+      if (!a || !a.activo) continue   // re-verificar justo antes de escribir (por si cambió mientras se confirmaba)
+      const pesoVenta = r.pesoVenta
+      const valorVenta = Math.round(g.pxkg * pesoVenta)
+      const precioVentaKg = Math.round(valorVenta / pesoVenta)
+      await fsUpdate('animales', r.id, {
+        activo:0, causaBaja:'Venta', fechaBaja,
+        pesoVenta, valorVenta, precioVentaKg,
+        comprador: g.comprador,
+        obsBaja: g.obs,
+        loteId: null, fechaLote: null,
+        loteIdSalida: a.loteId||null, loteNombreSalida: a.loteId?(r.loteNom||null):null
+      })
+      const dup = await db.pesajes.where('animalId').equals(r.id).filter(p => p.fecha===fechaBaja && p.pesoKg===pesoVenta).first()
+      if (!dup) {
+        await fsAdd('pesajes', {animalId:r.id, fecha:fechaBaja, pesoKg:pesoVenta, metodo:'BASCULA', cc:3, obs:'Pesaje de venta', registradoPor:quien, registradoEn:ahora})
+      }
+      if (a.loteId) loteIds.push(a.loteId)
+      procesados++
+    }
+    await checkLoteVacio(loteIds, fechaBaja)
+    await setCfgSync(g.cfgKey, toD(Date.now()))
+    showToast(`✅ ${procesados} animales de ${g.nombre} registrados como venta`, 'ok', 4000)
+    await migMostrarResumen(key)
+    go('ventas')
+  }
+
 </script>
 </body>
 </html>
