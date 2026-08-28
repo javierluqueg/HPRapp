@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260829-003'
+const APP_VERSION = '20260828-004'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -9346,40 +9346,61 @@ async function limpiarCiclosAntiguos() {
   } catch(e) { console.warn('limpiarCiclosAntiguos:', e.message) }
 }
 
+// Compara el contenido real de index.html (mismo origen, sin límite de tasa,
+// sin depender de la API de GitHub) contra un hash guardado la última vez que
+// se revisó. Cualquier cambio en el archivo — lo suba Claude, Javier o quien
+// sea, por push o por "Add files via upload" — cambia el hash automáticamente,
+// sin necesidad de recordar subir un número de versión a mano.
+function _hashTexto(t) {
+  let h = 5381
+  for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0
+  return String(h)
+}
+let _lastAppVersionCheck = 0
 async function checkAppVersion() {
   // No interrumpir si el usuario está en login o sin sesión iniciada
   if (!USER || ['login','setup'].includes(PAGE)) return
+  _lastAppVersionCheck = Date.now()
   try {
-    // Usa la API de GitHub para obtener el último commit — no le afecta el caché del CDN
-    const r = await fetch('https://api.github.com/repos/javierluqueg/HPRapp/commits/main', {
-      cache: 'no-store',
-      headers: {'Accept': 'application/vnd.github.v3+json'}
-    })
+    const r = await fetch('./index.html?_chk=' + Date.now(), { cache: 'no-store' })
     if (!r.ok) return
-    const data = await r.json()
-    const latestSha = (data.sha || '').substring(0, 10)
-    if (!latestSha) return
-    const storedSha = localStorage.getItem('hpr_commit_sha')
-    if (!storedSha) {
-      // Primera vez — guardar SHA sin recargar
-      localStorage.setItem('hpr_commit_sha', latestSha)
+    const texto = await r.text()
+    const hashActual = _hashTexto(texto)
+    const hashGuardado = localStorage.getItem('hpr_content_hash')
+    if (!hashGuardado) {
+      // Primera vez que se revisa en este dispositivo — solo guardar, no recargar
+      localStorage.setItem('hpr_content_hash', hashActual)
       return
     }
-    if (storedSha !== latestSha) {
-      // Hay versión nueva — mostrar banner para que el usuario actualice
-      localStorage.setItem('hpr_commit_sha', latestSha)
+    if (hashGuardado !== hashActual) {
+      // El archivo en el servidor cambió — mostrar banner para que el usuario actualice
+      localStorage.setItem('hpr_content_hash', hashActual)
       const b = document.getElementById('update-banner')
       if (b) b.style.display = 'block'
     }
-  } catch(e) { /* offline o rate limit — no hacer nada */ }
+  } catch(e) { /* offline — no hacer nada, se reintentará en el próximo chequeo */ }
 }
 
 function doAppUpdate() {
-  // Limpiar SHA guardado para que la próxima carga también verifique
-  localStorage.removeItem('hpr_commit_sha')
+  // Limpiar hash guardado para que la próxima carga también verifique
+  localStorage.removeItem('hpr_content_hash')
   // Recargar con parámetro único — el SW no lo intercepta
   window.location.href = location.pathname + '?update=' + Date.now()
 }
+
+// Revisar de nuevo periódicamente (cada 5 min) mientras la app sigue abierta,
+// y también al volver a ella (cambio de pestaña, volver del multitarea en
+// celular, etc.) — antes solo se revisaba una vez, 3s después de abrir, así
+// que si la dejabas abierta nunca te enterabas de una actualización nueva.
+setInterval(checkAppVersion, 5 * 60 * 1000)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Date.now() - _lastAppVersionCheck > 60 * 1000) {
+    checkAppVersion()
+  }
+})
+window.addEventListener('focus', () => {
+  if (Date.now() - _lastAppVersionCheck > 60 * 1000) checkAppVersion()
+})
 
 // ── Resetear todos los datos ──────────────────────
 let _resetSnapshot = null  // Guarda copia para deshacer
