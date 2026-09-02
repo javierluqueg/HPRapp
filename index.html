@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260828-004'
+const APP_VERSION = '20260902-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -4193,31 +4193,14 @@ async function pgLoteFicha({id}) {
   const lfSegBtns=lfPeriodos.map(p=>`<button class="${p.v===lfPSel?'on':''}" onclick="_seg['lfp']=${p.v};go('lote-ficha',{id:${id}})">${p.l}</button>`).join('')
 
   const hdr=`<div class="card card-dark">
-    <div class="row-b" style="margin-bottom:10px">
-      <div>
-        <p class="sub">${animales.length} animal${animales.length!==1?'es':''} en el lote</p>
-        <p style="font-size:1.5rem;font-weight:700;margin-top:2px">${Math.round(pesoTotal).toLocaleString('es-CO')} kg</p>
-        ${animales.length?`<p class="sub xs" style="margin-top:2px">Promedio: ${Math.round(pesoTotal/animales.length).toLocaleString('es-CO')} kg/animal</p>`:''}
-        <p class="sub xs" style="margin-top:3px">Último pesaje: ${ultimoPesajeLoteTs?ffd(ultimoPesajeLoteTs):'Sin pesajes'}</p>
-        ${gdpProm!==null?`<p class="sub xs">GDP prom: ${gdpProm} g/día</p>`:''}
-      </div>
-      <div style="text-align:right">
-        ${potrerosLote.length>1
-          ? `<span class="badge bg-orange" style="font-size:1.05rem;padding:6px 10px">🔀 ${potrerosLote.length} potreros</span>`
-          : `<span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:1.05rem;padding:6px 10px">${pot?'En '+pot.nombre:'Sin potrero'}</span>
-             ${pot&&cicloActivo?`<p style="font-size:.7rem;color:#90CAF9;margin-top:3px;font-weight:600">${diasDesde(cicloActivo.fechaEntrada)} días</p>`:''}`
-        }
-      </div>
+    <div>
+      <p class="sub">${animales.length} animal${animales.length!==1?'es':''} en el lote</p>
+      <p style="font-size:1.5rem;font-weight:700;margin-top:2px">${Math.round(pesoTotal).toLocaleString('es-CO')} kg</p>
+      ${animales.length?`<p class="sub xs" style="margin-top:2px">Promedio: ${Math.round(pesoTotal/animales.length).toLocaleString('es-CO')} kg/animal</p>`:''}
+      <p class="sub xs" style="margin-top:3px">Último pesaje: ${ultimoPesajeLoteTs?ffd(ultimoPesajeLoteTs):'Sin pesajes'}</p>
+      ${gdpProm!==null?`<p class="sub xs">GDP prom: ${gdpProm} g/día</p>`:''}
     </div>
   </div>
-  ${potrerosLote.length>1?`<div class="card mb10">
-    <p class="bold sm mb8">🔀 Potreros ocupados (${potrerosLote.length})</p>
-    ${potrerosLote.map(({ciclo,pot})=>`
-      <div class="row-b" style="padding:7px 0;border-bottom:1px solid #f0f0f0">
-        <div><p class="sm bold">${escH(pot.nombre)}</p><p class="xs gray">${diasDesde(ciclo.fechaEntrada)} días de ocupación</p></div>
-        <button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${ciclo.id},${pot.id})">🚪 Liberar</button>
-      </div>`).join('')}
-  </div>`:''}
   ${animales.length?`<div class="card mb10">
     <p class="bold sm mb8">🐄 Animales por categoría</p>
     ${catFilas}${catExtra}
@@ -4227,13 +4210,6 @@ async function pgLoteFicha({id}) {
     </div>
   </div>`:''}
   <div class="btn-row mb12">
-    ${potrerosLote.length===1
-      ? `<button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${cicloActivo.id},${pot.id})">🚪 Sacar</button>
-         <button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id})">🔄 Rotar potrero</button>`
-      : potrerosLote.length>1
-        ? `<button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id})">🔄 Rotar potreros</button>`
-        : `<button class="btn btn-g btn-sm" onclick="openIngresarLote(${id})">🌿 Ingresar a potrero</button>`
-    }
     <button class="btn btn-out btn-sm" onclick="openAgregarAnimal(${id})">+ Animal</button>
     ${animales.length?`<button class="btn btn-sm btn-p" onclick="openVentaDesdeLote(${id})">💰 Venta</button>`:''}
   </div>
@@ -4242,6 +4218,30 @@ async function pgLoteFicha({id}) {
     <div class="seg" style="margin-bottom:8px">${lfSegBtns}</div>
     <div class="row-b"><span class="sm gray">Ganancia en período</span><span class="sm bold ${gananciaLote>0?'green':'gray'}">${gananciaLote>0?'+':''}${Math.round(gananciaLote).toLocaleString('es-CO')} kg</span></div>
     ${!gananciaLote?'<p class="xs gray mt8">Sin pesajes en el período</p>':''}
+  </div>`
+
+  // ── Contenido de la pestaña Potrero (antes se mostraba primero, ahora es una pestaña) ──
+  const potreroEstado = potrerosLote.length>1
+    ? `<span class="badge bg-orange" style="font-size:1.05rem;padding:6px 10px">🔀 ${potrerosLote.length} potreros</span>`
+    : `<span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:1.05rem;padding:6px 10px">${pot?'En '+pot.nombre:'Sin potrero'}</span>
+       ${pot&&cicloActivo?`<p style="font-size:.75rem;color:#777;margin-top:6px;font-weight:600">${diasDesde(cicloActivo.fechaEntrada)} días de ocupación</p>`:''}`
+  const potreroTab = `<div class="card mb12" style="text-align:center;padding:18px 12px">${potreroEstado}</div>
+  ${potrerosLote.length>1?`<div class="card mb10">
+    <p class="bold sm mb8">🔀 Potreros ocupados (${potrerosLote.length})</p>
+    ${potrerosLote.map(({ciclo,pot})=>`
+      <div class="row-b" style="padding:7px 0;border-bottom:1px solid #f0f0f0">
+        <div><p class="sm bold">${escH(pot.nombre)}</p><p class="xs gray">${diasDesde(ciclo.fechaEntrada)} días de ocupación</p></div>
+        <button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${ciclo.id},${pot.id})">🚪 Liberar</button>
+      </div>`).join('')}
+  </div>`:''}
+  <div class="btn-row mb12">
+    ${potrerosLote.length===1
+      ? `<button class="btn btn-r btn-sm" onclick="sacarLoteDelPotrero(${id},${cicloActivo.id},${pot.id})">🚪 Sacar</button>
+         <button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id})">🔄 Rotar potrero</button>`
+      : potrerosLote.length>1
+        ? `<button class="btn btn-b btn-sm" onclick="openCambiarPotrero(${id})">🔄 Rotar potreros</button>`
+        : `<button class="btn btn-g btn-sm" onclick="openIngresarLote(${id})">🌿 Ingresar a potrero</button>`
+    }
   </div>`
 
   const listaAnimales=animales.length?await Promise.all(animales.map(async a=>{
@@ -4282,12 +4282,17 @@ async function pgLoteFicha({id}) {
   const prodMetrics = await calcProdLote(id, _prodLoteDesde, _prodLoteHasta)
   const prodCard = renderProdLoteHTML(prodMetrics, id, _prodLoteDesde, _prodLoteHasta)
 
-  // ── Pestaña Labores ──
+  // ── Pestañas: Animales / Potrero / Labores ──
   const lfTab = _seg['lft2'] || 'animales'
   const tabs2 = `<div class="seg mb12">
     <button class="${lfTab==='animales'?'on':''}" onclick="_seg['lft2']='animales';go('lote-ficha',{id:${id}})">🐄 Animales</button>
+    <button class="${lfTab==='potrero'?'on':''}" onclick="_seg['lft2']='potrero';go('lote-ficha',{id:${id}})">🌿 Potrero</button>
     <button class="${lfTab==='labores'?'on':''}" onclick="_seg['lft2']='labores';go('lote-ficha',{id:${id}})">💉 Labores</button>
   </div>`
+
+  if (lfTab === 'potrero') {
+    return hdr + tabs2 + potreroTab + prodCard
+  }
 
   if (lfTab === 'labores') {
     // Cargar labores del lote (agrupadas por animal)
@@ -4318,7 +4323,7 @@ async function pgLoteFicha({id}) {
     return hdr + tabs2 + btnLab + filasLab
   }
 
-  return hdr + tabs2 + prodCard + selHeader + (Array.isArray(listaAnimales)?listaAnimales.join(''):listaAnimales)
+  return hdr + tabs2 + selHeader + (Array.isArray(listaAnimales)?listaAnimales.join(''):listaAnimales)
 }
 
 function activarSelLF(loteId) {
