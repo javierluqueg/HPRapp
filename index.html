@@ -8586,7 +8586,8 @@ async function importarTodo(input) {
 
     _showProg(22, 'Importando potreros…')
     // ── POTREROS ───────────────────────────────────
-    // Col 0:Nombre  1:Área  2:Estado  3:Desc  4:Pastos  5:Pendiente  6:FuenteAgua
+    // Col 0:Nombre  1:Área  2:Estado  3:Pendiente  4:FuenteAgua  5:Desc  6:Pastos
+    // (mismo orden que produce la plantilla "Tablas Importación" — POTREROS)
     const shPot = wb.SheetNames.find(s => /POTREROS?/i.test(s))
     if (shPot) {
       const rows = readSheet(shPot, false).filter(r => r[0] && String(r[0]).trim())
@@ -8598,10 +8599,10 @@ async function importarTodo(input) {
         const areaHa = parseFloat(String(row[1]).replace(',','.')) || 0
         const estadoRaw = String(row[2]||'DISPONIBLE').trim().toUpperCase()
         const estado = ['DISPONIBLE','OCUPADO','EN_DESCANSO'].includes(estadoRaw) ? estadoRaw : 'DISPONIBLE'
-        const pastos    = String(row[4]||'').trim() || 'Pasto Nativo'
-        const pendiente = String(row[5]||'').trim() || 'PLANO'
-        const fuente    = String(row[6]||'').trim() || 'NINGUNA'
-        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pastos, pendiente, fuenteAgua:fuente, observaciones:String(row[3]||'').trim()||undefined, numAnimales:0})
+        const pendiente = String(row[3]||'').trim() || 'PLANO'
+        const fuente    = String(row[4]||'').trim() || 'NINGUNA'
+        const pastos    = String(row[6]||'').trim() || 'Pasto Nativo'
+        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pastos, pendiente, fuenteAgua:fuente, observaciones:String(row[5]||'').trim()||undefined, numAnimales:0})
         addedP++
       }
       resumen.push(`🌿 Potreros: ${addedP} importados${dupP?' · '+dupP+' ya existían':''}`)
