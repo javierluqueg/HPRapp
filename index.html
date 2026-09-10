@@ -6283,35 +6283,27 @@ async function pgVentas() {
   }
 
   // KPIs del período
-  let totalValor=0, totalCosto=0, totalGanPeso=0, nV=0, nC=0
+  let totalValor=0, totalGanPeso=0, nV=0
   for (const a of filtrados) {
     if (a.valorVenta)   { totalValor += a.valorVenta; nV++ }
-    if (a.precioPorKg && a.pesoInicial) { totalCosto += a.precioPorKg*a.pesoInicial; nC++ }
     if (a.pesoVenta && a.pesoInicial)   totalGanPeso += (a.pesoVenta - a.pesoInicial)
   }
-  const utilidad = totalValor - totalCosto
-  const rentPct  = totalCosto > 0 ? (utilidad/totalCosto*100) : null
-  const colU = utilidad >= 0 ? '#2E7D32' : '#C62828'
 
   const kpis = `<div class="card card-dark mb12">
-    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:10px">
-      <div style="text-align:center">
-        <p style="font-size:1.4rem;font-weight:800">${filtrados.length}</p>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center">
+      <div>
+        <p style="font-size:1.3rem;font-weight:800">${filtrados.length}</p>
         <p class="sub xs">Animales vendidos</p>
       </div>
-      <div style="text-align:center">
-        <p style="font-size:1.4rem;font-weight:800">${totalGanPeso>=0?'+':''}${Math.round(totalGanPeso).toLocaleString('es-CO')} kg</p>
+      <div>
+        <p style="font-size:1.3rem;font-weight:800">${totalGanPeso>=0?'+':''}${Math.round(totalGanPeso).toLocaleString('es-CO')} kg</p>
         <p class="sub xs">Ganancia de peso</p>
       </div>
+      <div>
+        <p style="font-size:1.3rem;font-weight:800">${nV?fmt(totalValor):'—'}</p>
+        <p class="sub xs">Ventas</p>
+      </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center">
-      <div><p style="font-weight:700;font-size:.9rem">${nV?fmt(totalValor):'—'}</p><p class="sub xs">Ventas</p></div>
-      <div><p style="font-weight:700;font-size:.9rem">${nC?fmt(totalCosto):'—'}</p><p class="sub xs">Costo</p></div>
-      <div><p style="font-weight:800;font-size:.9rem;color:${colU}">${nV&&nC?(utilidad>=0?'+':'')+fmt(utilidad):'—'}</p><p class="sub xs">Utilidad</p></div>
-    </div>
-    ${rentPct!==null?`<div style="text-align:center;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.15)">
-      <p style="font-size:1.1rem;font-weight:800;color:${rentPct>=0?'#A5D6A7':'#EF9A9A'}">${rentPct>=0?'+':''}${rentPct.toFixed(1)}% rentabilidad</p>
-    </div>`:''}
   </div>`
 
   // Botones export
