@@ -1210,7 +1210,6 @@ async function pgDashboard() {
       </div>
       <button onclick="go('config')" style="border:none;background:#E65100;color:white;border-radius:8px;padding:7px 12px;font-size:.78rem;font-weight:700;cursor:pointer">Ir a Config</button>
     </div>` : ''
-  const area=parseFloat(areaUtil)||1
   const [animales, potreros, lotes, todosLosPesajes, animalesInactivos] = await Promise.all([
     db.animales.where('activo').equals(1).toArray(),
     db.potreros.where('activo').equals(1).toArray(),
@@ -1218,6 +1217,9 @@ async function pgDashboard() {
     db.pesajes.orderBy('fecha').toArray(),  // una sola query para todos los pesajes
     db.animales.where('activo').equals(0).toArray()  // vendidos/bajas — aportan kg al indicador de ganancia por período
   ])
+  // Área útil real = suma del área de todos los potreros (una sola fuente de verdad para toda la app,
+  // reemplaza el antiguo campo manual "area_util" de Config que podía quedar desactualizado)
+  const area = _areaPastoRastrojo(potreros).areaTotal || parseFloat(areaUtil) || 1
 
   // Indexar pesajes por animalId en memoria (evita N queries individuales)
   const pesajesPorAnimal = {}
@@ -1300,12 +1302,15 @@ async function pgDashboard() {
     const gan = gananciaEnPeriodo(a, ps)
     if(gan!==null && gan>0) gananciaFinca+=gan
   }
-  // Vendidos/bajas dentro del período: su ganancia también cuenta para el kg/ha —
-  // salieron de la finca, pero la produjeron mientras estuvieron en ella.
+  // Vendidos dentro del período: ganancia = pesoVenta − pesoInicial, tomado DIRECTO del registro
+  // de la venta (no depende de que exista un pesaje guardado) — así cuenta el 100% de las ventas
+  // sin importar el modo en que se registraron (por kilo, valor total o por cabeza).
   for(const a of animalesInactivos){
-    const ps = pesajesPorAnimal[a.id] || []
-    const gan = gananciaEnPeriodo(a, ps)
-    if(gan!==null && gan>0){
+    if(a.causaBaja !== 'Venta') continue
+    if(!a.fechaBaja || a.fechaBaja < dDesdeTs || a.fechaBaja > dHastaTs) continue
+    if(a.pesoVenta==null || a.pesoInicial==null) continue
+    const gan = a.pesoVenta - a.pesoInicial
+    if(gan>0){
       gananciaFinca+=gan
       gananciaVendidos+=gan
     }
@@ -1324,8 +1329,20 @@ async function pgDashboard() {
   }
   const gananciaNetaFinca = gananciaFinca - perdidaMortalidad
 
-  const kgHaPeriodoNum = area>0 ? (gananciaNetaFinca/area) : 0
-  const kgHaPeriodo = Math.abs(kgHaPeriodoNum).toFixed(1)
+  // Días reales cubiertos por el período seleccionado, para anualizar la producción de carne/ha.
+  // "Todo" no tiene una fecha de inicio fija — se usa el ingreso más antiguo registrado en el hato.
+  let diasPeriodoAnual
+  if (esCustom) {
+    diasPeriodoAnual = Math.max(1, Math.round((dHastaTs - dDesdeTs)/86400000))
+  } else if (dPSel > 0) {
+    diasPeriodoAnual = dPSel
+  } else {
+    const fechasIngreso = [...animales, ...animalesInactivos].map(a=>a.fechaIngreso).filter(Boolean)
+    const inicioFinca = fechasIngreso.length ? Math.min(...fechasIngreso) : dHastaTs
+    diasPeriodoAnual = Math.max(1, Math.round((dHastaTs - inicioFinca)/86400000))
+  }
+  const kgHaAnualNum = area>0 ? (gananciaNetaFinca/area)*(365/diasPeriodoAnual) : 0
+  const kgHaPeriodo = Math.abs(kgHaAnualNum).toFixed(1)
   const gdpColor=gdpProm===null?'gray':gdpProm>=metaN?'green':'orange'
   const dSegBtns=dPeriodos.map(p=>`<button class="${p.v===dPSel?'on':''}" onclick="_seg['dp']=${p.v};go('dashboard')">${p.l}</button>`).join('')
 
@@ -1379,8 +1396,7 @@ async function pgDashboard() {
         <p class="bold green" style="font-size:1.3rem">${pesoTotal.toLocaleString('es-CO',{maximumFractionDigits:0})} kg</p>
       </div>
       
-      <div class="row-b"><span class="xs gray">Área utilizable</span><span class="xs">${area.toFixed(1)} ha</span></div>
-      <div class="row-b"><span class="xs gray">Carga kg/ha</span><span class="xs bold blue">${(pesoTotal/area).toFixed(1)} kg/ha</span></div>
+      <div class="row-b"><span class="xs gray">Carga animal</span><span class="xs bold blue">${(pesoTotal/450/area).toFixed(2)} UGG/ha</span></div>
     </div>
 
     <div class="card mb8">
@@ -1399,8 +1415,8 @@ async function pgDashboard() {
       </div>`:''}
       <div class="row-b mb4"><span class="sm gray">Ganancia total finca</span><span class="sm bold ${gananciaFinca>0?'green':'gray'}">${gananciaFinca>0?'+':''}${Math.round(gananciaFinca).toLocaleString('es-CO')} kg</span></div>
       ${perdidaMortalidad>0?`<div class="row-b mb4"><span class="sm gray">🔴 Pérdida por mortalidad</span><span class="sm bold" style="color:#C62828">-${Math.round(perdidaMortalidad).toLocaleString('es-CO')} kg</span></div>`:''}
-      ${(gananciaFinca>0||perdidaMortalidad>0)?`<div class="row-b mb4"><span class="sm gray">Rendimiento período ${perdidaMortalidad>0?'(neto)':''}</span><span class="sm bold" style="color:${gananciaNetaFinca>=0?'#1565C0':'#C62828'}">${gananciaNetaFinca>=0?'':'-'}${kgHaPeriodo} kg/ha</span></div>`:''}
-      ${(!gananciaFinca&&!perdidaMortalidad)?`<p class="xs gray">Sin pesajes en el período · Ingrese pesajes para ver kg/ha</p>`:''}
+      ${(gananciaFinca>0||perdidaMortalidad>0)?`<div class="row-b mb4"><span class="sm gray">Producción de carne ${perdidaMortalidad>0?'(neta, ':'('}anualizada)</span><span class="sm bold" style="color:${gananciaNetaFinca>=0?'#1565C0':'#C62828'}">${gananciaNetaFinca>=0?'':'-'}${kgHaPeriodo} kg/ha/año</span></div>`:''}
+      ${(!gananciaFinca&&!perdidaMortalidad)?`<p class="xs gray">Sin pesajes ni ventas en el período · Ingrese pesajes o ventas para ver kg/ha/año</p>`:''}
     </div>
 
     <div class="g3 mb8">
@@ -1408,6 +1424,13 @@ async function pgDashboard() {
       <div class="card kpi"><div class="v green">${disponibles}</div><div class="l">Potreros<br>disponibles</div></div>
       <div class="card kpi"><div class="v blue">${descanso}</div><div class="l">En<br>descanso</div></div>
     </div>
+
+    ${(()=>{const s=_areaPastoRastrojo(potreros);const pP=s.areaTotal?(s.areaPasto/s.areaTotal*100):0;const pR=s.areaTotal?(s.areaRastrojo/s.areaTotal*100):0;return `<div class="card mb8" style="padding:12px 14px;background:#F1F8E9;border-left:4px solid #558B2F">
+      <p class="sm bold" style="color:#33691E;margin-bottom:6px">🌾 Área útil de la finca</p>
+      <div class="row-b"><span class="xs gray">Total</span><span class="sm bold">${s.areaTotal.toFixed(1)} ha</span></div>
+      <div class="row-b"><span class="xs gray">Pasto</span><span class="sm bold" style="color:#2E7D32">${s.areaPasto.toFixed(1)} ha (${pP.toFixed(0)}%)</span></div>
+      <div class="row-b"><span class="xs gray">Rastrojo</span><span class="sm bold" style="color:#8D6E63">${s.areaRastrojo.toFixed(1)} ha (${pR.toFixed(0)}%)</span></div>
+    </div>`})()}
 
     ${(catResumen||catExtra)?`<div class="card mb8">
       <div class="row-b" style="margin-bottom:8px">
@@ -4969,7 +4992,15 @@ async function pgPotreros() {
 
   const semColor = prio => prio===3?{bg:'#FFEBEE',txt:'#C62828',ico:'🔴'}:prio===2?{bg:'#FFF8E1',txt:'#E65100',ico:'🟡'}:prio===1?{bg:'#E3F2FD',txt:'#1565C0',ico:'🔵'}:{bg:'#E8F5E9',txt:'#2E7D32',ico:'🟢'}
 
-  const resumenSem = ''
+  const _aStats = _areaPastoRastrojo(pots)
+  const _aPctPasto = _aStats.areaTotal ? (_aStats.areaPasto/_aStats.areaTotal*100) : 0
+  const _aPctRastrojo = _aStats.areaTotal ? (_aStats.areaRastrojo/_aStats.areaTotal*100) : 0
+  const resumenSem = `<div class="card mb8" style="padding:12px 14px;background:#F1F8E9;border-left:4px solid #558B2F">
+    <p class="sm bold" style="color:#33691E;margin-bottom:6px">🌾 Área útil de la finca</p>
+    <div class="row-b"><span class="xs gray">Total</span><span class="sm bold">${_aStats.areaTotal.toFixed(1)} ha</span></div>
+    <div class="row-b"><span class="xs gray">Pasto</span><span class="sm bold" style="color:#2E7D32">${_aStats.areaPasto.toFixed(1)} ha (${_aPctPasto.toFixed(0)}%)</span></div>
+    <div class="row-b"><span class="xs gray">Rastrojo</span><span class="sm bold" style="color:#8D6E63">${_aStats.areaRastrojo.toFixed(1)} ha (${_aPctRastrojo.toFixed(0)}%)</span></div>
+  </div>`
 
   const leyenda = _potSelMode
     ? `<p class="xs gray center mb8">Toca un potrero para seleccionarlo</p>`
@@ -5398,8 +5429,6 @@ async function openEditarPotrero(id){
         <select id="ep-pend" class="inp">${mkOpts(PENDIENTE,p.pendiente)}</select></div>
     </div>
     ${_mkPastosUI('ep-', p.pastos||'')}
-    <div class="field"><label>% Pasto aprovechable <span class="xs gray">(resto es rastrojo)</span></label>
-      <div class="inp-wrap"><input id="ep-pctpasto" class="inp" type="number" inputmode="decimal" min="0" max="100" placeholder="100" value="${p.pctPasto!=null?p.pctPasto:''}"><span class="inp-suf">%</span></div></div>
     <div class="field"><label>Fuente de agua</label>
       <select id="ep-agua" class="inp">${mkOpts(FUENTE_AGUA,p.fuenteAgua)}</select></div>
     <div class="field"><label>Observaciones</label>
@@ -5418,19 +5447,17 @@ async function saveEditarPotrero(id){
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   const pastosVal=_getPastosVal('ep-')
   const areaHa=parseFloat($('ep-a')?.value)||0
-  const pctPastoRaw=$('ep-pctpasto')?.value
-  const pctPasto=(pctPastoRaw!=null&&pctPastoRaw!=='')?Math.max(0,Math.min(100,parseFloat(pctPastoRaw)||0)):null
   let prev
   try{
     prev=await db.potreros.get(id)
-    await fsUpdate('potreros',id,{nombre:n,areaHa,pendiente:$('ep-pend')?.value,pastos:pastosVal,pctPasto,fuenteAgua:$('ep-agua')?.value,observaciones:($('ep-obs')?.value||'').trim()})
+    await fsUpdate('potreros',id,{nombre:n,areaHa,pendiente:$('ep-pend')?.value,pastos:pastosVal,fuenteAgua:$('ep-agua')?.value,observaciones:($('ep-obs')?.value||'').trim()})
   }catch(e){
     showToast('Error al guardar potrero','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Guardar cambios'}
     return
   }
   if(prev) pushUndo('Potrero editado', async()=>{
-    await fsUpdate('potreros',id,{nombre:prev.nombre,areaHa:prev.areaHa,pendiente:prev.pendiente,pastos:prev.pastos,pctPasto:prev.pctPasto,fuenteAgua:prev.fuenteAgua,observaciones:prev.observaciones})
+    await fsUpdate('potreros',id,{nombre:prev.nombre,areaHa:prev.areaHa,pendiente:prev.pendiente,pastos:prev.pastos,fuenteAgua:prev.fuenteAgua,observaciones:prev.observaciones})
   })
   closeSheet(); go('potrero-ficha',{id})
 }
@@ -5445,6 +5472,39 @@ function _parsePastos(str) {
     if (m) map[m[1].trim()] = parseInt(m[2])
   })
   return map
+}
+
+const ABREV_PASTO = {
+  'Colosuana':'COLOSUANA','Climacuna':'CLIMACUNA','Brachiaria Brizanta Marandú':'BRIZANTA',
+  'Brachiaria Decumbens':'DECUMBENS','Mombaza':'MOMBAZA','Estrella':'ESTRELLA',
+  'India':'INDIA','Puntero':'PUNTERO','Angletón':'ANGLETÓN','Rastrojo':'RASTROJO'
+}
+function _distribForrajeraLines(pastosStr) {
+  // Devuelve un array de líneas "NOMBRE %", Rastrojo siempre primero (aunque sea 0%),
+  // seguido de las demás variedades presentes (>0%) en el orden en que están en la composición.
+  const map = _parsePastos(pastosStr)
+  const rastrojoPct = map[VARIEDAD_RASTROJO] || 0
+  const otras = Object.entries(map).filter(([name,pct]) => name!==VARIEDAD_RASTROJO && pct>0)
+  const lines = [`${VARIEDAD_RASTROJO.toUpperCase()} ${rastrojoPct}%`]
+  otras.forEach(([name,pct]) => lines.push(`${(ABREV_PASTO[name]||name).toUpperCase()} ${pct}%`))
+  return lines
+}
+function _distribForrajera(pastosStr) {
+  // Versión en una sola línea (para exportaciones/reportes), ej "RASTROJO 0%, ESTRELLA 80%, DECUMBENS 10%, BRIZANTA 10%"
+  return _distribForrajeraLines(pastosStr).join(', ')
+}
+function _areaPastoRastrojo(pots) {
+  // Suma área total y su desglose en área de pasto vs. área de rastrojo, a partir de la composición de cada potrero
+  let areaTotal=0, areaPasto=0, areaRastrojo=0
+  for (const p of pots) {
+    const a = p.areaHa || 0
+    areaTotal += a
+    const map = _parsePastos(p.pastos)
+    const rastrojoPct = map[VARIEDAD_RASTROJO] || 0
+    areaRastrojo += a * rastrojoPct / 100
+    areaPasto += a * (100 - rastrojoPct) / 100
+  }
+  return {areaTotal, areaPasto, areaRastrojo}
 }
 
 function _mkPastosUI(pfx, savedStr) {
@@ -5540,8 +5600,6 @@ async function pgPotreroNuevo() {
         <select id="pn-pend" class="inp">${mkOpts(PENDIENTE)}</select></div>
     </div>
     ${_mkPastosUI('pn-', '')}
-    <div class="field"><label>% Pasto aprovechable <span class="xs gray">(resto es rastrojo)</span></label>
-      <div class="inp-wrap"><input id="pn-pctpasto" class="inp" type="number" inputmode="decimal" min="0" max="100" placeholder="100"><span class="inp-suf">%</span></div></div>
     <div class="field"><label>Fuente de agua</label>
       <select id="pn-agua" class="inp">${mkOpts(FUENTE_AGUA)}</select></div>
     <div class="field"><label>Observaciones</label>
@@ -5559,13 +5617,11 @@ async function savePotrero() {
   if(total>100){showToast('La composición supera el 100%. Ajusta los porcentajes.','err',4000);return}
   const pastosVal=_getPastosVal('pn-')
   const obs=($('pn-obs')?.value||'').trim()
-  const pctPastoRaw=$('pn-pctpasto')?.value
-  const pctPasto=(pctPastoRaw!=null&&pctPastoRaw!=='')?Math.max(0,Math.min(100,parseFloat(pctPastoRaw)||0)):null
   const btn=document.querySelector('[onclick="savePotrero()"]')
   if(btn){btn.disabled=true;btn.textContent='Creando…'}
   let id
   try{
-    id=await fsAdd('potreros',{nombre:n,areaHa:a,pendiente:$('pn-pend')?.value,pastos:pastosVal,pctPasto,
+    id=await fsAdd('potreros',{nombre:n,areaHa:a,pendiente:$('pn-pend')?.value,pastos:pastosVal,
       fuenteAgua:$('pn-agua')?.value,observaciones:obs,estado:'DISPONIBLE',activo:1,numAnimales:0})
   }catch(e){
     showToast('Error al crear potrero','err',4000)
@@ -5660,7 +5716,10 @@ async function pgPotreroFicha({id}) {
   if(tab==='datos') body=`<div class="card">
     ${rowD('Nombre',p.nombre)} ${rowD('Área',`${p.areaHa?.toFixed(2)||0} ha`)}
     ${rowD('Pendiente',PENDIENTE[p.pendiente]||p.pendiente||'—')}
-    ${rowD('Pastos',p.pastos||'—')} ${rowD('% Pasto aprovechable',p.pctPasto!=null?p.pctPasto+'%':'—')}
+    <div style="padding:9px 0;border-bottom:1px solid #f0f0f0">
+      <span class="sm gray">Distribución forrajera</span>
+      <div class="sm bold" style="margin-top:5px;line-height:1.6">${_distribForrajeraLines(p.pastos).join('<br>')}</div>
+    </div>
     ${rowD('Fuente de agua',FUENTE_AGUA[p.fuenteAgua]||p.fuenteAgua||'—')}
     ${rowD('Estado',ESTADO_POT[p.estado])}
     ${cicloActivo?rowD('Lote actual',cicloActivo.nombreLote||'—'):''}
@@ -7392,9 +7451,9 @@ async function guardarVenta() {
         loteId: null, fechaLote: null,
         loteIdSalida: a.loteId||null, loteNombreSalida: a.loteId?(a._loteNom||null):null
       })
-      // Solo en modo "Por kilo" el peso es el que el usuario ingresó/confirmó al vender:
-      // se guarda como pesaje real para que quede en el historial y en el rendimiento de la finca.
-      if (_rvModoPrecio === 'pxkg') {
+      // El peso de venta siempre se guarda también como pesaje real (en cualquier modo: por kilo,
+      // valor total o por cabeza), para que quede completo el historial y la producción de la finca.
+      {
         const dup = await db.pesajes.where('animalId').equals(a.id).filter(p=>p.fecha===fechaBaja && p.pesoKg===pesoVenta).first()
         if (!dup) {
           await fsAdd('pesajes', {animalId:a.id, fecha:fechaBaja, pesoKg:pesoVenta, metodo:'BASCULA', cc:3, obs:'Pesaje de venta', registradoPor:quien, registradoEn:ahora})
@@ -8182,11 +8241,11 @@ async function exportarParaImportar(){
 
     // ── POTREROS ──
     const wsPotreros = XLSX.utils.aoa_to_sheet([
-      ['Nombre del Potrero','Área (ha)','Estado inicial','Pendiente','Fuente de Agua','Descripción / Obs.','Composición Pastos (var % separados por coma)','% Pasto Aprovechable'],
-      ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA', p.observaciones||'', p.pastos||'', p.pctPasto!=null?p.pctPasto:''])
+      ['Nombre del Potrero','Área (ha)','Estado inicial','Pendiente','Fuente de Agua','Descripción / Obs.','Composición Pastos (var % separados por coma)'],
+      ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA', p.observaciones||'', p.pastos||''])
     ])
-    wsPotreros['!cols']=[{wch:12},{wch:9},{wch:12},{wch:9},{wch:10},{wch:17},{wch:42},{wch:12}]
-    wsPotreros['!autofilter']={ref:'A1:H'+(potreros.length+1)}
+    wsPotreros['!cols']=[{wch:12},{wch:9},{wch:12},{wch:9},{wch:10},{wch:17},{wch:42}]
+    wsPotreros['!autofilter']={ref:'A1:G'+(potreros.length+1)}
     XLSX.utils.book_append_sheet(wb, wsPotreros, 'POTREROS')
 
     // ── ROTACIONES ──
@@ -8325,8 +8384,7 @@ async function exportarExcel(){
 
     // Potreros
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(potreros.map(p=>({
-      'Nombre':p.nombre,'Área (ha)':p.areaHa,'Pastos':p.pastos||'',
-      '% Pasto Aprovechable':p.pctPasto!=null?p.pctPasto:'',
+      'Nombre':p.nombre,'Área (ha)':p.areaHa,'Distribución Forrajera':_distribForrajera(p.pastos),
       'Pendiente':PENDIENTE[p.pendiente]||p.pendiente||'',
       'Fuente de agua':FUENTE_AGUA[p.fuenteAgua]||p.fuenteAgua||'',
       'Estado':ESTADO_POT[p.estado]||p.estado,'Observaciones':p.observaciones||''
@@ -8528,7 +8586,7 @@ async function importarTodo(input) {
 
     _showProg(22, 'Importando potreros…')
     // ── POTREROS ───────────────────────────────────
-    // Col 0:Nombre  1:Área  2:Estado  3:Desc  4:Pastos  5:Pendiente  6:FuenteAgua  7:%PastoAprovechable (opcional)
+    // Col 0:Nombre  1:Área  2:Estado  3:Desc  4:Pastos  5:Pendiente  6:FuenteAgua
     const shPot = wb.SheetNames.find(s => /POTREROS?/i.test(s))
     if (shPot) {
       const rows = readSheet(shPot, false).filter(r => r[0] && String(r[0]).trim())
@@ -8543,9 +8601,7 @@ async function importarTodo(input) {
         const pastos    = String(row[4]||'').trim() || 'Pasto Nativo'
         const pendiente = String(row[5]||'').trim() || 'PLANO'
         const fuente    = String(row[6]||'').trim() || 'NINGUNA'
-        const pctPastoRaw = row[7]!=null ? String(row[7]).replace(',','.').trim() : ''
-        const pctPasto = pctPastoRaw!=='' ? Math.max(0,Math.min(100,parseFloat(pctPastoRaw)||0)) : null
-        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pastos, pctPasto, pendiente, fuenteAgua:fuente, observaciones:String(row[3]||'').trim()||undefined, numAnimales:0})
+        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pastos, pendiente, fuenteAgua:fuente, observaciones:String(row[3]||'').trim()||undefined, numAnimales:0})
         addedP++
       }
       resumen.push(`🌿 Potreros: ${addedP} importados${dupP?' · '+dupP+' ya existían':''}`)
@@ -9115,7 +9171,7 @@ async function generarExcelBlob() {
     'Peso (kg)':p.pesoKg,'Fecha':fd(p.fecha),'Método':p.metodo||'','Obs':p.obs||''
   })))
   addSheet('POTREROS', potreros.filter(p=>p.activo).map(p=>({
-    'Nombre':p.nombre,'Área (ha)':p.areaHa||0,'Estado':p.estado,'Pastos':p.pastos||'','% Pasto Aprovechable':p.pctPasto!=null?p.pctPasto:'','Pendiente':p.pendiente||'','Fuente Agua':p.fuenteAgua||''
+    'Nombre':p.nombre,'Área (ha)':p.areaHa||0,'Estado':p.estado,'Distribución Forrajera':_distribForrajera(p.pastos),'Pendiente':p.pendiente||'','Fuente Agua':p.fuenteAgua||''
   })))
   addSheet('LOTES', lotes.filter(l=>l.activo).map(l=>({'Nombre':l.nombre,'Descripción':l.descripcion||''})))
   if(lluvias.length) addSheet('LLUVIAS', lluvias.map(l=>({'Fecha':fd(l.fecha),'mm':l.mm,'Obs':l.obs||''})))
