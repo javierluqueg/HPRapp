@@ -659,7 +659,7 @@ const ROLES = [
 
 const VARIEDADES_PASTO = [
   'Colosuana','Climacuna','Brachiaria Brizanta Marandú','Brachiaria Decumbens',
-  'Mombaza','Estrella','India','Puntero'
+  'Mombaza','Estrella','India','Puntero','Angletón'
 ]
 const VARIEDAD_RASTROJO = 'Rastrojo'
 const PENDIENTE = {PLANO:'Plano (0–3%)',ONDULADO:'Ondulado (3–15%)',QUEBRADO:'Quebrado (15–50%)',ESCARPADO:'Escarpado (>50%)'}
@@ -5398,6 +5398,8 @@ async function openEditarPotrero(id){
         <select id="ep-pend" class="inp">${mkOpts(PENDIENTE,p.pendiente)}</select></div>
     </div>
     ${_mkPastosUI('ep-', p.pastos||'')}
+    <div class="field"><label>% Pasto aprovechable <span class="xs gray">(resto es rastrojo)</span></label>
+      <div class="inp-wrap"><input id="ep-pctpasto" class="inp" type="number" inputmode="decimal" min="0" max="100" placeholder="100" value="${p.pctPasto!=null?p.pctPasto:''}"><span class="inp-suf">%</span></div></div>
     <div class="field"><label>Fuente de agua</label>
       <select id="ep-agua" class="inp">${mkOpts(FUENTE_AGUA,p.fuenteAgua)}</select></div>
     <div class="field"><label>Observaciones</label>
@@ -5416,17 +5418,19 @@ async function saveEditarPotrero(id){
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   const pastosVal=_getPastosVal('ep-')
   const areaHa=parseFloat($('ep-a')?.value)||0
+  const pctPastoRaw=$('ep-pctpasto')?.value
+  const pctPasto=(pctPastoRaw!=null&&pctPastoRaw!=='')?Math.max(0,Math.min(100,parseFloat(pctPastoRaw)||0)):null
   let prev
   try{
     prev=await db.potreros.get(id)
-    await fsUpdate('potreros',id,{nombre:n,areaHa,pendiente:$('ep-pend')?.value,pastos:pastosVal,fuenteAgua:$('ep-agua')?.value,observaciones:($('ep-obs')?.value||'').trim()})
+    await fsUpdate('potreros',id,{nombre:n,areaHa,pendiente:$('ep-pend')?.value,pastos:pastosVal,pctPasto,fuenteAgua:$('ep-agua')?.value,observaciones:($('ep-obs')?.value||'').trim()})
   }catch(e){
     showToast('Error al guardar potrero','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Guardar cambios'}
     return
   }
   if(prev) pushUndo('Potrero editado', async()=>{
-    await fsUpdate('potreros',id,{nombre:prev.nombre,areaHa:prev.areaHa,pendiente:prev.pendiente,pastos:prev.pastos,fuenteAgua:prev.fuenteAgua,observaciones:prev.observaciones})
+    await fsUpdate('potreros',id,{nombre:prev.nombre,areaHa:prev.areaHa,pendiente:prev.pendiente,pastos:prev.pastos,pctPasto:prev.pctPasto,fuenteAgua:prev.fuenteAgua,observaciones:prev.observaciones})
   })
   closeSheet(); go('potrero-ficha',{id})
 }
@@ -5536,6 +5540,8 @@ async function pgPotreroNuevo() {
         <select id="pn-pend" class="inp">${mkOpts(PENDIENTE)}</select></div>
     </div>
     ${_mkPastosUI('pn-', '')}
+    <div class="field"><label>% Pasto aprovechable <span class="xs gray">(resto es rastrojo)</span></label>
+      <div class="inp-wrap"><input id="pn-pctpasto" class="inp" type="number" inputmode="decimal" min="0" max="100" placeholder="100"><span class="inp-suf">%</span></div></div>
     <div class="field"><label>Fuente de agua</label>
       <select id="pn-agua" class="inp">${mkOpts(FUENTE_AGUA)}</select></div>
     <div class="field"><label>Observaciones</label>
@@ -5553,11 +5559,13 @@ async function savePotrero() {
   if(total>100){showToast('La composición supera el 100%. Ajusta los porcentajes.','err',4000);return}
   const pastosVal=_getPastosVal('pn-')
   const obs=($('pn-obs')?.value||'').trim()
+  const pctPastoRaw=$('pn-pctpasto')?.value
+  const pctPasto=(pctPastoRaw!=null&&pctPastoRaw!=='')?Math.max(0,Math.min(100,parseFloat(pctPastoRaw)||0)):null
   const btn=document.querySelector('[onclick="savePotrero()"]')
   if(btn){btn.disabled=true;btn.textContent='Creando…'}
   let id
   try{
-    id=await fsAdd('potreros',{nombre:n,areaHa:a,pendiente:$('pn-pend')?.value,pastos:pastosVal,
+    id=await fsAdd('potreros',{nombre:n,areaHa:a,pendiente:$('pn-pend')?.value,pastos:pastosVal,pctPasto,
       fuenteAgua:$('pn-agua')?.value,observaciones:obs,estado:'DISPONIBLE',activo:1,numAnimales:0})
   }catch(e){
     showToast('Error al crear potrero','err',4000)
@@ -5652,7 +5660,8 @@ async function pgPotreroFicha({id}) {
   if(tab==='datos') body=`<div class="card">
     ${rowD('Nombre',p.nombre)} ${rowD('Área',`${p.areaHa?.toFixed(2)||0} ha`)}
     ${rowD('Pendiente',PENDIENTE[p.pendiente]||p.pendiente||'—')}
-    ${rowD('Pastos',p.pastos||'—')} ${rowD('Fuente de agua',FUENTE_AGUA[p.fuenteAgua]||p.fuenteAgua||'—')}
+    ${rowD('Pastos',p.pastos||'—')} ${rowD('% Pasto aprovechable',p.pctPasto!=null?p.pctPasto+'%':'—')}
+    ${rowD('Fuente de agua',FUENTE_AGUA[p.fuenteAgua]||p.fuenteAgua||'—')}
     ${rowD('Estado',ESTADO_POT[p.estado])}
     ${cicloActivo?rowD('Lote actual',cicloActivo.nombreLote||'—'):''}
     ${cicloActivo&&cicloActivo.fechaEntrada?rowD('Fecha de ingreso','📅 '+ffd(cicloActivo.fechaEntrada)):''}
@@ -8173,11 +8182,11 @@ async function exportarParaImportar(){
 
     // ── POTREROS ──
     const wsPotreros = XLSX.utils.aoa_to_sheet([
-      ['Nombre del Potrero','Área (ha)','Estado inicial','Pendiente','Fuente de Agua','Descripción / Obs.','Composición Pastos (var % separados por coma)'],
-      ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA', p.observaciones||'', p.pastos||''])
+      ['Nombre del Potrero','Área (ha)','Estado inicial','Pendiente','Fuente de Agua','Descripción / Obs.','Composición Pastos (var % separados por coma)','% Pasto Aprovechable'],
+      ...potreros.map(p=>[p.nombre, p.areaHa||0, p.estado||'DISPONIBLE', p.pendiente||'PLANO', p.fuenteAgua||'NINGUNA', p.observaciones||'', p.pastos||'', p.pctPasto!=null?p.pctPasto:''])
     ])
-    wsPotreros['!cols']=[{wch:12},{wch:9},{wch:12},{wch:9},{wch:10},{wch:17},{wch:42}]
-    wsPotreros['!autofilter']={ref:'A1:G'+(potreros.length+1)}
+    wsPotreros['!cols']=[{wch:12},{wch:9},{wch:12},{wch:9},{wch:10},{wch:17},{wch:42},{wch:12}]
+    wsPotreros['!autofilter']={ref:'A1:H'+(potreros.length+1)}
     XLSX.utils.book_append_sheet(wb, wsPotreros, 'POTREROS')
 
     // ── ROTACIONES ──
@@ -8317,6 +8326,7 @@ async function exportarExcel(){
     // Potreros
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(potreros.map(p=>({
       'Nombre':p.nombre,'Área (ha)':p.areaHa,'Pastos':p.pastos||'',
+      '% Pasto Aprovechable':p.pctPasto!=null?p.pctPasto:'',
       'Pendiente':PENDIENTE[p.pendiente]||p.pendiente||'',
       'Fuente de agua':FUENTE_AGUA[p.fuenteAgua]||p.fuenteAgua||'',
       'Estado':ESTADO_POT[p.estado]||p.estado,'Observaciones':p.observaciones||''
@@ -8518,7 +8528,7 @@ async function importarTodo(input) {
 
     _showProg(22, 'Importando potreros…')
     // ── POTREROS ───────────────────────────────────
-    // Col 0:Nombre  1:Área  2:Estado  3:Desc  4:Pastos  5:Pendiente  6:FuenteAgua
+    // Col 0:Nombre  1:Área  2:Estado  3:Desc  4:Pastos  5:Pendiente  6:FuenteAgua  7:%PastoAprovechable (opcional)
     const shPot = wb.SheetNames.find(s => /POTREROS?/i.test(s))
     if (shPot) {
       const rows = readSheet(shPot, false).filter(r => r[0] && String(r[0]).trim())
@@ -8533,7 +8543,9 @@ async function importarTodo(input) {
         const pastos    = String(row[4]||'').trim() || 'Pasto Nativo'
         const pendiente = String(row[5]||'').trim() || 'PLANO'
         const fuente    = String(row[6]||'').trim() || 'NINGUNA'
-        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pastos, pendiente, fuenteAgua:fuente, observaciones:String(row[3]||'').trim()||undefined, numAnimales:0})
+        const pctPastoRaw = row[7]!=null ? String(row[7]).replace(',','.').trim() : ''
+        const pctPasto = pctPastoRaw!=='' ? Math.max(0,Math.min(100,parseFloat(pctPastoRaw)||0)) : null
+        await fsAdd('potreros', {nombre, areaHa, estado, activo:1, pastos, pctPasto, pendiente, fuenteAgua:fuente, observaciones:String(row[3]||'').trim()||undefined, numAnimales:0})
         addedP++
       }
       resumen.push(`🌿 Potreros: ${addedP} importados${dupP?' · '+dupP+' ya existían':''}`)
@@ -9103,7 +9115,7 @@ async function generarExcelBlob() {
     'Peso (kg)':p.pesoKg,'Fecha':fd(p.fecha),'Método':p.metodo||'','Obs':p.obs||''
   })))
   addSheet('POTREROS', potreros.filter(p=>p.activo).map(p=>({
-    'Nombre':p.nombre,'Área (ha)':p.areaHa||0,'Estado':p.estado,'Pastos':p.pastos||'','Pendiente':p.pendiente||'','Fuente Agua':p.fuenteAgua||''
+    'Nombre':p.nombre,'Área (ha)':p.areaHa||0,'Estado':p.estado,'Pastos':p.pastos||'','% Pasto Aprovechable':p.pctPasto!=null?p.pctPasto:'','Pendiente':p.pendiente||'','Fuente Agua':p.fuenteAgua||''
   })))
   addSheet('LOTES', lotes.filter(l=>l.activo).map(l=>({'Nombre':l.nombre,'Descripción':l.descripcion||''})))
   if(lluvias.length) addSheet('LLUVIAS', lluvias.map(l=>({'Fecha':fd(l.fecha),'mm':l.mm,'Obs':l.obs||''})))
