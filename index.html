@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260917-002'
+const APP_VERSION = '20260917-003'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -7376,6 +7376,170 @@ async function ejecutarVerificacionIntegridad() {
       <p class="xs gray mt4">${escH(h.detalle)}</p>
     </div>`).join('')
 }
+
+// ═══════════════════════════════════════════════════
+// DETECCIÓN DE CICLOS DUPLICADOS / FANTASMA
+// ═══════════════════════════════════════════════════
+// Bug histórico: cuando un lote cambiaba de potrero, el ciclo anterior a veces
+// no se cerraba correctamente y quedaba huérfano; una limpieza masiva posterior
+// lo forzó a activo:0 pero nunca lo borró, dejando 2-3 registros de ciclo para
+// una sola estadía real. Esta función agrupa los ciclos de cada lote por
+// potrero y por cercanía de fecha de ENTRADA (que ningún flujo modifica nunca,
+// a diferencia de fechaSalida) para detectar esos duplicados.
+// Nota: algunos lotes usan "modo dividir" (varios potreros a la vez, por
+// sequía), lo que intercala cronológicamente entradas de distintos potreros
+// para un mismo lote — por eso se rastrea el último grupo POR POTRERO en vez
+// de uno solo global, para no romper la detección en esos casos.
+function dupKey(g) { return g.loteId + '_' + g.potreroId + '_' + g.miembros.map(m => m.id).sort((a,b)=>a-b).join('-') }
+
+async function detectarCiclosDuplicados() {
+  const GAP = 5 * 86400000 // agrupa entradas del mismo potrero si están a ≤5 días de distancia
+  const ahora = Date.now()
+  const [ciclos, lotes, potreros] = await Promise.all([db.ciclos.toArray(), db.lotes.toArray(), db.potreros.toArray()])
+  const loteNombre = Object.fromEntries(lotes.map(l => [l.id, l.nombre]))
+  const potNombre = Object.fromEntries(potreros.map(p => [p.id, p.nombre]))
+
+  const porLote = {}
+  for (const c of ciclos) {
+    if (!c.fechaEntrada || !c.loteId) continue
+    ;(porLote[c.loteId] ||= []).push(c)
+  }
+
+  const grupos = []
+  for (const loteId of Object.keys(porLote)) {
+    const cs = [...porLote[loteId]].sort((a, b) => a.fechaEntrada - b.fechaEntrada)
+    const clusters = []
+    const ultimoPorPotrero = {}
+    for (const c of cs) {
+      const anterior = ultimoPorPotrero[c.potreroId]
+      if (anterior && (c.fechaEntrada - anterior.ultimaEntrada) <= GAP) {
+        anterior.members.push(c)
+        anterior.ultimaEntrada = c.fechaEntrada
+      } else {
+        const nuevo = { potreroId: c.potreroId, members: [c], ultimaEntrada: c.fechaEntrada }
+        clusters.push(nuevo)
+        ultimoPorPotrero[c.potreroId] = nuevo
+      }
+    }
+    const conDuplicados = clusters.map((cl, i) => ({ cl, i })).filter(x => x.cl.members.length > 1)
+    if (!conDuplicados.length) continue
+
+    // Sugerencia de cuál conservar: para el último tramo del lote, el activo (o el
+    // de edición más reciente); para tramos anteriores, el que mejor "empalma" con
+    // la fecha de entrada del tramo siguiente ya resuelto.
+    const n = clusters.length
+    const resueltos = new Array(n)
+    for (let i = n - 1; i >= 0; i--) {
+      const members = clusters[i].members
+      if (members.length === 1) { resueltos[i] = members[0]; continue }
+      if (i === n - 1) {
+        const activos = members.filter(m => m.activo === 1)
+        resueltos[i] = activos.length ? activos[0] : members.reduce((mx, m) => (m._ts || 0) > (mx._ts || 0) ? m : mx)
+      } else {
+        const entradaObjetivo = resueltos[i + 1].fechaEntrada
+        resueltos[i] = members.reduce((best, m) => {
+          const finM = m.fechaSalida ?? ahora, finBest = best.fechaSalida ?? ahora
+          return Math.abs(finM - entradaObjetivo) < Math.abs(finBest - entradaObjetivo) ? m : best
+        })
+      }
+    }
+
+    for (const { cl, i } of conDuplicados) {
+      grupos.push({
+        loteId: +loteId, loteNombre: loteNombre[loteId] || ('Lote ' + loteId),
+        potreroId: cl.potreroId, potreroNombre: potNombre[cl.potreroId] || ('Potrero ' + cl.potreroId),
+        miembros: cl.members, sugerido: resueltos[i].id, esPrimerTramo: i === 0
+      })
+    }
+  }
+  grupos.sort((a, b) => a.loteNombre.localeCompare(b.loteNombre, 'es'))
+  return grupos
+}
+
+async function ejecutarVerificacionDuplicados() {
+  const el = document.getElementById('duplicados-resultados')
+  if (el) el.innerHTML = '<p class="xs gray center" style="padding:16px">⏳ Buscando duplicados…</p>'
+  const grupos = await detectarCiclosDuplicados()
+  window._dupGrupos = grupos
+  window._dupSeleccion = {}
+  for (const g of grupos) window._dupSeleccion[dupKey(g)] = g.sugerido
+  renderDuplicadosResultados()
+}
+
+function renderDuplicadosResultados() {
+  const el = document.getElementById('duplicados-resultados')
+  if (!el) return
+  const grupos = window._dupGrupos || []
+  if (!grupos.length) {
+    el.innerHTML = `<div class="card mb8" style="background:#E8F5E9;border-left:4px solid #2E7D32">
+      <p class="bold sm" style="color:#2E7D32">✅ Sin duplicados</p>
+      <p class="xs gray mt4">No se encontraron ciclos duplicados o superpuestos en ningún lote.</p>
+    </div>`
+    return
+  }
+  const ambiguos = grupos.filter(g => g.esPrimerTramo).length
+  const normales = grupos.length - ambiguos
+  let html = `<p class="xs gray mb8">${grupos.length} grupo${grupos.length > 1 ? 's' : ''} con duplicados encontrado${grupos.length > 1 ? 's' : ''}${ambiguos ? ` (${ambiguos} requiere${ambiguos > 1 ? 'n' : ''} revisión manual)` : ''}</p>`
+  if (normales > 0) {
+    html += `<button class="btn btn-r mb10" style="width:100%" onclick="confirmarBorrarTodosDuplicados()">🗑 Borrar todos los duplicados no ambiguos (${normales})</button>`
+  }
+  html += grupos.map(g => {
+    const key = dupKey(g)
+    const sel = window._dupSeleccion[key]
+    return `<div class="card mb8" style="border-left:4px solid ${g.esPrimerTramo ? '#C62828' : '#1565C0'}">
+      <p class="bold sm">${escH(g.loteNombre)} <span class="xs gray">· ${escH(g.potreroNombre)}</span></p>
+      ${g.esPrimerTramo ? `<p class="xs" style="color:#C62828;margin-top:2px">⚠️ Primer tramo del lote — no hay ciclo anterior para validar la fecha de entrada. Revisa tu cuaderno de campo antes de borrar.</p>` : ''}
+      <p class="xs gray mt4 mb8">${g.miembros.length} registros para el mismo periodo. Toca el que quieras conservar:</p>
+      <div style="border:1.5px solid #e0e0e0;border-radius:10px;background:#f8f8f8;margin-bottom:10px">
+        ${g.miembros.map(m => `<div class="cp-item ${sel === m.id ? 'cp-sel' : ''}" onclick="dupSeleccionar('${key}',${m.id})">
+          <span class="cp-nom">#${m.id} · entra ${ffd(m.fechaEntrada)} · sale ${m.fechaSalida ? ffd(m.fechaSalida) : 'activo'} · ${diasEntre(m.fechaEntrada, m.fechaSalida ?? Date.now())}d</span>
+          <span class="cp-ha">${m.numAnimales || 0} anim.</span>
+        </div>`).join('')}
+      </div>
+      <button class="btn btn-r" style="width:100%" onclick="confirmarBorrarGrupoDuplicado('${key}')">🗑 Borrar duplicados de este grupo</button>
+    </div>`
+  }).join('')
+  el.innerHTML = html
+}
+
+function dupSeleccionar(key, id) {
+  window._dupSeleccion[key] = id
+  renderDuplicadosResultados()
+}
+
+async function confirmarBorrarGrupoDuplicado(key) {
+  const g = (window._dupGrupos || []).find(gg => dupKey(gg) === key)
+  if (!g) return
+  const keepId = window._dupSeleccion[key]
+  const ghosts = g.miembros.filter(m => m.id !== keepId)
+  if (!ghosts.length) { showToast('Nada que borrar en este grupo', 'info'); return }
+  const ok = await showConfirm(`¿Borrar ${ghosts.length} ciclo(s) duplicado(s) de ${g.loteNombre} en ${g.potreroNombre}? Se conservará el ciclo #${keepId}. Esta acción no se puede deshacer.`)
+  if (!ok) return
+  for (const m of ghosts) await fsDelete('ciclos', m.id)
+  showToast(`${ghosts.length} ciclo(s) eliminado(s) en ${g.loteNombre}`, 'ok')
+  window._dupGrupos = window._dupGrupos.filter(gg => dupKey(gg) !== key)
+  delete window._dupSeleccion[key]
+  renderDuplicadosResultados()
+}
+
+async function confirmarBorrarTodosDuplicados() {
+  const normales = (window._dupGrupos || []).filter(g => !g.esPrimerTramo)
+  if (!normales.length) return
+  const totalFantasmas = normales.reduce((s, g) => s + (g.miembros.length - 1), 0)
+  const lotesAfectados = [...new Set(normales.map(g => g.loteNombre))]
+  const ok = await showConfirm(`¿Borrar ${totalFantasmas} ciclo(s) duplicado(s) en ${normales.length} grupo(s) (${lotesAfectados.join(', ')})? Se conservará el ciclo seleccionado (o sugerido) en cada grupo. Esta acción no se puede deshacer.`)
+  if (!ok) return
+  for (const g of normales) {
+    const key = dupKey(g)
+    const keepId = window._dupSeleccion[key]
+    const ghosts = g.miembros.filter(m => m.id !== keepId)
+    for (const m of ghosts) await fsDelete('ciclos', m.id)
+  }
+  showToast(`Duplicados eliminados en ${normales.length} grupo(s)`, 'ok')
+  window._dupGrupos = (window._dupGrupos || []).filter(g => g.esPrimerTramo)
+  renderDuplicadosResultados()
+}
+
 // ciclo activo (si tiene) y en el potrero que ocupa (si está OCUPADO).
 // Existe porque agregar/quitar/mover animales de un lote que ya está en un
 // potrero no actualizaba automáticamente esos conteos, dejándolos congelados
@@ -7932,7 +8096,13 @@ async function pgConfig() {
         <p class="xs gray mb12">Revisa que el estado y los días mostrados de cada potrero coincidan con el historial real de ciclos. Útil si notas un potrero con días de ocupación o descanso que no cuadran.</p>
         <button class="btn btn-b" onclick="ejecutarVerificacionIntegridad()">▶ Ejecutar verificación</button>
       </div>
-      <div id="integridad-resultados"></div>`
+      <div id="integridad-resultados"></div>
+      <div class="card mb10" style="margin-top:16px">
+        <p class="bold sm mb8">🧬 Ciclos duplicados / fantasma</p>
+        <p class="xs gray mb12">Busca registros de rotación duplicados de un mismo lote y potrero (la causa de historiales de rotación con datos repetidos o "fantasma"). Te muestra cada caso para que elijas cuál conservar antes de borrar los demás.</p>
+        <button class="btn btn-b" onclick="ejecutarVerificacionDuplicados()">▶ Buscar duplicados</button>
+      </div>
+      <div id="duplicados-resultados"></div>`
   }
   if(tab==='usuarios'){
     const us=await db.usuarios.where('activo').equals(1).toArray()
