@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260902-002'
+const APP_VERSION = '20260917-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6198,6 +6198,10 @@ async function confirmarSalidaPotrero(potreroId, cicloId) {
     <div class="sh-title">🚪 Sacar lote del potrero<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <p class="sm gray mb14">El lote <strong>${ciclo.nombreLote||'—'}</strong> lleva <strong>${fmtDias(diasDesde(ciclo.fechaEntrada))}</strong> en este potrero.</p>
 
+    <div class="field"><label>Fecha real de salida</label>
+      <input id="sp-fecha" class="inp" type="date" value="${toD(Date.now())}"></div>
+    <p class="xs gray mb14">Si el lote ya se vació antes de hoy, cambia esta fecha — de eso depende el conteo de días en descanso del potrero.</p>
+
     <div style="background:#E3F2FD;border-radius:10px;padding:12px 14px;margin-bottom:14px">
       <p class="bold sm mb10">🔀 Mover a otro potrero</p>
       ${opcionesPotreros}
@@ -6221,10 +6225,12 @@ function filtrarPotMover(q) {
 }
 
 async function sacarYMover(potreroId, cicloId, nuevoPotId) {
-  closeSheet()
   const ciclo = await db.ciclos.get(cicloId)
-  const dias  = diasDesde(ciclo.fechaEntrada)
-  const ahora = Date.now()
+  const fechaVal = $('sp-fecha')?.value
+  const ahora = fechaVal ? fromD(fechaVal) : Date.now()
+  if (ahora < ciclo.fechaEntrada) { showToast('La fecha de salida no puede ser anterior a la de entrada ('+toD(ciclo.fechaEntrada)+')','err',5000); return }
+  const dias  = diasEntre(ciclo.fechaEntrada, ahora)
+  closeSheet()
   try {
     // Cerrar ciclo actual
     await fsUpdate('ciclos', cicloId, {activo:0, fechaSalida:ahora, diasOcupacion:dias})
@@ -6253,10 +6259,12 @@ async function sacarYMover(potreroId, cicloId, nuevoPotId) {
 }
 
 async function ejecutarSalidaPotrero(potreroId, cicloId) {
-  closeSheet()
   const ciclo = await db.ciclos.get(cicloId)
-  const dias  = diasDesde(ciclo.fechaEntrada)
-  const ahora = Date.now()
+  const fechaVal = $('sp-fecha')?.value
+  const ahora = fechaVal ? fromD(fechaVal) : Date.now()
+  if (ahora < ciclo.fechaEntrada) { showToast('La fecha de salida no puede ser anterior a la de entrada ('+toD(ciclo.fechaEntrada)+')','err',5000); return }
+  const dias  = diasEntre(ciclo.fechaEntrada, ahora)
+  closeSheet()
   try {
     await fsUpdate('ciclos', cicloId, {activo:0, fechaSalida:ahora, diasOcupacion:dias})
     await fsUpdate('potreros', potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:undefined, fechaSalida:ahora})
@@ -8840,6 +8848,7 @@ async function importarTodo(input) {
       const todosLotesCic = await db.lotes.where('activo').equals(1).toArray()
       const loteMapCic = {}; todosLotesCic.forEach(l=>loteMapCic[l.nombre.trim().toLowerCase()]=l)
       let addedCic=0, skipCic=0
+      const loteIdsCicActivos = new Set()
       for (const row of rowsCiclos) {
         const potNom  = String(row[0]||'').trim(); if (!potNom) { skipCic++; continue }
         const loteNom = String(row[1]||'').trim(); if (!loteNom) { skipCic++; continue }
@@ -8857,10 +8866,22 @@ async function importarTodo(input) {
         // Si ciclo activo → actualizar estado del potrero a OCUPADO
         if (activo === 1) {
           await fsUpdate('potreros', pot.id, {estado:'OCUPADO', numAnimales, loteActual:lote.id})
+          loteIdsCicActivos.add(lote.id)
         }
         addedCic++
       }
-      if (addedCic||skipCic) resumen.push(`🔄 Ciclos: ${addedCic} importados${skipCic?' · '+skipCic+' omitidos':''}`)
+      // Blindaje: un ciclo importado como activo puede referirse a un lote que
+      // en la realidad de HOY ya no tiene animales (dato histórico importado
+      // fuera de orden). Sin este chequeo, el potrero queda marcado OCUPADO
+      // "fantasma" — el mismo bug que checkLoteVacio evita en el resto de la
+      // app, pero que esta importación se saltaba por escribir directo con
+      // fsAdd/fsUpdate en vez de pasar por esa función.
+      let corregidosCic = 0
+      if (loteIdsCicActivos.size) {
+        const cerrados = await checkLoteVacio([...loteIdsCicActivos], Date.now())
+        corregidosCic = cerrados.length
+      }
+      if (addedCic||skipCic) resumen.push(`🔄 Ciclos: ${addedCic} importados${skipCic?' · '+skipCic+' omitidos':''}${corregidosCic?' · ⚠️ '+corregidosCic+' potrero(s) revertido(s) a descanso (el lote importado no tiene animales activos)':''}`)
     }
 
     _showProg(100, 'Finalizando…')
