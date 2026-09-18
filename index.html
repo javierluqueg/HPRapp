@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260917-005'
+const APP_VERSION = '20260917-007'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -8395,19 +8395,32 @@ async function exportarParaImportar(){
     const loteNomMap = {}; lotes.forEach(l=>loteNomMap[l.id]=l.nombre)
     const potNomMap  = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
 
+    // Último pesaje por animal (peso + fecha más reciente), calculado en cada export
+    const animalIdsForPes = animales.map(a=>a.id)
+    const pesajesAnim = animalIdsForPes.length ? await db.pesajes.where('animalId').anyOf(animalIdsForPes).toArray() : []
+    const ultimoPesajeMap = {}
+    for (const p of pesajesAnim) {
+      const act = ultimoPesajeMap[p.animalId]
+      if (!act || p.fecha > act.fecha) ultimoPesajeMap[p.animalId] = p
+    }
+
     // ── ANIMALES ──
-    // Orden de columnas: #, Número, Cat., Lote, Raza, Color, Fecha Ingreso, Peso Inicial, Precio Compra, Procedencia, Descripción
+    // Orden de columnas: #, Número, Cat., Lote, Raza, Color, Fecha Ingreso, Peso Inicial, Peso Último Pesaje, Fecha Último Pesaje, Precio Compra, Procedencia, Descripción
     // Debe coincidir siempre con los índices leídos en importarTodo() más abajo — si cambia este orden, cambiar también allá.
     const wsAnim = XLSX.utils.aoa_to_sheet([
-      ['#','Número','Cat.','Lote','Raza','Color','Fecha Ingreso (DD/MM/AAAA)','Peso Inicial (kg)','Precio Compra ($/kg)','Procedencia','Descripción / Obs.'],
-      ...animales.map((a,i)=>[
-        i+1, a.arete, a.categoria||'', loteNomMap[a.loteId]||'', a.raza||'', a.color||'',
-        fd(a.fechaIngreso), a.pesoInicial||0, a.precioPorKg||'',
-        a.procedencia||'', a.descripcion||''
-      ])
+      ['#','Número','Cat.','Lote','Raza','Color','Fecha Ingreso (DD/MM/AAAA)','Peso Inicial (kg)','Peso Último Pesaje (kg)','Fecha Último Pesaje (DD/MM/AAAA)','Precio Compra ($/kg)','Procedencia','Descripción / Obs.'],
+      ...animales.map((a,i)=>{
+        const up = ultimoPesajeMap[a.id]
+        return [
+          i+1, a.arete, a.categoria||'', loteNomMap[a.loteId]||'', a.raza||'', a.color||'',
+          fd(a.fechaIngreso), a.pesoInicial||0,
+          up ? up.pesoKg : '', up ? fd(up.fecha) : '',
+          a.precioPorKg||'', a.procedencia||'', a.descripcion||''
+        ]
+      })
     ])
-    wsAnim['!cols']=[{wch:4},{wch:10},{wch:5},{wch:16},{wch:10},{wch:8},{wch:14},{wch:11},{wch:12},{wch:13},{wch:30}]
-    wsAnim['!autofilter']={ref:'A1:K'+(animales.length+1)}
+    wsAnim['!cols']=[{wch:4},{wch:10},{wch:5},{wch:16},{wch:10},{wch:8},{wch:14},{wch:11},{wch:16},{wch:16},{wch:12},{wch:13},{wch:30}]
+    wsAnim['!autofilter']={ref:'A1:M'+(animales.length+1)}
     XLSX.utils.book_append_sheet(wb, wsAnim, 'ANIMALES')
 
     // ── LOTES ──
@@ -8775,7 +8788,7 @@ async function importarTodo(input) {
 
     _showProg(35, 'Importando animales…')
     // ── ANIMALES ───────────────────────────────────
-    // Col 0:#  1:Arete  2:Cat  3:Lote  4:Raza  5:Color  6:FechaIngreso  7:Peso  8:PrecioCompra  9:Procedencia  10:Desc
+    // Col 0:#  1:Arete  2:Cat  3:Lote  4:Raza  5:Color  6:FechaIngreso  7:Peso  8:PesoUltimoPesaje(no se importa)  9:FechaUltimoPesaje(no se importa)  10:PrecioCompra  11:Procedencia  12:Desc
     const shAnim = wb.SheetNames.find(s => /ANIMALES?/i.test(s))
     if (shAnim) {
       const esAreteValido = v => {
@@ -8830,7 +8843,7 @@ async function importarTodo(input) {
         if (!arete) { sinArete++; continue }
         const existe = await db.animales.where('arete').equals(arete).first()
 
-        const precioKg = parseFloat(String(row[8]||'0').replace(',','.')) || null
+        const precioKg = parseFloat(String(row[10]||'0').replace(',','.')) || null
 
         if (existe) {
           // Actualizar solo precio de compra si viene en el Excel y es diferente
@@ -8856,8 +8869,8 @@ async function importarTodo(input) {
           arete, nombre:undefined,
           categoria:cat, raza:String(row[4]||'').trim(),
           color:String(row[5]||'').trim()||undefined,
-          pesoInicial:pesoIni, descripcion:String(row[10]||'').trim()||undefined,
-          procedencia:String(row[9]||'').trim()||undefined,
+          pesoInicial:pesoIni, descripcion:String(row[12]||'').trim()||undefined,
+          procedencia:String(row[11]||'').trim()||undefined,
           estadoSanitario:'SANO', activo:1, fechaIngreso:fechaTs,
           loteId, fechaLote:loteId?fechaTs:undefined,
           precioPorKg:precioKg,
