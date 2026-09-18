@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260917-003'
+const APP_VERSION = '20260917-004'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -8901,8 +8901,17 @@ async function importarTodo(input) {
         const fechaTs = parseFecha(row[2])
         if (!arete || !pesoKg || !fechaTs) { skipPes++; continue }
         const animalId = areteMap[arete]; if (!animalId) { skipPes++; continue }
-        const dup = await db.pesajes.where('animalId').equals(animalId).filter(p=>p.fecha===fechaTs&&p.pesoKg===pesoKg).first()
+        // Dedup por día calendario (no milisegundo exacto): evita que reimportar un Excel
+        // ya exportado (que trae la hoja PESAJES con el historial) cree filas repetidas
+        // solo porque la hora del timestamp original no coincide con la del reimport.
+        const dup = await db.pesajes.where('animalId').equals(animalId).filter(p=>truncarDia(p.fecha)===truncarDia(fechaTs)&&p.pesoKg===pesoKg).first()
         if (dup) { skipPes++; continue }
+        // Segunda barrera: si ya existe un pesaje con el mismo peso dentro de una ventana
+        // de 60 días (típico "ruido" de reimportar el pesaje de nacimiento varias veces
+        // mientras se digitalizaba el hato), se omite aunque la fecha no sea idéntica.
+        const ruidoNacimiento = await db.pesajes.where('animalId').equals(animalId)
+          .filter(p=>p.pesoKg===pesoKg && Math.abs(truncarDia(p.fecha)-truncarDia(fechaTs))<=60*86400000).first()
+        if (ruidoNacimiento) { skipPes++; continue }
         const obs = String(row[3]||'').trim()
         await fsAdd('pesajes', {animalId, fecha:fechaTs, pesoKg, metodo:'BASCULA', cc:3, ...(obs&&{obs}), registradoPor:quien, registradoEn:ahora})
         addedPes++
