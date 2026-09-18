@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260917-004'
+const APP_VERSION = '20260917-005'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -8396,15 +8396,17 @@ async function exportarParaImportar(){
     const potNomMap  = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
 
     // ── ANIMALES ──
+    // Orden de columnas: #, Número, Cat., Lote, Raza, Color, Fecha Ingreso, Peso Inicial, Precio Compra, Procedencia, Descripción
+    // Debe coincidir siempre con los índices leídos en importarTodo() más abajo — si cambia este orden, cambiar también allá.
     const wsAnim = XLSX.utils.aoa_to_sheet([
-      ['#','Número','Cat.','Raza','Color','Peso Inicial (kg)','Precio Compra ($/kg)','Fecha Ingreso (DD/MM/AAAA)','Procedencia','Lote','Descripción / Obs.'],
+      ['#','Número','Cat.','Lote','Raza','Color','Fecha Ingreso (DD/MM/AAAA)','Peso Inicial (kg)','Precio Compra ($/kg)','Procedencia','Descripción / Obs.'],
       ...animales.map((a,i)=>[
-        i+1, a.arete, a.categoria||'', a.raza||'', a.color||'',
-        a.pesoInicial||0, a.precioPorKg||'', fd(a.fechaIngreso),
-        a.procedencia||'', loteNomMap[a.loteId]||'', a.descripcion||''
+        i+1, a.arete, a.categoria||'', loteNomMap[a.loteId]||'', a.raza||'', a.color||'',
+        fd(a.fechaIngreso), a.pesoInicial||0, a.precioPorKg||'',
+        a.procedencia||'', a.descripcion||''
       ])
     ])
-    wsAnim['!cols']=[{wch:4},{wch:10},{wch:5},{wch:10},{wch:8},{wch:11},{wch:12},{wch:14},{wch:13},{wch:16},{wch:30}]
+    wsAnim['!cols']=[{wch:4},{wch:10},{wch:5},{wch:16},{wch:10},{wch:8},{wch:14},{wch:11},{wch:12},{wch:13},{wch:30}]
     wsAnim['!autofilter']={ref:'A1:K'+(animales.length+1)}
     XLSX.utils.book_append_sheet(wb, wsAnim, 'ANIMALES')
 
@@ -8493,21 +8495,6 @@ async function exportarParaImportar(){
     wsVentas['!cols']=[{wch:11},{wch:9},{wch:10},{wch:10},{wch:14},{wch:10},{wch:12},{wch:12},{wch:14},{wch:16},{wch:11},{wch:12},{wch:20}]
     wsVentas['!autofilter']={ref:'A1:M'+(inactivos.length+1)}
     XLSX.utils.book_append_sheet(wb, wsVentas, 'VENTAS_BAJAS')
-
-    // ── PESAJES (histórico de pesajes de animales activos + plantilla para nuevos) ──
-    const areteMapById = {}; animales.forEach(a=>areteMapById[a.id]=a.arete)
-    const animalIds = animales.map(a=>a.id)
-    const todosPesajes = animalIds.length ? await db.pesajes.where('animalId').anyOf(animalIds).toArray() : []
-    const pesajesOrdenados = todosPesajes
-      .filter(p=>areteMapById[p.animalId])
-      .sort((a,b)=> String(areteMapById[a.animalId]).localeCompare(String(areteMapById[b.animalId])) || (a.fecha-b.fecha))
-    const wsPes = XLSX.utils.aoa_to_sheet([
-      ['Arete / Número *','Peso (kg) *','Fecha (DD/MM/AAAA) *','Observación'],
-      ...pesajesOrdenados.map(p=>[areteMapById[p.animalId], p.pesoKg, fd(p.fecha), p.obs||''])
-    ])
-    wsPes['!cols']=[{wch:14},{wch:10},{wch:14},{wch:30}]
-    wsPes['!autofilter']={ref:'A1:D'+(pesajesOrdenados.length+1)}
-    XLSX.utils.book_append_sheet(wb, wsPes, 'PESAJES')
 
     const fecha = toD(Date.now())
     XLSX.writeFile(wb, `HPRapp-Exportacion-${fecha}.xlsx`)
@@ -8788,7 +8775,7 @@ async function importarTodo(input) {
 
     _showProg(35, 'Importando animales…')
     // ── ANIMALES ───────────────────────────────────
-    // Col 0:#  1:Arete  2:Cat  3:Raza  4:Color  5:Peso  6:PrecioCompra  7:FechaIngreso  8:Procedencia  9:Lote  10:Desc
+    // Col 0:#  1:Arete  2:Cat  3:Lote  4:Raza  5:Color  6:FechaIngreso  7:Peso  8:PrecioCompra  9:Procedencia  10:Desc
     const shAnim = wb.SheetNames.find(s => /ANIMALES?/i.test(s))
     if (shAnim) {
       const esAreteValido = v => {
@@ -8824,7 +8811,7 @@ async function importarTodo(input) {
       // Auto-crear lotes que aparecen en ANIMALES pero no existen todavía
       const lotesEnAnimales = new Set()
       for (const row of rows) {
-        const ln = String(row[9]||'').trim()
+        const ln = String(row[3]||'').trim()
         if (!ln) continue
         // Normalizar ya en la recolección
         const lnNorm = /^\d+$/.test(ln) ? 'LOTE '+ln : /^lote\s+\d+$/i.test(ln) ? 'LOTE '+ln.replace(/^lote\s+/i,'') : ln
@@ -8843,7 +8830,7 @@ async function importarTodo(input) {
         if (!arete) { sinArete++; continue }
         const existe = await db.animales.where('arete').equals(arete).first()
 
-        const precioKg = parseFloat(String(row[6]||'0').replace(',','.')) || null
+        const precioKg = parseFloat(String(row[8]||'0').replace(',','.')) || null
 
         if (existe) {
           // Actualizar solo precio de compra si viene en el Excel y es diferente
@@ -8858,19 +8845,19 @@ async function importarTodo(input) {
 
         const catRaw = String(row[2]||'').trim()
         const cat = Object.keys(CAT).find(k=>k===catRaw) || Object.keys(CAT).find(k=>CAT[k]===catRaw) || 'HC'
-        const pesoIni   = parseFloat(String(row[5]||'0').replace(',','.')) || 0
-        const fechaTs   = parseFecha(row[7]) || ahora
-        const loteRaw   = String(row[9]||'').trim()
+        const pesoIni   = parseFloat(String(row[7]||'0').replace(',','.')) || 0
+        const fechaTs   = parseFecha(row[6]) || ahora
+        const loteRaw   = String(row[3]||'').trim()
         const loteNorm  = loteRaw ? (/^\d+$/.test(loteRaw) ? 'LOTE '+loteRaw : /^lote\s+\d+$/i.test(loteRaw) ? 'LOTE '+loteRaw.replace(/^lote\s+/i,'') : loteRaw) : ''
         const loteNom   = loteNorm.toLowerCase()
         const loteId    = loteNom ? (loteMap[loteNom]||null) : null
 
         const id = await fsAdd('animales', {
           arete, nombre:undefined,
-          categoria:cat, raza:String(row[3]||'').trim(),
-          color:String(row[4]||'').trim()||undefined,
+          categoria:cat, raza:String(row[4]||'').trim(),
+          color:String(row[5]||'').trim()||undefined,
           pesoInicial:pesoIni, descripcion:String(row[10]||'').trim()||undefined,
-          procedencia:String(row[8]||'').trim()||undefined,
+          procedencia:String(row[9]||'').trim()||undefined,
           estadoSanitario:'SANO', activo:1, fechaIngreso:fechaTs,
           loteId, fechaLote:loteId?fechaTs:undefined,
           precioPorKg:precioKg,
