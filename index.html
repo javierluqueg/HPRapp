@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260917-007'
+const APP_VERSION = '20260917-008'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -4301,6 +4301,14 @@ async function pgLoteFicha({id}) {
       </button>
     </div>` : `<p class="sec">Animales del lote (${animales.length})</p>`
 
+  // Barra de mover a otro lote: botón para activar selección, o acciones una vez seleccionado
+  const moverBar = _lfSelMode
+    ? `<div class="btn-row mb10">
+        <button class="btn btn-gray btn-sm" onclick="cancelarSelLF()">✕ Cancelar</button>
+        <button class="btn btn-b btn-sm" ${_lfSelected.size?'':'disabled'} onclick="openMoverLoteMasivo(${id})">↪️ Mover a otro lote (${_lfSelected.size})</button>
+      </div>`
+    : (animales.length ? `<div class="btn-row mb10"><button class="btn btn-out btn-sm" onclick="activarSelLF(${id})">☑️ Seleccionar y mover a otro lote</button></div>` : '')
+
   _prodLoteId = id
   const prodMetrics = await calcProdLote(id, _prodLoteDesde, _prodLoteHasta)
   const prodCard = renderProdLoteHTML(prodMetrics, id, _prodLoteDesde, _prodLoteHasta)
@@ -4346,7 +4354,7 @@ async function pgLoteFicha({id}) {
     return hdr + tabs2 + btnLab + filasLab
   }
 
-  return hdr + tabs2 + selHeader + (Array.isArray(listaAnimales)?listaAnimales.join(''):listaAnimales)
+  return hdr + tabs2 + moverBar + selHeader + (Array.isArray(listaAnimales)?listaAnimales.join(''):listaAnimales)
 }
 
 function activarSelLF(loteId) {
@@ -4375,6 +4383,66 @@ function selectAllLF(ids) {
     _lfSelected = new Set(ids)  // Marcar todos
   }
   go('lote-ficha', {id: _lfLoteId})
+}
+
+async function openMoverLoteMasivo(loteOrigenId) {
+  loteOrigenId = parseInt(loteOrigenId)
+  if (!_lfSelected.size) { showToast('Selecciona al menos un animal','err'); return }
+  const lotes = await db.lotes.where('activo').equals(1).toArray()
+  const opciones = lotes.filter(l => l.id !== loteOrigenId)
+  if (!opciones.length) { showToast('No hay otro lote disponible para mover','err'); return }
+  const n = _lfSelected.size
+  showSheet(`<div class="sh-title">↪️ Mover a otro lote<button class="sh-x" onclick="closeSheet()">✕</button></div>
+    <p class="sm gray mb12">${n} animal${n!==1?'es':''} seleccionado${n!==1?'s':''}</p>
+    <div class="field"><label>Lote destino</label>
+      <select id="ml-lote" class="inp">
+        ${opciones.map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')}
+      </select></div>
+    <div class="field"><label>Fecha de adición al lote</label>
+      <input id="ml-f" class="inp" type="date" value="${toD(Date.now())}"></div>
+    <div class="btn-row">
+      <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
+      <button class="btn btn-b" id="ml-btn" onclick="saveMoverLoteMasivo(${loteOrigenId})">Mover</button>
+    </div>`)
+}
+
+async function saveMoverLoteMasivo(loteOrigenId) {
+  loteOrigenId = parseInt(loteOrigenId)
+  const btn = document.getElementById('ml-btn')
+  const destId = parseInt(document.getElementById('ml-lote')?.value)
+  if (!destId) { showToast('Selecciona el lote destino','err'); return }
+  const fechaStr = document.getElementById('ml-f')?.value
+  if (!fechaStr) { showToast('Selecciona la fecha','err'); return }
+  const fecha = fromD(fechaStr)
+  const ids = [..._lfSelected]
+  if (!ids.length) { showToast('Selecciona al menos un animal','err'); return }
+  if (btn) { btn.disabled = true; btn.textContent = `Moviendo ${ids.length}…` }
+  const originales = []
+  try {
+    for (const id of ids) {
+      const a = await db.animales.get(id)
+      originales.push({id, loteId: a?.loteId, fechaLote: a?.fechaLote})
+      await fsUpdate('animales', id, { loteId: destId, fechaLote: fecha })
+    }
+    await checkLoteVacio([loteOrigenId], Date.now())
+    await sincronizarNumAnimalesLote(destId)
+  } catch(e) {
+    showToast('Error al mover animales','err', 4000)
+    if (btn) { btn.disabled = false; btn.textContent = 'Mover' }
+    return
+  }
+  closeSheet()
+  const n = ids.length
+  _lfSelMode = false; _lfSelected = new Set()
+  pushUndo(`${n} animal${n!==1?'es':''} movido${n!==1?'s':''} de lote`, async () => {
+    for (const o of originales) {
+      await fsUpdate('animales', o.id, { loteId: o.loteId, fechaLote: o.fechaLote })
+    }
+    await sincronizarNumAnimalesLote(loteOrigenId)
+    await sincronizarNumAnimalesLote(destId)
+  })
+  showToast(`✅ ${n} animal${n!==1?'es':''} movido${n!==1?'s':''} de lote`, 'ok', 4000)
+  go('lote-ficha', {id: loteOrigenId})
 }
 
 async function openLaborLoteFicha(loteId, modoSel=false) {
