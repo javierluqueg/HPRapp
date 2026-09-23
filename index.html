@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260917-008'
+const APP_VERSION = '20260922-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -3803,6 +3803,36 @@ function normLote(sufijo){
   const s=sufijo.trim().replace(/^lote\s*/i,'').trim()
   return 'LOTE '+s
 }
+// ─── Estado de un potrero calculado desde su propio historial ────────────
+// Regla única para liberar potreros (editar lote, deshacer, corregir estado):
+//  · ciclo activo      → OCUPADO
+//  · ciclos cerrados   → EN_DESCANSO con la fecha de salida del último ciclo
+//  · nunca usado       → DISPONIBLE
+// Nunca se debe escribir estado:'DISPONIBLE' directo a un potrero con historial.
+async function estadoSegunHistorial(potreroId, excluirCicloId=null) {
+  const cs = (await db.ciclos.where('potreroId').equals(potreroId).toArray())
+    .filter(c => c.id !== excluirCicloId)
+  const activos = cs.filter(c => c.activo === 1)
+  if (activos.length) {
+    const ult = activos.reduce((mx, c) => (c.fechaEntrada||0) > (mx.fechaEntrada||0) ? c : mx)
+    return {estado:'OCUPADO', numAnimales:activos.reduce((s, c) => s + (c.numAnimales||0), 0), loteActual:ult.loteId}
+  }
+  const cerrados = cs.filter(c => c.activo !== 1 && c.fechaSalida && !c._huerfano)
+  if (cerrados.length) {
+    return {estado:'EN_DESCANSO', numAnimales:0, loteActual:undefined, fechaSalida:Math.max(...cerrados.map(c => c.fechaSalida))}
+  }
+  return {estado:'DISPONIBLE', numAnimales:0, loteActual:undefined}
+}
+async function liberarPotrero(potreroId) {
+  const obj = await estadoSegunHistorial(potreroId)
+  await fsUpdate('potreros', potreroId, obj)
+  return obj.estado
+}
+function describirEstadoPot(obj) {
+  if (obj.estado === 'EN_DESCANSO') return 'En descanso desde el ' + (obj.fechaSalida ? new Date(obj.fechaSalida).toLocaleDateString('es-CO') : '—')
+  return ESTADO_POT[obj.estado] || obj.estado
+}
+
 async function saveEditarLote(id){
   id=parseInt(id)
   const sufijo=($('el-n').value||'').trim()
@@ -3813,9 +3843,29 @@ async function saveEditarLote(id){
   const n=normLote(sufijo)
   const existente=await db.lotes.where('activo').equals(1).filter(l=>l.id!==id&&l.nombre.trim().toLowerCase()===n.toLowerCase()).first()
   if(existente){showToast(`Ya existe "${existente.nombre}". Usa otro nombre.`,'err',4000);return}
+  // Si se va a cambiar el potrero actual del lote, pedir confirmación explícita
+  // mostrando cómo quedará el potrero que se deja (evita cambios accidentales).
+  {
+    const potElC=$('el-pot'), fechaElC=$('el-pot-fecha')
+    if (potElC && fechaElC) {
+      const caC = await db.ciclos.where({loteId:id,activo:1}).first()
+      const npC = parseInt(potElC.value)
+      if (caC && npC !== caC.potreroId) {
+        const [paC, pnC] = await Promise.all([db.potreros.get(caC.potreroId), db.potreros.get(npC)])
+        const quedaC = await estadoSegunHistorial(caC.potreroId, caC.id)
+        let msgC = `¿Cambiar el potrero actual de ${n}?\n\n${paC?.nombre||'—'} → ${pnC?.nombre||'—'}\n\n${paC?.nombre||'El potrero anterior'} quedará: ${describirEstadoPot(quedaC)}.`
+        if (pnC && pnC.estado === 'OCUPADO' && pnC.loteActual && pnC.loteActual !== id) {
+          const otroC = await db.lotes.get(pnC.loteActual)
+          msgC += `\n\n⚠️ ${pnC.nombre} está ocupado por ${otroC?.nombre||'otro lote'}.`
+        }
+        msgC += `\n\nUsa esto solo para corregir un potrero mal registrado. Para mover el lote usa "Sacar lote del potrero".`
+        if (!await showConfirm(msgC)) return
+      }
+    }
+  }
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
-  let prev
+  let prev, cambioPotPrev=null
   try{
     prev=await db.lotes.get(id)
     await fsUpdate('lotes',id,{nombre:n, descripcion:($('el-d').value||'').trim()})
@@ -3833,16 +3883,18 @@ async function saveEditarLote(id){
         const potCambio   = nuevoPotId !== cicloActivo.potreroId
         const fechaCambio = nuevaFecha && nuevaFecha !== cicloActivo.fechaEntrada
         if (potCambio || fechaCambio) {
-          // Si cambió el potrero: liberar el anterior y ocupar el nuevo
-          if (potCambio) {
-            await fsUpdate('potreros', cicloActivo.potreroId, {estado:'DISPONIBLE', numAnimales:0, loteActual:null})
-            const animales = await db.animales.where({activo:1,loteId:id}).toArray()
-            await fsUpdate('potreros', nuevoPotId, {estado:'OCUPADO', numAnimales:animales.length, loteActual:id})
-          }
+          cambioPotPrev = {cicloId:cicloActivo.id, potreroId:cicloActivo.potreroId, fechaEntrada:cicloActivo.fechaEntrada, nuevoPotId}
+          // Primero se reasigna el ciclo; luego el potrero anterior se recalcula
+          // desde SU historial (En descanso / Disponible), nunca se fuerza a Disponible.
           await fsUpdate('ciclos', cicloActivo.id, {
             potreroId:   nuevoPotId,
             fechaEntrada: nuevaFecha || cicloActivo.fechaEntrada
           })
+          if (potCambio) {
+            await liberarPotrero(cicloActivo.potreroId)
+            await liberarPotrero(nuevoPotId)
+            trazar('EDITAR_POTRERO_LOTE','CICLO', cicloActivo.id, {de:cicloActivo.potreroId, a:nuevoPotId})
+          }
         }
       }
     }
@@ -3851,7 +3903,16 @@ async function saveEditarLote(id){
     if(btn){btn.disabled=false;btn.textContent='Guardar cambios'}
     return
   }
-  if(prev) pushUndo('Lote editado', async()=>{ await fsUpdate('lotes',id,{nombre:prev.nombre,descripcion:prev.descripcion}) })
+  if(prev) pushUndo('Lote editado', async()=>{
+    await fsUpdate('lotes',id,{nombre:prev.nombre,descripcion:prev.descripcion})
+    if (cambioPotPrev) {
+      await fsUpdate('ciclos', cambioPotPrev.cicloId, {potreroId:cambioPotPrev.potreroId, fechaEntrada:cambioPotPrev.fechaEntrada})
+      if (cambioPotPrev.potreroId !== cambioPotPrev.nuevoPotId) {
+        await liberarPotrero(cambioPotPrev.nuevoPotId)
+        await liberarPotrero(cambioPotPrev.potreroId)
+      }
+    }
+  })
   closeSheet(); go('lote-ficha',{id})
 }
 
@@ -5738,7 +5799,7 @@ async function pgPotreroFicha({id}) {
         </button>`:''}
         <button onclick="forzarDisponible(${id},${cicloActivo?.id||null})"
           style="flex:1;min-width:130px;border:none;background:#C62828;color:white;border-radius:9px;padding:10px 12px;font-size:.82rem;font-weight:700;cursor:pointer">
-          🔧 Marcar disponible
+          🔧 Corregir estado
         </button>
       </div>
     </div>` : ''
@@ -5968,14 +6029,16 @@ async function guardarFechaIngreso(potreroId, cicloId) {
   go('potrero-ficha', {id: potreroId})
 }
 async function forzarDisponible(potreroId, cicloId) {
-  if (!await showConfirm('¿Marcar este potrero como Disponible?\n\nSe eliminará el ciclo activo (si existe). Úsalo solo si el estado es incorrecto.')) return
+  const quedaF = await estadoSegunHistorial(potreroId, cicloId)
+  if (!await showConfirm(`¿Corregir el estado de este potrero?\n\nSe cerrará el ciclo activo (si existe). Según su historial, el potrero quedará: ${describirEstadoPot(quedaF)}.\n\nÚsalo solo si el estado es incorrecto.`)) return
+  let estF
   try {
     if (cicloId) {
       await fsUpdate('ciclos', cicloId, {activo:0, fechaSalida:Date.now(), _huerfano:true})
     }
-    await fsUpdate('potreros', potreroId, {estado:'DISPONIBLE', numAnimales:0, loteActual:undefined})
+    estF = await liberarPotrero(potreroId)
   } catch(e) { showToast('Error al corregir','err',4000); return }
-  showToast('Potrero marcado como disponible')
+  showToast('Potrero corregido: ' + (ESTADO_POT[estF] || estF))
   go('potrero-ficha', {id: potreroId})
 }
 
@@ -6237,8 +6300,10 @@ async function saveIngresarLoteAPotrero(potreroId) {
     return
   }
   pushUndo(`Lote "${loteNombre}" ingresado`, async()=>{
-    await fsUpdate('ciclos',cicloId,{activo:0})
-    await fsUpdate('potreros',potreroId,{estado:'DISPONIBLE',numAnimales:0,loteActual:undefined})
+    // El ciclo recién creado se borra (antes quedaba cerrado sin fecha de salida)
+    // y el potrero vuelve al estado que le da su historial.
+    await fsDelete('ciclos',cicloId)
+    await liberarPotrero(potreroId)
   })
   closeSheet(); go('potrero-ficha',{id:potreroId})
 }
@@ -6247,9 +6312,14 @@ async function confirmarSalidaPotrero(potreroId, cicloId) {
   const ciclo = await db.ciclos.get(cicloId)
   if (!ciclo) return
 
-  // Cargar potreros disponibles para mover
-  const disponibles = await db.potreros.where('activo').equals(1)
-    .filter(p => p.id !== potreroId && p.estado === 'DISPONIBLE').toArray()
+  // Potreros destino: disponibles y en descanso (los en descanso ordenados
+  // de más a menos días de descanso). Antes solo se ofrecían los Disponibles.
+  const disponibles = (await db.potreros.where('activo').equals(1)
+    .filter(p => p.id !== potreroId && (p.estado === 'DISPONIBLE' || p.estado === 'EN_DESCANSO')).toArray())
+    .sort((a, b) => {
+      if (a.estado !== b.estado) return a.estado === 'DISPONIBLE' ? -1 : 1
+      return (a.fechaSalida||0) - (b.fechaSalida||0)
+    })
 
   const opcionesPotreros = disponibles.length
     ? `<input id="sp-busq" class="inp mb8" placeholder="🔍 Buscar potrero…" oninput="filtrarPotMover(this.value)">
@@ -6257,7 +6327,7 @@ async function confirmarSalidaPotrero(potreroId, cicloId) {
          ${disponibles.map(p =>
            `<button class="btn btn-gray mb6 sp-item" data-nom="${p.nombre.toLowerCase()}" style="text-align:left;justify-content:space-between;display:flex;width:100%" onclick="sacarYMover(${potreroId},${cicloId},${p.id})">
              <span>${p.nombre}</span>
-             <span class="xs gray">${p.areaHa?.toFixed(1)||0} ha</span>
+             <span class="xs gray">${p.estado==='EN_DESCANSO'&&p.fechaSalida?fmtDias(diasDesde(p.fechaSalida))+' desc. · ':(p.estado==='DISPONIBLE'?'Disponible · ':'')}${p.areaHa?.toFixed(1)||0} ha</span>
            </button>`).join('')}
        </div>`
     : `<p class="xs gray mb8">No hay potreros disponibles en este momento.</p>`
@@ -6299,6 +6369,7 @@ async function sacarYMover(potreroId, cicloId, nuevoPotId) {
   if (ahora < ciclo.fechaEntrada) { showToast('La fecha de salida no puede ser anterior a la de entrada ('+toD(ciclo.fechaEntrada)+')','err',5000); return }
   const dias  = diasEntre(ciclo.fechaEntrada, ahora)
   closeSheet()
+  let nuevoCicloId = null
   try {
     // Cerrar ciclo actual
     await fsUpdate('ciclos', cicloId, {activo:0, fechaSalida:ahora, diasOcupacion:dias})
@@ -6308,7 +6379,7 @@ async function sacarYMover(potreroId, cicloId, nuevoPotId) {
     // el lote puede tener legítimamente otros potreros activos simultáneos
     // (ver openCambiarPotrero) y cerrarlos de rebote corrompería esos datos.
     // Abrir nuevo ciclo en potrero destino
-    const nuevoCicloId = await fsAdd('ciclos', {
+    nuevoCicloId = await fsAdd('ciclos', {
       potreroId:nuevoPotId, loteId:ciclo.loteId, nombreLote:ciclo.nombreLote,
       numAnimales:ciclo.numAnimales, fechaEntrada:ahora, activo:1, obs:''
     })
@@ -6319,9 +6390,8 @@ async function sacarYMover(potreroId, cicloId, nuevoPotId) {
   pushUndo(`Lote movido — deshacer`, async () => {
     await fsUpdate('ciclos', cicloId, {activo:1, fechaSalida:undefined, diasOcupacion:undefined})
     await fsUpdate('potreros', potreroId, {estado:'OCUPADO', numAnimales:ciclo.numAnimales, loteActual:ciclo.loteId, fechaSalida:undefined})
-    await fsUpdate('potreros', nuevoPotId, {estado:'DISPONIBLE', numAnimales:0, loteActual:undefined})
-    const nc = await db.ciclos.where({potreroId:nuevoPotId, activo:1}).first()
-    if (nc) await fsUpdate('ciclos', nc.id, {activo:0})
+    if (nuevoCicloId) await fsDelete('ciclos', nuevoCicloId)
+    await liberarPotrero(nuevoPotId)
   })
   go('potrero-ficha', {id:nuevoPotId})
 }
@@ -7415,6 +7485,20 @@ async function ejecutarVerificacionIntegridad() {
       hallazgosI.push({
         potrero: p.nombre, lote: lotesMapI[ultimoReal.loteId] || '',
         tipo: 'Debería estar OCUPADO', detalle: `Estado actual: ${ESTADO_POT[p.estado] || p.estado}`
+      })
+    }
+    if (ultimoReal.activo !== 1 && p.estado === 'DISPONIBLE') {
+      hallazgosI.push({
+        potrero: p.nombre, lote: lotesMapI[ultimoReal.loteId] || '',
+        tipo: 'Debería estar EN DESCANSO',
+        detalle: `Figura Disponible pero tiene historial; última salida ${ultimoReal.fechaSalida ? new Date(ultimoReal.fechaSalida).toLocaleDateString('es-CO') : '—'}`
+      })
+    }
+    if (p.estado === 'OCUPADO' && !ciclosDeEste.some(c => c.activo === 1)) {
+      hallazgosI.push({
+        potrero: p.nombre, lote: '',
+        tipo: 'Figura OCUPADO sin lote activo',
+        detalle: 'No hay ningún ciclo activo en este potrero'
       })
     }
     if (ultimoReal.activo !== 1 && p.estado === 'EN_DESCANSO' && ultimoReal.fechaSalida) {
