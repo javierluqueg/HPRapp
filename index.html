@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260923-001'
+const APP_VERSION = '20260923-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -409,10 +409,67 @@ function showSyncStatus(status) {
 window.addEventListener('online',  ()=>showSyncStatus('sync'))
 window.addEventListener('offline', ()=>showSyncStatus('off'))
 
+// ─── IDs únicos entre dispositivos (20260923) ─────
+// Antes cada equipo numeraba 1, 2, 3… por su cuenta; si dos equipos creaban un
+// registro a la vez, obtenían el mismo número y uno pisaba al otro en la nube.
+// Ahora el id = milisegundos × 1000 + 3 cifras aleatorias por sesión, siempre
+// creciente. Sigue siendo un número entero seguro (< 2^53).
+const _ID_SUFIJO = Math.floor(Math.random()*1000)
+let _ultimoId = 0
+function _nuevoId() {
+  let id = Date.now()*1000 + _ID_SUFIJO
+  if (id <= _ultimoId) id = _ultimoId + 1
+  _ultimoId = id
+  return id
+}
+
+// ─── Blindaje de fechas (20260923) ────────────────
+// Ningún registro se guarda con una fecha inválida (NaN) ni en el futuro.
+const _CAMPOS_FECHA = ['fecha','fechaIngreso','fechaBaja','fechaEntrada','fechaSalida','fechaLote']
+function _validarFechas(table, obj) {
+  const limite = Date.now() + DIA_MS_COL  // margen de 1 día por diferencias de reloj
+  for (const k of _CAMPOS_FECHA) {
+    if (!(k in obj)) continue
+    const v = obj[k]
+    if (v === null || v === undefined) continue
+    if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`Fecha inválida (${k})`)
+    if (v > limite) throw new Error(`La fecha no puede ser futura (${k}: ${toD(v)})`)
+  }
+}
+
+// ─── Historial de lotes por animal (20260923) ─────
+// Cada vez que cambia el lote de un animal se registra desde/hasta cuándo estuvo
+// en cada lote. Con eso la productividad por potrero y rotación sabe qué animales
+// estaban realmente en cada ciclo (incluidos los ya vendidos o muertos).
+function _histLotesReconstruido(a) {
+  // Para animales anteriores a este registro: se asume que estuvo en su lote
+  // actual (o en el lote del que salió) desde su ingreso.
+  const desde = a.fechaLote || a.fechaIngreso || 0
+  if (a.activo === 1 && a.loteId) return [{loteId:a.loteId, desde}]
+  if (a.activo !== 1 && a.loteIdSalida) return [{loteId:a.loteIdSalida, desde:a.fechaIngreso||0, hasta:a.fechaBaja||null}]
+  return []
+}
+function _histLotesAplicar(prev, obj) {
+  if (!('loteId' in obj) || 'historialLotes' in obj) return
+  const antes = prev ? (prev.loteId ?? null) : null
+  const ahora = obj.loteId ?? null
+  if (antes === ahora) return
+  const cuando = (ahora && obj.fechaLote) || obj.fechaBaja || Date.now()
+  const hist = prev ? (Array.isArray(prev.historialLotes) ? prev.historialLotes.map(h=>({...h})) : _histLotesReconstruido(prev)) : []
+  const abierto = hist.length ? hist[hist.length-1] : null
+  if (abierto && !abierto.hasta) abierto.hasta = Math.max(cuando, abierto.desde||0)
+  if (ahora) hist.push({loteId:ahora, desde:cuando})
+  obj.historialLotes = hist
+}
+
 // ─── Wrapper: Add to Dexie + Firebase ─────────────
 async function fsAdd(table, obj) {
+  _validarFechas(table, obj)
+  if (table === 'animales' && obj.loteId && !obj.historialLotes)
+    obj = {...obj, historialLotes:[{loteId:obj.loteId, desde:obj.fechaLote||obj.fechaIngreso||Date.now()}]}
   const ts = Date.now()
-  const id = await db[table].add({...obj, _ts: ts})
+  const id = _nuevoId()
+  await db[table].add({...obj, id, _ts: ts})
   _suppressRefreshUntil = Date.now() + 4000  // Suprimir refresh por 4s
   // Sanitizar: Firestore no acepta undefined — omitir campos con ese valor
   const clean = Object.fromEntries(
@@ -426,6 +483,11 @@ async function fsAdd(table, obj) {
 
 // ─── Wrapper: Update Dexie + Firebase ─────────────
 async function fsUpdate(table, id, obj) {
+  _validarFechas(table, obj)
+  if (table === 'animales' && 'loteId' in obj) {
+    obj = {...obj}
+    _histLotesAplicar(await db.animales.get(id), obj)
+  }
   const ts = Date.now()
   await db[table].update(id, {...obj, _ts: ts})
   _suppressRefreshUntil = Date.now() + 4000  // Suprimir refresh por 4s
@@ -703,11 +765,38 @@ let _sheetQuitarIds=[], _sheetQuitarSnaps=[], _aqAccion=null
 // UTILIDADES
 // ═══════════════════════════════════════════════════
 const $ = id => document.getElementById(id)
-const ffd = ts => ts ? new Date(+ts).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '—'
-const ffdHora = ts => ts ? new Date(+ts).toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'
-const toD = ts => { const d=new Date(+ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0') }
-const fromD = s => new Date(s+'T00:00:00').getTime()
-const truncarDia = ts => { const d=new Date(+ts); return new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime() }
+// ── HORA COLOMBIANA FIJA (20260923) ─────────────────────────────────────────
+// Todas las fechas de la app se interpretan SIEMPRE en hora de Colombia (UTC-5,
+// sin horario de verano), sin importar la zona horaria configurada en el
+// celular o el PC. Un día "D" se guarda como la medianoche de Colombia de ese día.
+const TZ_COL = 'America/Bogota'
+const OFF_COL = 5*3600000
+const DIA_MS_COL = 86400000
+// DC(ts): objeto Date cuyos componentes getUTC*() son la fecha/hora de Colombia.
+const DC = ts => new Date((ts===undefined||ts===null ? Date.now() : +ts) - OFF_COL)
+// colTs(año, mes0, día, h, m, s): timestamp de esa fecha/hora en Colombia.
+const colTs = (y,m,d=1,h=0,mi=0,s=0) => Date.UTC(y,m,d,h,mi,s) + OFF_COL
+const ffd = ts => ts ? new Date(+ts).toLocaleDateString('es-CO',{timeZone:TZ_COL,day:'2-digit',month:'short',year:'numeric'}) : '—'
+const ffdHora = ts => ts ? new Date(+ts).toLocaleString('es-CO',{timeZone:TZ_COL,day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'
+const toD = ts => DC(ts).toISOString().slice(0,10)
+// "AAAA-MM-DD" → medianoche de Colombia. Texto vacío o inválido → NaN (nunca una fecha falsa).
+const fromD = s => { const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s||'').trim()); return m ? colTs(+m[1],+m[2]-1,+m[3]) : NaN }
+const fromDFin = s => { const t=fromD(s); return Number.isFinite(t) ? t+DIA_MS_COL-1 : NaN }
+const truncarDia = ts => Math.floor((+ts - OFF_COL)/DIA_MS_COL)*DIA_MS_COL + OFF_COL
+const hoyCol = () => toD(Date.now())
+// Lee un <input type="date"> y valida: obligatorio, no futuro. Devuelve el timestamp
+// (medianoche Colombia) o null después de marcar el campo y avisar.
+function leerFecha(id, {requerida=true, permitirFutura=false, etiqueta='la fecha'}={}) {
+  const el = $(id)
+  const v = el?.value || ''
+  const marcar = msg => { if(el){ el.style.border='2px solid #C62828'; try{el.focus()}catch(e){} } showToast(msg,'err',4000); return null }
+  if (!v) return requerida ? marcar('Indica '+etiqueta) : undefined
+  const ts = fromD(v)
+  if (!Number.isFinite(ts)) return marcar('Fecha inválida: '+etiqueta)
+  if (!permitirFutura && ts > truncarDia(Date.now())) return marcar('La fecha no puede ser futura ('+etiqueta+')')
+  if (el) el.style.border = ''
+  return ts
+}
 const diasEntre = (ts1, ts2) => Math.round((truncarDia(ts2)-truncarDia(ts1))/86400000)
 const diasDesde = ts => Math.max(0, diasEntre(ts, Date.now()))
 const fmtDias = n => n === 0 ? '< 1 día' : n + (n === 1 ? ' día' : ' días')
@@ -730,6 +819,21 @@ function rowD(l,v,last=false) {
     <span class="sm gray">${l}</span><span class="sm bold">${v}</span></div>`
 }
 
+// Aviso ante un peso probablemente mal digitado (ej. 45 en vez de 450): compara
+// contra el pesaje anterior más cercano y pide confirmación si la ganancia
+// implícita es imposible (> 2.5 kg/día o < -1.5 kg/día) o el cambio es > 40%.
+async function _pesoPlausible(animalId, kg, fecha) {
+  const ps = (await db.pesajes.where('animalId').equals(animalId).toArray()).filter(p=>p.pesoKg>0 && Number.isFinite(p.fecha))
+  const antes = ps.filter(p=>p.fecha<=fecha).sort((x,y)=>y.fecha-x.fecha)[0]
+  if (!antes) return true
+  const dias = Math.max(1, (fecha - antes.fecha)/DIA_MS_COL)
+  const gdp = (kg - antes.pesoKg)/dias*1000
+  const cambio = Math.abs(kg - antes.pesoKg)/antes.pesoKg
+  if (gdp > 2500 || gdp < -1500 || (cambio > 0.4 && dias < 120)) {
+    return await showConfirm(`⚠️ Revisa el peso: ${kg} kg.\n\nEl pesaje anterior fue ${antes.pesoKg} kg el ${ffd(antes.fecha)} (${Math.round(dias)} días antes), lo que da ${Math.round(gdp)} g/día.\n\n¿Guardarlo de todas formas?`)
+  }
+  return true
+}
 async function getPesoActual(animalId) {
   const ps = await db.pesajes.where('animalId').equals(animalId).reverse().sortBy('fecha')
   return ps[0] || null
@@ -813,7 +917,13 @@ function showConfirm(msg) {
   ])
 }
 
-function showSheet(html) { const sh=$('sheet'),ov=$('ov'); if(sh)sh.innerHTML=html; if(ov)ov.classList.add('show') }
+// Ningún campo de fecha permite escoger días futuros (salvo los marcados data-futura).
+function _limitarFechas(root) {
+  if (!root) return
+  const hoy = hoyCol()
+  root.querySelectorAll('input[type="date"]:not([data-futura])').forEach(i => { if (!i.max || i.max > hoy) i.max = hoy })
+}
+function showSheet(html) { const sh=$('sheet'),ov=$('ov'); if(sh){ sh.innerHTML=html; _limitarFechas(sh) } if(ov)ov.classList.add('show') }
 function closeSheet() { const ov=$('ov'); if(ov)ov.classList.remove('show') }
 
 // ═══════════════════════════════════════════════════
@@ -836,7 +946,11 @@ const NAV_MAP = {
   ventas:'ventas', config:'config', lluvias:'lluvias'
 }
 
+let _goSeq = 0
 async function go(page, params={}) {
+  // Cada navegación recibe un número; si mientras carga empieza otra (por ejemplo
+  // una sincronización que refresca), la más vieja no pinta encima de la nueva.
+  const _miSeq = ++_goSeq
   // Guard: páginas protegidas requieren usuario autenticado
   if (!NO_NAV.has(page) && !USER) { page='login'; params={} }
   PAGE=page; PARAMS=params
@@ -863,9 +977,11 @@ async function go(page, params={}) {
       Promise.resolve(map[page]?.(params)).then(r => r ?? '<p>Página no encontrada: '+page+'</p>'),
       _goTimeout
     ])
+    if (_miSeq !== _goSeq) return  // llegó otra navegación más reciente: no pintar esta
     $('pg').innerHTML = _pageResult || `<div style="padding:30px;text-align:center;background:white;border-radius:12px;margin:20px"><p style="color:#888;margin-bottom:12px">Página vacía: ${page}</p><button onclick="go('dashboard')" class="btn btn-g">Ir al inicio</button></div>`
   }
-  catch(e) { console.error('go() error:', page, e); $('pg').innerHTML=`<div style="padding:30px;text-align:center;background:white;border-radius:12px;margin:20px"><div style="font-size:2rem;margin-bottom:10px">❌</div><p style="font-weight:700;color:#C62828;margin-bottom:8px">Error: ${page}</p><p style="font-size:.85rem;color:#555;margin-bottom:16px">${e.message}</p><button onclick="go('dashboard')" class="btn btn-g">🏠 Ir al inicio</button></div>` }
+  catch(e) { if (_miSeq !== _goSeq) return; console.error('go() error:', page, e); $('pg').innerHTML=`<div style="padding:30px;text-align:center;background:white;border-radius:12px;margin:20px"><div style="font-size:2rem;margin-bottom:10px">❌</div><p style="font-weight:700;color:#C62828;margin-bottom:8px">Error: ${page}</p><p style="font-size:.85rem;color:#555;margin-bottom:16px">${e.message}</p><button onclick="go('dashboard')" class="btn btn-g">🏠 Ir al inicio</button></div>` }
+  _limitarFechas($('pg'))
   window.scrollTo(0,0)
 }
 
@@ -1113,6 +1229,7 @@ async function doLogin(pin) {
     try{sessionStorage.setItem('hpr_user',JSON.stringify(USER))}catch(e){}
     initFirebaseSync()
     // Mostrar bienvenida solo la primera vez por usuario en este dispositivo
+    setTimeout(migracionesPendientes, 2500)
     const key = 'bienvenida_' + USER?.id
     const visto = localStorage.getItem(key)
     if (!visto) {
@@ -1340,21 +1457,21 @@ async function pgDashboard() {
   const hoyStr=toD(Date.now())
   const dDesde=esCustom?(_seg['dp_desde']||''):''
   const dHasta=esCustom?(_seg['dp_hasta']||hoyStr):''
-  const dHastaTs=(esCustom&&dHasta) ? new Date(dHasta+'T23:59:59').getTime() : ahoraTs
+  const dHastaTs=(esCustom&&dHasta) ? fromDFin(dHasta) : ahoraTs
   const dDesdeTs=Math.max(inicioDatos, esCustom
-    ? (dDesde?new Date(dDesde+'T00:00:00').getTime():inicioDatos)
+    ? (dDesde?fromD(dDesde):inicioDatos)
     : dHastaTs-dPSel*DIA_MS)
   const rP = dPSel===365 && !esCustom ? r12 : produccionPeriodo(dDesdeTs, dHastaTs)
   const periodoRecortado = !esCustom && (dHastaTs-dPSel*DIA_MS) < inicioDatos
 
   // Producción por año calendario (año contra año)
-  const anioIni = new Date(inicioDatos).getFullYear(), anioAct = new Date(ahoraTs).getFullYear()
+  const anioIni = DC(inicioDatos).getUTCFullYear(), anioAct = DC(ahoraTs).getUTCFullYear()
   const porAnio = []
   for(let y=anioAct; y>=anioIni && porAnio.length<6; y--){
-    const y0=Math.max(new Date(y,0,1).getTime(), inicioDatos), y1=Math.min(new Date(y,11,31,23,59,59).getTime(), ahoraTs)
+    const y0=Math.max(colTs(y,0,1), inicioDatos), y1=Math.min(colTs(y,11,31,23,59,59), ahoraTs)
     if(y1<=y0) continue
     const r=produccionPeriodo(y0,y1)
-    r.anio=y; r.parcial=(y===anioAct) || y0>new Date(y,0,1).getTime()
+    r.anio=y; r.parcial=(y===anioAct) || y0>colTs(y,0,1)
     porAnio.push(r)
   }
 
@@ -1362,7 +1479,7 @@ async function pgDashboard() {
   const nPesajeViejo = animales.filter(a=>{const p=_curvaPeso(a);return p.length && p[p.length-1].t < ahoraTs-120*DIA_MS}).length
 
   const _fmtKg = v => Math.round(v).toLocaleString('es-CO')
-  const _fmtFecha = t => new Date(t).toLocaleDateString('es-CO',{day:'2-digit',month:'2-digit',year:'numeric'})
+  const _fmtFecha = t => new Date(t).toLocaleDateString('es-CO',{timeZone:TZ_COL,day:'2-digit',month:'2-digit',year:'numeric'})
   const gdpColor=gdpProm===null?'gray':gdpProm>=metaN?'green':'orange'
   const dSegBtns=dPeriodos.map(p=>`<button class="${p.v===dPSel?'on':''}" onclick="_seg['dp']=${p.v};go('dashboard')">${p.l}</button>`).join('')
 
@@ -1406,7 +1523,7 @@ async function pgDashboard() {
       <div style="position:relative;z-index:1;padding:18px 16px 16px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div>
-            <p style="font-size:.8rem;color:rgba(255,255,255,.7);text-transform:capitalize;margin-bottom:4px">${new Date().toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long'})}</p>
+            <p style="font-size:.8rem;color:rgba(255,255,255,.7);text-transform:capitalize;margin-bottom:4px">${new Date().toLocaleDateString('es-CO',{timeZone:TZ_COL,weekday:'long',day:'numeric',month:'long'})}</p>
             <p style="font-size:1.35rem;font-weight:800;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.4)">${nombre||'Mi Finca'}</p>
             ${USER?`<p style="font-size:.78rem;color:rgba(255,255,255,.6);margin-top:4px">👤 ${USER?.nombre} · ${USER?.rol}</p>`:''}
           </div>
@@ -1517,8 +1634,8 @@ async function pgDashboard() {
               const maxMm = Math.max(...lluv30.map(l=>l.mm), 1)
               return lluv30.map(l=>{
                 const pct = Math.max(8, Math.round((l.mm/maxMm)*100))
-                const d = new Date(l.fecha)
-                const lbl = (d.getDate()+'/'+(d.getMonth()+1))
+                const d = DC(l.fecha)
+                const lbl = (d.getUTCDate()+'/'+(d.getUTCMonth()+1))
                 return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:14px" title="${lbl}: ${l.mm}mm">
                   <div style="width:100%;background:#1565C0;border-radius:3px 3px 0 0;height:${pct}%;opacity:.8"></div>
                 </div>`
@@ -1550,10 +1667,10 @@ async function pgLluvias() {
   }
 
   // ── Construir opciones de años y meses disponibles ──
-  const hoy = new Date()
-  const anioActual = hoy.getFullYear()
-  const mesActual  = hoy.getMonth()
-  const anios = [...new Set(todas.map(l => new Date(l.fecha).getFullYear()))].sort((a,b)=>b-a)
+  const hoy = DC()
+  const anioActual = hoy.getUTCFullYear()
+  const mesActual  = hoy.getUTCMonth()
+  const anios = [...new Set(todas.map(l => DC(l.fecha).getUTCFullYear()))].sort((a,b)=>b-a)
 
   // Estado de filtros desde _seg
   const modo    = _seg['llv_modo'] || 'mes'        // 'mes' | 'periodo' | 'anio'
@@ -1569,8 +1686,8 @@ async function pgLluvias() {
     titulo_periodo = 'Historial completo'
   } else if (modo === 'mes') {
     filtradas = todas.filter(l => {
-      const d = new Date(l.fecha)
-      return d.getFullYear() === selAnio && d.getMonth() === selMes
+      const d = DC(l.fecha)
+      return d.getUTCFullYear() === selAnio && d.getUTCMonth() === selMes
     })
     const nomMes = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][selMes]
     titulo_periodo = `${nomMes} ${selAnio}`
@@ -1579,7 +1696,7 @@ async function pgLluvias() {
     filtradas = todas.filter(l => l.fecha >= desde)
     titulo_periodo = `Últimos ${selPer} días`
   } else {
-    filtradas = todas.filter(l => new Date(l.fecha).getFullYear() === selAnio)
+    filtradas = todas.filter(l => DC(l.fecha).getUTCFullYear() === selAnio)
     titulo_periodo = `Año ${selAnio}`
   }
 
@@ -1626,7 +1743,7 @@ async function pgLluvias() {
     let barras = []
     if (modo === 'anio') {
       const porMes = Array(12).fill(0)
-      filtradas.forEach(l => { porMes[new Date(l.fecha).getMonth()] += l.mm })
+      filtradas.forEach(l => { porMes[DC(l.fecha).getUTCMonth()] += l.mm })
       const maxVal = Math.max(...porMes, 1)
       barras = porMes.map((mm, i) => ({
         label: MESES[i].slice(0,3),
@@ -1636,9 +1753,9 @@ async function pgLluvias() {
     } else {
       const maxMm = Math.max(...filtradas.map(l=>l.mm), 1)
       barras = filtradas.map(l => {
-        const d = new Date(l.fecha)
+        const d = DC(l.fecha)
         return {
-          label: d.getDate()+'/'+(d.getMonth()+1),
+          label: d.getUTCDate()+'/'+(d.getUTCMonth()+1),
           mm: l.mm,
           pct: Math.max(6, Math.round((l.mm/maxMm)*100))
         }
@@ -1660,8 +1777,8 @@ async function pgLluvias() {
   // ── Lista de registros ──
   const lista = filtradas.length
     ? [...filtradas].reverse().map(l => {
-        const d = new Date(l.fecha)
-        const fecha = `${d.getDate()} ${MESES[d.getMonth()].slice(0,3)} ${d.getFullYear()}`
+        const d = DC(l.fecha)
+        const fecha = `${d.getUTCDate()} ${MESES[d.getUTCMonth()].slice(0,3)} ${d.getUTCFullYear()}`
         return `<div class="card row-b mb8">
           <div>
             <p class="sm bold">${fecha}</p>
@@ -1678,14 +1795,14 @@ async function pgLluvias() {
   // ── Historial mes × año ──
   let historialHTML = ''
   if (modo === 'historial') {
-    const aniosList = [...new Set(todas.map(l => new Date(l.fecha).getFullYear()))].sort((a,b)=>a-b)
+    const aniosList = [...new Set(todas.map(l => DC(l.fecha).getUTCFullYear()))].sort((a,b)=>a-b)
     // Construir matriz [mes][anio] = mm
     const mat = {}
     const totAnio = {}
     const totMes = Array(12).fill(0)
     todas.forEach(l => {
-      const d = new Date(l.fecha)
-      const a = d.getFullYear(), m = d.getMonth()
+      const d = DC(l.fecha)
+      const a = d.getUTCFullYear(), m = d.getUTCMonth()
       if (!mat[m]) mat[m] = {}
       mat[m][a] = (mat[m][a] || 0) + l.mm
       totAnio[a] = (totAnio[a] || 0) + l.mm
@@ -1798,7 +1915,7 @@ async function pgLluvias() {
           <p style="font-size:.7rem;color:#888">mm promedio</p>
         </div>
       </div>
-      ${maxReg.mm > 0 ? `<p class="xs gray">Mayor registro: <strong>${maxReg.mm.toFixed(1)} mm</strong> — ${(()=>{ const d=new Date(maxReg.fecha); return d.getDate()+' '+MESES[d.getMonth()].slice(0,3)+' '+d.getFullYear() })()}</p>` : ''}
+      ${maxReg.mm > 0 ? `<p class="xs gray">Mayor registro: <strong>${maxReg.mm.toFixed(1)} mm</strong> — ${(()=>{ const d=DC(maxReg.fecha); return d.getUTCDate()+' '+MESES[d.getUTCMonth()].slice(0,3)+' '+d.getUTCFullYear() })()}</p>` : ''}
     </div>
 
     <div class="card mb10">
@@ -1855,11 +1972,11 @@ async function saveRegistrarLluvia() {
     showToast('Ingresa los milímetros','err'); return
   }
   const obs   = $('ll-obs')?.value?.trim() || ''
-  const fecha = new Date(fechaStr+'T00:00:00').getTime()
+  const fecha = fromD(fechaStr)
 
   // ── Verificar duplicado por día ──
-  const diaInicio = new Date(fechaStr+'T00:00:00').getTime()
-  const diaFin    = new Date(fechaStr+'T23:59:59').getTime()
+  const diaInicio = fromD(fechaStr)
+  const diaFin    = fromDFin(fechaStr)
   const existente = await db.lluvias.where('fecha').between(diaInicio, diaFin, true, true).first()
   if (existente) {
     showToast(`Ya existe un registro para esa fecha (${existente.mm} mm)`, 'err', 4000)
@@ -1868,8 +1985,8 @@ async function saveRegistrarLluvia() {
 
   // ── Confirmación antes de guardar ──
   const MESES_C = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
-  const dObj = new Date(fecha)
-  const fechaLabel = `${dObj.getDate()} ${MESES_C[dObj.getMonth()]} ${dObj.getFullYear()}`
+  const dObj = DC(fecha)
+  const fechaLabel = `${dObj.getUTCDate()} ${MESES_C[dObj.getUTCMonth()]} ${dObj.getUTCFullYear()}`
   const confirmado = await showConfirm(`¿Confirmar registro de lluvia?\n\n📅 Fecha: ${fechaLabel}\n🌧 Milímetros: ${mmVal} mm${obs ? '\n📝 ' + obs : ''}`)
   if (!confirmado) return
 
@@ -2386,7 +2503,7 @@ async function saveLaborSeleccionados() {
 
   const fechaStr = document.getElementById('sl-fecha')?.value
   if (!fechaStr) { showToast('Selecciona la fecha','err'); return }
-  const fecha = new Date(fechaStr+'T00:00:00').getTime()
+  const fecha = fromD(fechaStr)
   const prod = document.getElementById('sl-prod')?.value?.trim() || ''
   const obs  = document.getElementById('sl-obs')?.value?.trim() || ''
   const obsTexto = [prod, obs].filter(Boolean).join(' · ')
@@ -2653,13 +2770,12 @@ async function openBajaSeleccionados(){
 async function saveBajaSeleccionados(){
   const causa=$('bj-causa')?.value
   if(!causa){const sel=$('bj-causa');if(sel){sel.style.border='2px solid #C62828';sel.focus()};showToast('Selecciona la causa de baja','err');return}
-  const fechaStr=$('bj-fecha')?.value
   const obs=$('bj-obs')?.value?.trim()||''
-  const fechaBaja=fechaStr?new Date(fechaStr+'T00:00:00').getTime():Date.now()
+  const fechaBaja=leerFecha('bj-fecha',{etiqueta:'la fecha de baja'}); if(fechaBaja===null) return
   const ids=_sheetBajaIds; if(!ids.length){closeSheet();return}
   const btn=document.querySelector('#ov .btn-r')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
-  let snapshots=[], ok=0, pesajesCreados=[]
+  let snapshots=[], ok=0, pesajesCreados=[], cerradosBajaM=[]
   try{
     snapshots=await Promise.all(ids.map(id=>db.animales.get(id)))
     const _bajLoteIds=snapshots.filter(a=>a&&a.loteId).map(a=>a.loteId)
@@ -2676,10 +2792,10 @@ async function saveBajaSeleccionados(){
       await fsUpdate('animales',snap.id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||null,loteId:null,fechaLote:null,loteIdSalida:snap.loteId||null,loteNombreSalida:snap.loteId?(_bajLotesMap[snap.loteId]||null):null})
       ok++
     }
-    if(_bajLoteIds.length) await checkLoteVacio(_bajLoteIds, fechaBaja)
+    if(_bajLoteIds.length) cerradosBajaM = await checkLoteVacio(_bajLoteIds, fechaBaja)
   }catch(e){
     console.error('Error en saveBajaSeleccionados:',e)
-    showToast('Error al guardar la baja','err',5000)
+    showToast('Error al guardar la baja: '+e.message,'err',5000)
     if(btn){btn.disabled=false;btn.textContent='Confirmar baja'}
     return
   }
@@ -2691,10 +2807,14 @@ async function saveBajaSeleccionados(){
       if(!prev) continue
       await fsUpdate('animales',prev.id,{
         activo:1, causaBaja:null, fechaBaja:null,
-        obsBaja:null, loteId:prev.loteId||null, fechaLote:prev.fechaLote||null
+        obsBaja:null, loteIdSalida:null, loteNombreSalida:null,
+        loteId:prev.loteId||null, fechaLote:prev.fechaLote||null,
+        historialLotes:prev.historialLotes
       })
     }
     for(const pid of pesajesCreados) await fsDelete('pesajes', pid)
+    await _reabrirCiclos(cerradosBajaM)
+    for(const l of new Set(snapshots.filter(a=>a&&a.loteId).map(a=>a.loteId))) await sincronizarNumAnimalesLote(l)
   })
   go('ganado')
 }
@@ -2746,7 +2866,7 @@ async function saveLoteSeleccionados(){
   const snapshots=_sheetLoteSnaps
   if(!ids.length){closeSheet();return}
   const fechaStr=$('lt-fecha')?.value
-  const fechaLote=fechaStr?new Date(fechaStr+'T00:00:00').getTime():Date.now()
+  const fechaLote=fechaStr?fromD(fechaStr):Date.now()
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   // Capturar nombre del lote y hacer updates — todo en try-catch
@@ -2825,16 +2945,19 @@ async function saveAnimal() {
     const f=$('an-ar'); if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('El arete es requerido','err'); return
   }
-  const exist=await db.animales.where('activo').equals(1).filter(a=>a.arete.trim().toLowerCase()===arete.toLowerCase()).first()
+  const exist=await db.animales.where('activo').equals(1).filter(a=>String(a.arete??'').trim().toLowerCase()===arete.toLowerCase()).first()
   if(exist){ showToast(`Ya existe el arete "${exist.arete}"`, 'err', 4000); return }
   const pesoIni=parseFloat($('an-peso')?.value)||0
   const loteId=$('an-lote')?.value?parseInt($('an-lote').value):undefined
+  const _fIng = leerFecha('an-fi', {etiqueta:'la fecha de ingreso'}); if (_fIng === null) return
+  const _fLote = loteId ? leerFecha('an-flote', {etiqueta:'la fecha de adición al lote'}) : undefined; if (_fLote === null) return
+  const _fPeso = pesoIni>0 ? leerFecha('an-fpeso', {etiqueta:'la fecha del pesaje'}) : undefined; if (_fPeso === null) return
   const anData={
     arete, nombre:$('an-nm')?.value?.trim()||'', categoria:$('an-cat')?.value||'',
     raza:$('an-rz')?.value||'', color:$('an-color')?.value?.trim()||'', descripcion:$('an-desc')?.value?.trim()||'',
-    loteId, fechaLote:loteId?fromD($('an-flote')?.value):undefined,
+    loteId, fechaLote:loteId?_fLote:undefined,
     pesoInicial:pesoIni, precioPorKg:parseFloat($('an-precio')?.value)||0,
-    fechaIngreso:fromD($('an-fi')?.value),
+    fechaIngreso:_fIng,
     procedencia:$('an-proc')?.value?.trim()||'', estadoSanitario:'SANO', activo:1,
     creadoPor:USER?.nombre||'—', creadoEn:Date.now()
   }
@@ -2844,8 +2967,8 @@ async function saveAnimal() {
   try{
     id=await fsAdd('animales',anData)
     const ahora=Date.now(), quien=USER?.nombre||'—'
-    if(pesoIni>0) pesoId=await fsAdd('pesajes',{animalId:id,fecha:fromD($('an-fpeso')?.value),pesoKg:pesoIni,metodo:'BASCULA',cc:3,obs:'Pesaje inicial',registradoPor:quien,registradoEn:ahora})
-    laborId=await fsAdd('labores',{animalId:id,fecha:fromD($('an-fpeso')?.value),tipo:$('an-lab')?.value||'PESAJE',pesoKg:pesoIni,obs:'Registro inicial',registradoPor:quien,registradoEn:ahora})
+    if(pesoIni>0) pesoId=await fsAdd('pesajes',{animalId:id,fecha:_fPeso,pesoKg:pesoIni,metodo:'BASCULA',cc:3,obs:'Pesaje inicial',registradoPor:quien,registradoEn:ahora})
+    laborId=await fsAdd('labores',{animalId:id,fecha:_fPeso,tipo:$('an-lab')?.value||'PESAJE',pesoKg:pesoIni,obs:'Registro inicial',registradoPor:quien,registradoEn:ahora})
     if(loteId) await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     console.error('saveAnimal:',e)
@@ -3112,13 +3235,15 @@ async function savePeso(animalId) {
     const f=$('ps-kg'); if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('Ingresa el peso','err'); return
   }
+  const fechaP = leerFecha('ps-f', {etiqueta:'la fecha del pesaje'}); if (fechaP === null) return
+  if (!await _pesoPlausible(animalId, kg, fechaP)) return
   const btn=document.querySelector('#ov .btn-g')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   let pid, lid
   try{
     const ahora=Date.now(), quien=USER?.nombre||'—'
-    pid=await fsAdd('pesajes',{animalId,fecha:fromD($('ps-f').value),pesoKg:kg,metodo:$('ps-met').value,cc:parseInt($('ps-cc').value),obs:$('ps-obs').value||'',registradoPor:quien,registradoEn:ahora})
-    lid=await fsAdd('labores',{animalId,fecha:fromD($('ps-f').value),tipo:'PESAJE',pesoKg:kg,obs:'Pesaje registrado',registradoPor:quien,registradoEn:ahora})
+    pid=await fsAdd('pesajes',{animalId,fecha:fechaP,pesoKg:kg,metodo:$('ps-met').value,cc:parseInt($('ps-cc').value),obs:$('ps-obs').value||'',registradoPor:quien,registradoEn:ahora})
+    lid=await fsAdd('labores',{animalId,fecha:fechaP,tipo:'PESAJE',pesoKg:kg,obs:'Pesaje registrado',registradoPor:quien,registradoEn:ahora})
   }catch(e){
     showToast('Error al guardar pesaje','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Guardar pesaje'}
@@ -3141,6 +3266,7 @@ async function openLabor(id) {
     <button class="btn btn-b" onclick="saveLabor(${id})">Guardar labor</button>`)
 }
 async function saveLabor(id) {
+  const fechaL = leerFecha('lb-f', {etiqueta:'la fecha de la labor'}); if (fechaL === null) return
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   const tipo=$('lb-tipo')?.value||''
@@ -3148,8 +3274,8 @@ async function saveLabor(id) {
   let lid, pid=null
   try{
     const ahora=Date.now(), quien=USER?.nombre||'—'
-    lid=await fsAdd('labores',{animalId:id,fecha:fromD($('lb-f')?.value),tipo,pesoKg:kg||undefined,obs:$('lb-obs')?.value.trim()||'',registradoPor:quien,registradoEn:ahora})
-    if(kg>0&&tipo==='PESAJE') pid=await fsAdd('pesajes',{animalId:id,fecha:fromD($('lb-f')?.value),pesoKg:kg,metodo:'BASCULA',cc:3,obs:'',registradoPor:quien,registradoEn:ahora})
+    lid=await fsAdd('labores',{animalId:id,fecha:fechaL,tipo,pesoKg:kg||undefined,obs:$('lb-obs')?.value.trim()||'',registradoPor:quien,registradoEn:ahora})
+    if(kg>0&&tipo==='PESAJE') pid=await fsAdd('pesajes',{animalId:id,fecha:fechaL,pesoKg:kg,metodo:'BASCULA',cc:3,obs:'',registradoPor:quien,registradoEn:ahora})
   }catch(e){
     showToast('Error al guardar labor','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Guardar labor'}
@@ -3176,21 +3302,26 @@ async function openCambiarLote(id) {
     <button class="btn btn-b" onclick="saveCambiarLote(${id})">Guardar</button>`)
 }
 async function saveCambiarLote(id) {
+  const fechaCL = leerFecha('cl-f', {etiqueta:'la fecha del cambio de lote'}); if (fechaCL === null) return
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   let prev, loteId
   try{
     prev=await db.animales.get(id)
     loteId=$('cl-lote').value?parseInt($('cl-lote').value):undefined
-    await fsUpdate('animales',id,{loteId,fechaLote:loteId?fromD($('cl-f').value):undefined})
-    if(prev&&prev.loteId&&prev.loteId!==loteId) await checkLoteVacio([prev.loteId], Date.now())
+    await fsUpdate('animales',id,{loteId,fechaLote:loteId?fechaCL:undefined})
+    if(prev&&prev.loteId&&prev.loteId!==loteId) await checkLoteVacio([prev.loteId], fechaCL)
     if(loteId) await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     showToast('Error al cambiar lote','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Guardar'}
     return
   }
-  if(prev) pushUndo('Cambio de lote', async()=>{ await fsUpdate('animales',id,{loteId:prev.loteId,fechaLote:prev.fechaLote}) })
+  if(prev) pushUndo('Cambio de lote', async()=>{
+    await fsUpdate('animales',id,{loteId:prev.loteId,fechaLote:prev.fechaLote,historialLotes:prev.historialLotes})
+    if (prev.loteId) await sincronizarNumAnimalesLote(prev.loteId)
+    if (loteId) await sincronizarNumAnimalesLote(loteId)
+  })
   closeSheet(); go('animal-ficha',{id})
 }
 
@@ -3230,8 +3361,9 @@ async function saveEditarAnimal(id) {
     const f=$('ea-ar'); if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('El arete es requerido','err'); return
   }
-  const exist = await db.animales.where('activo').equals(1).filter(a=>a.id!==id&&a.arete.trim().toLowerCase()===arete.toLowerCase()).first()
+  const exist = await db.animales.where('activo').equals(1).filter(a=>a.id!==id&&String(a.arete??'').trim().toLowerCase()===arete.toLowerCase()).first()
   if (exist) { showToast(`Ya existe el arete "${exist.arete}"`, 'err', 4000); return }
+  const fechaEA = leerFecha('ea-fi', {requerida:false, etiqueta:'la fecha de ingreso'}); if (fechaEA === null) return
   const btn = $('ea-btn')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
   let prev
@@ -3244,7 +3376,7 @@ async function saveEditarAnimal(id) {
       raza:     $('ea-rz')?.value           || '',
       color:    $('ea-color')?.value?.trim()|| '',
       descripcion: $('ea-desc')?.value?.trim() || '',
-      fechaIngreso: fromD($('ea-fi')?.value),
+      fechaIngreso: fechaEA,
       precioPorKg:  parseFloat($('ea-precio')?.value)||0,
       procedencia:  $('ea-proc')?.value?.trim() || '',
     })
@@ -3327,12 +3459,13 @@ async function saveBajaAnimal(id) {
       return
     }
   }
-  const fechaStr = $('bj1-fecha')?.value
   const obs = $('bj1-obs')?.value?.trim() || ''
-  const fechaBaja = fechaStr ? new Date(fechaStr+'T00:00:00').getTime() : Date.now()
+  const fechaBaja = leerFecha('bj1-fecha', {etiqueta:'la fecha de baja'}); if (fechaBaja === null) return
+  { const a0 = await db.animales.get(id)
+    if (a0?.fechaIngreso && fechaBaja < truncarDia(a0.fechaIngreso)) { showToast('La fecha de baja no puede ser anterior al ingreso ('+ffd(a0.fechaIngreso)+')','err',5000); return } }
   const btn = $('bj1-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
-  let prev, pesajeId
+  let prev, pesajeId, cerradosBaja = []
   try {
     prev = await db.animales.get(id)
     const _bajLoteId = prev ? prev.loteId : null
@@ -3347,9 +3480,9 @@ async function saveBajaAnimal(id) {
       loteIdSalida:_bajLoteId||null, loteNombreSalida:_bajLoteNom
     })
     trazar('BAJA_ANIMAL','ANIMAL', id, {causa, fecha:fechaBaja, pesoAlSalir:pesoNuevo||undefined})
-    if (_bajLoteId) await checkLoteVacio([_bajLoteId], fechaBaja)
+    if (_bajLoteId) cerradosBaja = await checkLoteVacio([_bajLoteId], fechaBaja)
   } catch(e) {
-    showToast('Error al dar de baja','err', 4000)
+    showToast('Error al dar de baja: '+e.message,'err', 4000)
     if (btn) { btn.disabled = false; btn.textContent = '✓ Confirmar baja' }
     return
   }
@@ -3357,9 +3490,13 @@ async function saveBajaAnimal(id) {
   pushUndo(`Baja de "${prev.arete}" revertida`, async () => {
     await fsUpdate('animales', id, {
       activo:1, causaBaja:null, fechaBaja:null, obsBaja:null,
-      loteId:prev.loteId||null, fechaLote:prev.fechaLote||null
+      loteIdSalida:null, loteNombreSalida:null,
+      loteId:prev.loteId||null, fechaLote:prev.fechaLote||null,
+      historialLotes:prev.historialLotes
     })
     if (pesajeId) await fsDelete('pesajes', pesajeId)
+    await _reabrirCiclos(cerradosBaja)
+    if (prev.loteId) await sincronizarNumAnimalesLote(prev.loteId)
   })
   go('ganado')
 }
@@ -3400,10 +3537,7 @@ async function ejecutarRevertirBaja(id) {
   try {
     prev = await db.animales.get(id)
     if (!prev) throw new Error('Animal no encontrado')
-    await fsUpdate('animales', id, {
-      activo:1, causaBaja:null, fechaBaja:null, obsBaja:null,
-      loteId:null, fechaLote:null
-    })
+    await _reactivarAnimal(prev)
     trazar('REVERTIR_BAJA','ANIMAL', id, {causaOriginal:prev.causaBaja||null, fechaBajaOriginal:prev.fechaBaja||null})
   } catch(e) {
     console.error('Error en ejecutarRevertirBaja:', e)
@@ -3785,7 +3919,7 @@ async function ejecutarQuitarBaja(){
   }
   const fechaStr=$('aq-fecha').value
   const obs=$('aq-obs').value.trim()
-  const fechaBaja=fechaStr?new Date(fechaStr+'T00:00:00').getTime():Date.now()
+  const fechaBaja=fechaStr?fromD(fechaStr):Date.now()
   const ids=_sheetQuitarIds, snapshots=_sheetQuitarSnaps
   if(!ids.length){ closeSheet(); return }
   const btn=document.querySelector('#ov .btn-r')
@@ -3880,7 +4014,7 @@ async function liberarPotrero(potreroId) {
   return obj.estado
 }
 function describirEstadoPot(obj) {
-  if (obj.estado === 'EN_DESCANSO') return 'En descanso desde el ' + (obj.fechaSalida ? new Date(obj.fechaSalida).toLocaleDateString('es-CO') : '—')
+  if (obj.estado === 'EN_DESCANSO') return 'En descanso desde el ' + (obj.fechaSalida ? new Date(obj.fechaSalida).toLocaleDateString('es-CO',{timeZone:TZ_COL}) : '—')
   return ESTADO_POT[obj.estado] || obj.estado
 }
 
@@ -4026,46 +4160,106 @@ async function eliminarLote(id){
 // PRODUCTIVIDAD kg/ha
 // ═══════════════════════════════════════════════════
 
-// Estima el peso de un animal en una fecha dada, usando sus pesajes ordenados
-function _pesoEnFecha(ps, fecha, pesoInicial) {
-  const antes = ps.filter(p => p.fecha <= fecha)
-  if (antes.length) return antes[antes.length-1].pesoKg
-  return ps.length ? ps[0].pesoKg : (pesoInicial||0)
+// ═══ MOTOR DE PRODUCTIVIDAD POR CICLO (20260923) ═══════════════════════════
+// Antes: usaba los animales que están HOY en el lote (ignoraba vendidos/muertos
+// y sumaba a los que llegaron después), el peso "en escalón" del último pesaje
+// y, si el lote estaba en varios potreros a la vez, contaba su ganancia completa
+// en cada uno. Ahora:
+//  · Qué animales había: historial de lotes de cada animal (desde/hasta).
+//  · Peso en cualquier fecha: interpolación lineal entre pesajes (el peso de
+//    ingreso y el de venta cuentan como pesajes).
+//  · Lote dividido en varios potreros: la ganancia se reparte por área.
+//  · Muertes dentro del ciclo: restan el último peso reportado (criterio finca).
+
+function _ptsPesoAnimal(a, pesajes) {
+  const pts = (pesajes||[]).filter(p=>p.pesoKg>0 && Number.isFinite(p.fecha)).map(p=>({t:p.fecha,w:p.pesoKg}))
+  if (a.pesoInicial>0 && a.fechaIngreso && !pts.some(p=>Math.abs(p.t-a.fechaIngreso)<DIA_MS_COL)) pts.push({t:a.fechaIngreso,w:a.pesoInicial})
+  if (a.causaBaja==='Venta' && a.pesoVenta>0 && a.fechaBaja && !pts.some(p=>Math.abs(p.t-a.fechaBaja)<DIA_MS_COL)) pts.push({t:a.fechaBaja,w:a.pesoVenta})
+  return pts.sort((x,y)=>x.t-y.t)
+}
+function _pesoInterp(pts, t) {
+  if (!pts.length) return null
+  if (t <= pts[0].t) return pts[0].w
+  const u = pts[pts.length-1]
+  if (t >= u.t) return u.w
+  for (let i=1;i<pts.length;i++) if (t <= pts[i].t) { const p0=pts[i-1], p1=pts[i]; return p0.w + (p1.w-p0.w)*(t-p0.t)/(p1.t-p0.t) }
+  return u.w
+}
+function _histLotesDe(a) {
+  const h = Array.isArray(a.historialLotes) && a.historialLotes.length ? a.historialLotes : _histLotesReconstruido(a)
+  // Un animal dado de baja no puede seguir en un lote después de su fecha de baja
+  return h.map(x => ({...x, hasta: (x.hasta ?? (a.activo===1 ? null : (a.fechaBaja||null)))}))
+}
+
+async function _ctxProd() {
+  const [animales, pesajes, ciclos, potreros] = await Promise.all([
+    db.animales.toArray(), db.pesajes.orderBy('fecha').toArray(), db.ciclos.toArray(), db.potreros.toArray()
+  ])
+  const psPor = {}; for (const p of pesajes) (psPor[p.animalId] ||= []).push(p)
+  const porLote = {}   // loteId → [{a, pts, h}]
+  for (const a of animales) {
+    const hs = _histLotesDe(a); if (!hs.length) continue
+    const pts = _ptsPesoAnimal(a, psPor[a.id])
+    for (const h of hs) (porLote[h.loteId] ||= []).push({a, pts, h})
+  }
+  const ciclosPorLote = {}
+  for (const c of ciclos) if (c.fechaEntrada) (ciclosPorLote[c.loteId] ||= []).push(c)
+  return { porLote, ciclosPorLote, potMap: Object.fromEntries(potreros.map(p=>[p.id,p])), ciclos }
+}
+
+function _prodCiclo(c, desde, hasta, ctx) {
+  const pot = ctx.potMap[c.potreroId]
+  if (!pot?.areaHa || !c.fechaEntrada) return null
+  const ahora = Date.now()
+  const E = c.fechaEntrada, S = c.fechaSalida || ahora
+  const I = Math.max(E, desde ?? -Infinity), F = Math.min(S, hasta ?? Infinity)
+  if (!(F > I)) return null
+  // Otros ciclos simultáneos del mismo lote (lote dividido en varios potreros)
+  const otros = (ctx.ciclosPorLote[c.loteId]||[]).filter(o => o.id!==c.id && o.fechaEntrada < F && (o.fechaSalida||ahora) > I)
+  const cortes = [...new Set([I, F, ...otros.flatMap(o=>[o.fechaEntrada, o.fechaSalida||ahora]).filter(t=>t>I && t<F)])].sort((x,y)=>x-y)
+  const miembros = ctx.porLote[c.loteId] || []
+  let gan = 0, muertosKg = 0, nMuertes = 0
+  const presentes = new Set()
+  // Muertes ocurridas en este ciclo mientras el animal estaba en el lote: su
+  // ganancia no suma y se resta su último peso reportado (una sola vez).
+  const murioEnCiclo = m => m.a.causaBaja==='Muerte' && m.a.fechaBaja &&
+    m.a.fechaBaja >= I - DIA_MS_COL && m.a.fechaBaja <= F + DIA_MS_COL &&
+    (m.h.desde||0) <= m.a.fechaBaja + DIA_MS_COL && (m.h.hasta ?? Infinity) >= m.a.fechaBaja - DIA_MS_COL
+  const shareEn = t => { const ao = otros.filter(o=>o.fechaEntrada<=t && (o.fechaSalida||ahora)>t).reduce((s,o)=>s+(ctx.potMap[o.potreroId]?.areaHa||0),0); return pot.areaHa/(pot.areaHa+ao) }
+  const muertosVistos = new Set()
+  for (const m of miembros) {
+    if (!m.pts.length || muertosVistos.has(m.a.id) || !murioEnCiclo(m)) continue
+    muertosVistos.add(m.a.id); presentes.add(m.a.id)
+    const prev = m.pts.filter(p=>p.t<=m.a.fechaBaja+DIA_MS_COL)
+    muertosKg += shareEn(Math.min(Math.max(m.a.fechaBaja, I), F - 1)) * (prev.length ? prev[prev.length-1].w : m.pts[0].w)
+    nMuertes++
+  }
+  for (let k=0; k<cortes.length-1; k++) {
+    const t0 = cortes[k], t1 = cortes[k+1]
+    const areaOtros = otros.filter(o => o.fechaEntrada <= t0 && (o.fechaSalida||ahora) >= t1).reduce((s,o)=>s+(ctx.potMap[o.potreroId]?.areaHa||0),0)
+    const share = pot.areaHa / (pot.areaHa + areaOtros)
+    for (const {a, pts, h} of miembros) {
+      if (!pts.length || muertosVistos.has(a.id)) continue
+      const ta = Math.max(t0, h.desde||0), tb = Math.min(t1, h.hasta ?? Infinity)
+      if (!(tb > ta)) continue
+      presentes.add(a.id)
+      gan += share * (_pesoInterp(pts,tb) - _pesoInterp(pts,ta))
+    }
+  }
+  const enFecha = t => { let s=0; for (const {a,pts,h} of miembros) { if (pts.length && (h.desde||0) <= t && (h.hasta ?? Infinity) >= t && !(a.causaBaja==='Muerte' && a.fechaBaja && a.fechaBaja<=t)) s += _pesoInterp(pts,t) } return s }
+  const shareIni = shareEn(I)
+  const pE = enFecha(I) * shareIni, pS = enFecha(F) * shareIni
+  const neta = gan - muertosKg
+  const dias = Math.max(1, Math.round((F - I)/DIA_MS_COL))
+  return { pot, ciclo:c, dias, nAni:presentes.size, pE, pS, gan:neta, ganBruta:gan, muertosKg, nMuertes,
+    kgHa: neta/pot.areaHa, kgHaDia: neta/pot.areaHa/dias, carga: (pE/450)/pot.areaHa, activo: c.activo===1 }
 }
 
 // Calcula métricas por ciclo para un lote
 async function calcProdLote(loteId, desde=null, hasta=null) {
-  const ciclos = (await db.ciclos.where('loteId').equals(loteId).sortBy('fechaEntrada')).filter(c=>c.fechaEntrada)
-  if (!ciclos.length) return []
-  const animales = await db.animales.where({activo:1,loteId}).toArray()
-  if (!animales.length) return []
-  const psMap = {}
-  for (const a of animales) psMap[a.id] = await db.pesajes.where('animalId').equals(a.id).sortBy('fecha')
-  const results = []
-  for (const ciclo of ciclos) {
-    const pot = await db.potreros.get(ciclo.potreroId)
-    if (!pot?.areaHa) continue
-    const cFin = ciclo.fechaSalida || Date.now()
-    // Filtrar ciclos fuera del rango
-    if (desde && cFin < desde) continue
-    if (hasta && ciclo.fechaEntrada > hasta) continue
-    // Recortar al rango seleccionado
-    const fechaI = desde ? Math.max(ciclo.fechaEntrada, desde) : ciclo.fechaEntrada
-    const fechaF = hasta ? Math.min(cFin, hasta) : cFin
-    const dias = Math.max(1, Math.round((fechaF - fechaI)/86400000))
-    let pE=0, pS=0
-    for (const a of animales) {
-      const ps = psMap[a.id]||[]
-      pE += _pesoEnFecha(ps, fechaI, a.pesoInicial)
-      pS += _pesoEnFecha(ps, fechaF, a.pesoInicial)
-    }
-    const gan = pS - pE
-    const kgHa   = pot.areaHa > 0 ? gan / pot.areaHa : 0
-    const kgHaDia = pot.areaHa > 0 && dias > 0 ? gan / pot.areaHa / dias : 0
-    const carga   = pot.areaHa > 0 ? (pE/450) / pot.areaHa : 0
-    results.push({pot, ciclo, dias, nAni:animales.length, pE, pS, gan, kgHa, kgHaDia, carga, activo:ciclo.activo===1})
-  }
-  return results
+  const ctx = await _ctxProd()
+  const ciclos = (ctx.ciclosPorLote[loteId]||[]).slice().sort((a,b)=>a.fechaEntrada-b.fechaEntrada)
+  return ciclos.map(c => _prodCiclo(c, desde, hasta, ctx)).filter(Boolean)
 }
 
 function _colKgHa(v) { return v>=10?'#2E7D32':v>=5?'#E65100':v>=0?'#888':'#C62828' }
@@ -4118,7 +4312,7 @@ function _prodLoteResHTML(metrics) {
       + _kpiProd('kg/ha',m.kgHa.toFixed(1),cKg)
       + '</div>'
       + '<div style="margin-top:6px;display:flex;align-items:center;justify-content:space-between">'
-      + '<span class="xs gray">Ganancia del lote</span>'
+      + '<span class="xs gray">Ganancia del lote'+(m.nMuertes?' · 🔴 '+m.nMuertes+' muerte(s) −'+Math.round(m.muertosKg)+' kg':'')+' · '+m.nAni+' anim.</span>'
       + '<span style="font-weight:700;font-size:.9rem;color:'+cGan+'">'+(m.gan>=0?'+':'')+m.gan.toFixed(1)+' kg</span>'
       + '</div></div>'
   }
@@ -4225,36 +4419,16 @@ async function calcProdRotacion(rotacionId, desde=null, hasta=null) {
   if (!rot) return null
   const pids = rot.potreroIds||[]
   if (!pids.length) return null
-  const pots = await db.potreros.where('activo').equals(1).toArray()
-  const potMap = Object.fromEntries(pots.map(p=>[p.id,p]))
-  const areaTotal = pids.reduce((s,pid)=>s+(potMap[pid]?.areaHa||0), 0)
+  const ctx = await _ctxProd()
+  const areaTotal = pids.reduce((s,pid)=>s+(ctx.potMap[pid]?.activo===1 ? (ctx.potMap[pid]?.areaHa||0) : 0), 0)
   const stats = []
   let ganTotal = 0
   for (const pid of pids) {
-    const pot = potMap[pid]; if(!pot?.areaHa) continue
-    const ciclos = (await db.ciclos.where('potreroId').equals(pid).toArray()).filter(c=>c.fechaEntrada)
-    let kgHaSum=0, ciclosVal=0, ganPot=0
-    for (const ciclo of ciclos) {
-      const cFin = ciclo.fechaSalida||Date.now()
-      if (desde && cFin < desde) continue
-      if (hasta && ciclo.fechaEntrada > hasta) continue
-      const fechaI = desde ? Math.max(ciclo.fechaEntrada, desde) : ciclo.fechaEntrada
-      const fechaF = hasta ? Math.min(cFin, hasta) : cFin
-      const anis = await db.animales.where({activo:1,loteId:ciclo.loteId}).toArray()
-      if (!anis.length) continue
-      let pE=0, pS=0
-      for (const a of anis) {
-        const ps = await db.pesajes.where('animalId').equals(a.id).sortBy('fecha')
-        pE += _pesoEnFecha(ps, fechaI, a.pesoInicial)
-        pS += _pesoEnFecha(ps, fechaF, a.pesoInicial)
-      }
-      const gan = pS-pE
-      kgHaSum += pot.areaHa>0 ? gan/pot.areaHa : 0
-      ganPot  += gan
-      ganTotal+= gan
-      ciclosVal++
-    }
-    stats.push({pot, ciclosVal, kgHaProm: ciclosVal>0?kgHaSum/ciclosVal:null, ganPot})
+    const pot = ctx.potMap[pid]; if (!pot?.areaHa || pot.activo!==1) continue
+    const ms = ctx.ciclos.filter(c=>c.potreroId===pid && c.fechaEntrada).map(c=>_prodCiclo(c, desde, hasta, ctx)).filter(Boolean)
+    const ganPot = ms.reduce((s,m)=>s+m.gan,0)
+    ganTotal += ganPot
+    stats.push({pot, ciclosVal:ms.length, kgHaProm: ms.length ? ms.reduce((s,m)=>s+m.kgHa,0)/ms.length : null, ganPot})
   }
   return {stats, ganTotal, areaTotal, kgHaTotal: areaTotal>0?ganTotal/areaTotal:0}
 }
@@ -4672,7 +4846,7 @@ async function saveLaborLoteFicha() {
   const loteId = parseInt(document.getElementById('sl-lote-id')?.value)
   const fechaStr = document.getElementById('sl-fecha')?.value
   if (!fechaStr) { showToast('Selecciona la fecha','err'); return }
-  const fecha = new Date(fechaStr+'T00:00:00').getTime()
+  const fecha = fromD(fechaStr)
   const prod  = document.getElementById('sl-prod')?.value?.trim() || ''
   const dosis = document.getElementById('sl-dosis')?.value?.trim() || ''
   const obs   = document.getElementById('sl-obs')?.value?.trim() || ''
@@ -4736,12 +4910,13 @@ async function saveIngresarLote(loteId) {
     const f=$('il-pot');if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('Selecciona un potrero','err');return
   }
+  const fecha=leerFecha('il-f',{etiqueta:'la fecha de ingreso'}); if(fecha===null) return
+  if(!await _validarFechaMovimiento(loteId, fecha)) return
   const btn=document.querySelector('#ov .btn-g')
   if(btn){btn.disabled=true;btn.textContent='Ingresando…'}
   try{
     const lote=await db.lotes.get(loteId)
     const animales=await db.animales.where({activo:1,loteId}).toArray()
-    const fecha=fromD($('il-f').value)
     // Barrida defensiva: por si el lote ya tenía un ciclo activo huérfano en otro
     // potrero (estado desincronizado), lo cierra antes de abrir uno nuevo.
     await cerrarCiclosActivosLote(loteId, fecha)
@@ -4755,12 +4930,12 @@ async function saveIngresarLote(loteId) {
   }
   closeSheet(); go('lote-ficha',{id:loteId})
 }
+// 20260923: antes este botón (ficha del lote) sacaba el lote con la hora actual sin
+// preguntar la fecha real de salida — la misma causa del error de días en descanso.
+// Ahora abre la misma ventana de salida que la ficha del potrero, con su fecha.
+let _salidaVolverLote = null
 async function sacarLoteDelPotrero(loteId,cicloId,potreroId) {
-  if(!await showConfirm('¿Confirmar salida del lote del potrero?')) return
-  const dias=diasDesde((await db.ciclos.get(cicloId)).fechaEntrada)
-  await fsUpdate('ciclos',cicloId,{activo:0,fechaSalida:Date.now(),diasOcupacion:dias})
-  await fsUpdate('potreros',potreroId,{estado:'EN_DESCANSO',numAnimales:0,loteActual:null,fechaSalida:Date.now()})
-  go('lote-ficha',{id:loteId})
+  await confirmarSalidaPotrero(potreroId, cicloId, loteId)
 }
 
 async function openCambiarPotrero(loteId) {
@@ -4866,10 +5041,11 @@ function cpLimpiarBusqueda() {
 async function saveCambiarPotrero(loteId) {
   const selIds = [...(window._cpSelIds||new Set())]
   if (!selIds.length) { const lista=$('cp-lista');if(lista){lista.style.border='2px solid #C62828'};showToast('Selecciona al menos un potrero','err'); return }
-  const fecha = fromD($('cp-f').value) || Date.now()
+  const fecha = leerFecha('cp-f',{etiqueta:'la fecha de rotación'}); if (fecha === null) return
   const ciclosActuales = await db.ciclos.where({loteId,activo:1}).toArray()
   const idsActuales = new Set(ciclosActuales.map(c=>c.potreroId))
   const aLiberar = ciclosActuales.filter(c=>!selIds.includes(c.potreroId))
+  if (!await _validarFechaMovimiento(loteId, fecha, aLiberar.map(c=>c.potreroId))) return
   const aAbrir = selIds.filter(pid=>!idsActuales.has(pid))
   const potsDestino = (await Promise.all(selIds.map(pid=>db.potreros.get(pid)))).filter(Boolean)
   const nombresDestino = potsDestino.map(p=>p.nombre).join(', ')
@@ -4882,7 +5058,7 @@ async function saveCambiarPotrero(loteId) {
     const animales = await db.animales.where({activo:1,loteId}).toArray()
     // Cerrar solo los potreros que el lote deja de ocupar
     for (const c of aLiberar) {
-      const dias = diasDesde(c.fechaEntrada)
+      const dias = diasEntre(c.fechaEntrada, fecha)  // hasta la fecha de la rotación, no hasta hoy
       await fsUpdate('ciclos', c.id, {activo:0, fechaSalida:fecha, diasOcupacion:dias})
       await fsUpdate('potreros', c.potreroId, {estado:'EN_DESCANSO', numAnimales:0, loteActual:null, fechaSalida:fecha})
     }
@@ -5573,7 +5749,8 @@ async function openAvanzarRotacion(loteId) {
 }
 
 async function saveAvanzarRotacion(loteId, idxAct, idxSig, potIdAct, potIdSig) {
-  const fecha = $('av-f')?.value ? fromD($('av-f').value) : Date.now()
+  const fecha = leerFecha('av-f',{etiqueta:'la fecha de movimiento'}); if (fecha === null) return
+  if (!await _validarFechaMovimiento(loteId, fecha)) return
   const btn=$('av-btn'); if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   try {
     // Cerrar TODOS los ciclos activos del lote (evita huérfanos si el ciclo
@@ -5586,7 +5763,7 @@ async function saveAvanzarRotacion(loteId, idxAct, idxSig, potIdAct, potIdSig) {
     await fsUpdate('potreros',potIdSig,{estado:'OCUPADO',numAnimales:anis.length,loteActual:loteId,fechaEntrada:fecha,fechaSalida:undefined})
     await fsUpdate('lotes',loteId,{rotacionIdx:idxSig})
   } catch(e) {
-    showToast('Error al avanzar','err',4000)
+    showToast('Error al avanzar: '+e.message,'err',4000)
     if(btn){btn.disabled=false;btn.textContent='✓ Avanzar'}
     return
   }
@@ -6065,7 +6242,7 @@ function repararFechaIngreso(potreroId, cicloId) {
 async function guardarFechaIngreso(potreroId, cicloId) {
   const fechaStr = $('rfi-fecha')?.value
   if (!fechaStr) { showToast('Selecciona una fecha','err'); return }
-  const ts = new Date(fechaStr+'T00:00:00').getTime()
+  const ts = fromD(fechaStr)
   const btn = document.querySelector('#ov .btn-b')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
   try {
@@ -6126,7 +6303,7 @@ function openNuevaLaborPotrero(potreroId) {
       </div>
       <div class="field">
         <label>Fecha fin</label>
-        <input id="lp-fecha-fin" class="inp" type="date">
+        <input id="lp-fecha-fin" class="inp" type="date" data-futura="1">
       </div>
     </div>
     <div class="field">
@@ -6166,9 +6343,9 @@ async function saveNuevaLaborPotrero(potreroId) {
   }
   const fechaIniStr = $('lp-fecha-ini')?.value
   if (!fechaIniStr) { showToast('Selecciona la fecha de inicio','err'); return }
-  const fecha = new Date(fechaIniStr+'T00:00:00').getTime()
+  const fecha = fromD(fechaIniStr)
   const fechaFinStr = $('lp-fecha-fin')?.value
-  const fechaFin = fechaFinStr ? new Date(fechaFinStr+'T00:00:00').getTime() : null
+  const fechaFin = fechaFinStr ? fromD(fechaFinStr) : null
   const jornales = parseInt($('lp-jornales')?.value) || 0
   const productos = $('lp-productos')?.value?.trim() || ''
   const volumen   = parseFloat(String($('lp-volumen')?.value||'').replace(',','.')) || null
@@ -6222,7 +6399,7 @@ async function openEditarLaborPotrero(laborId, potreroId) {
       <div class="field"><label>Fecha inicio *</label>
         <input id="lp-fecha-ini" class="inp" type="date" value="${toDateStr(l.fecha)}"></div>
       <div class="field"><label>Fecha fin</label>
-        <input id="lp-fecha-fin" class="inp" type="date" value="${toDateStr(l.fechaFin)}"></div>
+        <input id="lp-fecha-fin" class="inp" type="date" data-futura="1" value="${toDateStr(l.fechaFin)}"></div>
     </div>
     <div class="field"><label>Jornales</label>
       <input id="lp-jornales" class="inp" type="text" inputmode="numeric" value="${l.jornales||0}"></div>
@@ -6243,9 +6420,9 @@ async function saveEditarLaborPotrero(laborId, potreroId) {
   if (!tipo) { showToast('Selecciona el tipo de labor','err'); return }
   const fechaIniStr = $('lp-fecha-ini')?.value
   if (!fechaIniStr) { showToast('Selecciona la fecha de inicio','err'); return }
-  const fecha = new Date(fechaIniStr+'T00:00:00').getTime()
+  const fecha = fromD(fechaIniStr)
   const fechaFinStr = $('lp-fecha-fin')?.value
-  const fechaFin = fechaFinStr ? new Date(fechaFinStr+'T00:00:00').getTime() : null
+  const fechaFin = fechaFinStr ? fromD(fechaFinStr) : null
   const jornales = parseInt($('lp-jornales')?.value) || 0
   const productos = $('lp-productos')?.value?.trim() || ''
   const volumen   = parseFloat(String($('lp-volumen')?.value||'').replace(',','.')) || null
@@ -6332,6 +6509,8 @@ async function saveIngresarLoteAPotrero(potreroId) {
     const f=$('il2-lote');if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('Selecciona un lote','err');return
   }
+  const fechaIngreso=leerFecha('il2-f',{etiqueta:'la fecha de ingreso'}); if(fechaIngreso===null) return
+  if(!await _validarFechaMovimiento(loteId, fechaIngreso)) return
   const btn=document.querySelector('#ov .btn-g')
   if(btn){btn.disabled=true;btn.textContent='Ingresando…'}
   let cicloId, loteNombre
@@ -6339,7 +6518,6 @@ async function saveIngresarLoteAPotrero(potreroId) {
     const lote=await db.lotes.get(loteId)
     loteNombre=lote.nombre
     const animales=await db.animales.where({activo:1,loteId}).toArray()
-    const fechaIngreso=fromD($('il2-f').value)
     // Barrida defensiva: por si el lote ya tenía un ciclo activo huérfano en otro
     // potrero (estado desincronizado), lo cierra antes de abrir uno nuevo.
     await cerrarCiclosActivosLote(loteId, fechaIngreso)
@@ -6358,7 +6536,8 @@ async function saveIngresarLoteAPotrero(potreroId) {
   })
   closeSheet(); go('potrero-ficha',{id:potreroId})
 }
-async function confirmarSalidaPotrero(potreroId, cicloId) {
+async function confirmarSalidaPotrero(potreroId, cicloId, volverALote=null) {
+  _salidaVolverLote = volverALote
   if (!cicloId) return
   const ciclo = await db.ciclos.get(cicloId)
   if (!ciclo) return
@@ -6402,7 +6581,7 @@ async function confirmarSalidaPotrero(potreroId, cicloId) {
       <button class="btn btn-r" onclick="ejecutarSalidaPotrero(${potreroId},${cicloId})">Confirmar salida sin mover</button>
     </div>
 
-    <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>`)
+    <button class="btn btn-gray" onclick="_salidaVolverLote=null;closeSheet()">Cancelar</button>`)
 }
 
 function filtrarPotMover(q) {
@@ -6415,8 +6594,8 @@ function filtrarPotMover(q) {
 
 async function sacarYMover(potreroId, cicloId, nuevoPotId) {
   const ciclo = await db.ciclos.get(cicloId)
-  const fechaVal = $('sp-fecha')?.value
-  const ahora = fechaVal ? fromD(fechaVal) : Date.now()
+  const ahora = leerFecha('sp-fecha', {etiqueta:'la fecha de salida'})
+  if (ahora === null) return
   if (ahora < ciclo.fechaEntrada) { showToast('La fecha de salida no puede ser anterior a la de entrada ('+toD(ciclo.fechaEntrada)+')','err',5000); return }
   const dias  = diasEntre(ciclo.fechaEntrada, ahora)
   closeSheet()
@@ -6444,13 +6623,14 @@ async function sacarYMover(potreroId, cicloId, nuevoPotId) {
     if (nuevoCicloId) await fsDelete('ciclos', nuevoCicloId)
     await liberarPotrero(nuevoPotId)
   })
-  go('potrero-ficha', {id:nuevoPotId})
+  if (_salidaVolverLote) { const l=_salidaVolverLote; _salidaVolverLote=null; go('lote-ficha',{id:l}) }
+  else go('potrero-ficha', {id:nuevoPotId})
 }
 
 async function ejecutarSalidaPotrero(potreroId, cicloId) {
   const ciclo = await db.ciclos.get(cicloId)
-  const fechaVal = $('sp-fecha')?.value
-  const ahora = fechaVal ? fromD(fechaVal) : Date.now()
+  const ahora = leerFecha('sp-fecha', {etiqueta:'la fecha de salida'})
+  if (ahora === null) return
   if (ahora < ciclo.fechaEntrada) { showToast('La fecha de salida no puede ser anterior a la de entrada ('+toD(ciclo.fechaEntrada)+')','err',5000); return }
   const dias  = diasEntre(ciclo.fechaEntrada, ahora)
   closeSheet()
@@ -6464,7 +6644,8 @@ async function ejecutarSalidaPotrero(potreroId, cicloId) {
     await fsUpdate('ciclos', cicloId, {activo:1, fechaSalida:undefined, diasOcupacion:undefined})
     await fsUpdate('potreros', potreroId, {estado:'OCUPADO', numAnimales:ciclo.numAnimales, loteActual:ciclo.loteId, fechaSalida:undefined})
   })
-  go('potrero-ficha', {id:potreroId})
+  if (_salidaVolverLote) { const l=_salidaVolverLote; _salidaVolverLote=null; go('lote-ficha',{id:l}) }
+  else go('potrero-ficha', {id:potreroId})
 }
 async function cambiarEstadoPotrero(id) {
   showSheet(`<div class="sh-title">Cambiar estado<button class="sh-x" onclick="closeSheet()">✕</button></div>
@@ -6495,14 +6676,14 @@ async function pgVentas() {
   const modo = _seg['ven_modo'] || 'mes'
   const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
   const fmt = v => '$'+Math.round(v).toLocaleString('es-CO')
-  const fd  = ts => { const d=new Date(ts); return d.getDate()+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear() }
-  const now = new Date()
+  const fd  = ts => { const d=DC(ts); return d.getUTCDate()+'/'+('0'+(d.getUTCMonth()+1)).slice(-2)+'/'+d.getUTCFullYear() }
+  const now = DC()
 
   // Selector de período
-  const selMes   = _seg['ven_mes']  ?? now.getMonth()
-  const selAnio  = _seg['ven_anio'] ?? now.getFullYear()
+  const selMes   = _seg['ven_mes']  ?? now.getUTCMonth()
+  const selAnio  = _seg['ven_anio'] ?? now.getUTCFullYear()
   const anios    = []
-  for (let y=now.getFullYear(); y>=now.getFullYear()-5; y--) anios.push(y)
+  for (let y=now.getUTCFullYear(); y>=now.getUTCFullYear()-5; y--) anios.push(y)
 
   const segModo = `<div class="seg mb10">
     <button class="${modo==='mes'?'on':''}"  onclick="_seg['ven_modo']='mes';go('ventas')">Mes</button>
@@ -6532,9 +6713,9 @@ async function pgVentas() {
   const todos = (await db.animales.where('activo').equals(0).toArray()).filter(a => a.causaBaja === 'Venta')
   const filtrados = todos.filter(a => {
     if (!a.fechaBaja) return modo === 'todo'
-    const d = new Date(a.fechaBaja)
-    if (modo === 'mes')  return d.getMonth()===selMes && d.getFullYear()===selAnio
-    if (modo === 'anio') return d.getFullYear()===selAnio
+    const d = DC(a.fechaBaja)
+    if (modo === 'mes')  return d.getUTCMonth()===selMes && d.getUTCFullYear()===selAnio
+    if (modo === 'anio') return d.getUTCFullYear()===selAnio
     return true
   })
   filtrados.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
@@ -6780,11 +6961,11 @@ async function vtConfElim() {
 async function _pgCesiones() {
   const modo = _seg['ven_modo'] || 'mes'
   const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-  const fd  = ts => { const d=new Date(ts); return d.getDate()+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear() }
-  const now = new Date()
-  const selMes  = _seg['ven_mes']  ?? now.getMonth()
-  const selAnio = _seg['ven_anio'] ?? now.getFullYear()
-  const anios = []; for (let y=now.getFullYear(); y>=now.getFullYear()-5; y--) anios.push(y)
+  const fd  = ts => { const d=DC(ts); return d.getUTCDate()+'/'+('0'+(d.getUTCMonth()+1)).slice(-2)+'/'+d.getUTCFullYear() }
+  const now = DC()
+  const selMes  = _seg['ven_mes']  ?? now.getUTCMonth()
+  const selAnio = _seg['ven_anio'] ?? now.getUTCFullYear()
+  const anios = []; for (let y=now.getUTCFullYear(); y>=now.getUTCFullYear()-5; y--) anios.push(y)
 
   const segModo = `<div class="seg mb10">
     <button class="${modo==='mes'?'on':''}"  onclick="_seg['ven_modo']='mes';go('ventas')">Mes</button>
@@ -6813,9 +6994,9 @@ async function _pgCesiones() {
   const todos = (await db.animales.where('activo').equals(0).toArray()).filter(a => a.causaBaja === 'Cesión')
   const filtrados = todos.filter(a => {
     if (!a.fechaBaja) return modo === 'todo'
-    const d = new Date(a.fechaBaja)
-    if (modo === 'mes')  return d.getMonth()===selMes && d.getFullYear()===selAnio
-    if (modo === 'anio') return d.getFullYear()===selAnio
+    const d = DC(a.fechaBaja)
+    if (modo === 'mes')  return d.getUTCMonth()===selMes && d.getUTCFullYear()===selAnio
+    if (modo === 'anio') return d.getUTCFullYear()===selAnio
     return true
   })
   filtrados.sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
@@ -6864,7 +7045,7 @@ async function _pgCesiones() {
 async function openDetalleVenta(id) {
   const a = await db.animales.get(id)
   if (!a) return
-  const fd2 = ts => { if(!ts) return '—'; const d=new Date(ts); return d.getDate()+' de '+['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][d.getMonth()]+' '+d.getFullYear() }
+  const fd2 = ts => { if(!ts) return '—'; const d=DC(ts); return d.getUTCDate()+' de '+['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][d.getUTCMonth()]+' '+d.getUTCFullYear() }
   const fmt2 = v => '$'+Math.round(v).toLocaleString('es-CO')
   const pesoE = a.pesoInicial||0, pesoS = a.pesoVenta||0
   const ganP  = pesoS && pesoE ? pesoS - pesoE : null
@@ -7212,7 +7393,7 @@ function rvFiltrar() {
     return
   }
   _rvFiltrados = _rvAnimales.filter(a =>
-    a.arete.toLowerCase().includes(q) ||
+    String(a.arete??"").toLowerCase().includes(q) ||
     (a.nombre||'').toLowerCase().includes(q) ||
     a._loteNom.toLowerCase().includes(q)
   ).slice(0, 60)
@@ -7484,6 +7665,15 @@ function rvUpdResumen() {
 // solo "uno cualquiera" con .first() y dejar el resto colgado.
 // excluirPotreroId: opcional — si se pasa, no toca el ciclo de ese potrero
 // (útil cuando ese ciclo se maneja aparte, p.ej. para actualizarlo en vez de cerrarlo).
+// Un lote no puede salir de un potrero antes de haber entrado: valida la fecha de
+// un movimiento contra la entrada de los ciclos activos que se van a cerrar.
+async function _validarFechaMovimiento(loteId, fecha, soloPotreros=null) {
+  if (!Number.isFinite(fecha)) { showToast('Fecha inválida','err'); return false }
+  const act = (await db.ciclos.where({loteId, activo:1}).toArray()).filter(c => !soloPotreros || soloPotreros.includes(c.potreroId))
+  const maxEnt = Math.max(0, ...act.map(c => truncarDia(c.fechaEntrada||0)))
+  if (fecha < maxEnt) { showToast('La fecha no puede ser anterior a la entrada actual del lote ('+ffd(maxEnt)+')','err',5000); return false }
+  return true
+}
 async function cerrarCiclosActivosLote(loteId, fechaTs, excluirPotreroId) {
   if (!loteId) return []
   const fecha = fechaTs || Date.now()
@@ -7491,7 +7681,7 @@ async function cerrarCiclosActivosLote(loteId, fechaTs, excluirPotreroId) {
   const cerrados = []
   for (const c of activos) {
     if (excluirPotreroId && c.potreroId === excluirPotreroId) continue
-    await fsUpdate('ciclos', c.id, { activo: 0, fechaSalida: fecha })
+    await fsUpdate('ciclos', c.id, { activo: 0, fechaSalida: fecha, diasOcupacion: diasEntre(c.fechaEntrada||fecha, fecha) })
     cerrados.push(c)
     // Blindaje: este ciclo puede ser un huérfano antiguo (p.ej. de antes de
     // esta corrección) que coexistía con una ocupación real y posterior del
@@ -7542,7 +7732,7 @@ async function ejecutarVerificacionIntegridad() {
       hallazgosI.push({
         potrero: p.nombre, lote: lotesMapI[ultimoReal.loteId] || '',
         tipo: 'Debería estar EN DESCANSO',
-        detalle: `Figura Disponible pero tiene historial; última salida ${ultimoReal.fechaSalida ? new Date(ultimoReal.fechaSalida).toLocaleDateString('es-CO') : '—'}`
+        detalle: `Figura Disponible pero tiene historial; última salida ${ultimoReal.fechaSalida ? new Date(ultimoReal.fechaSalida).toLocaleDateString('es-CO',{timeZone:TZ_COL}) : '—'}`
       })
     }
     if (p.estado === 'OCUPADO' && !ciclosDeEste.some(c => c.activo === 1)) {
@@ -7558,7 +7748,7 @@ async function ejecutarVerificacionIntegridad() {
         hallazgosI.push({
           potrero: p.nombre, lote: lotesMapI[ultimoReal.loteId] || '',
           tipo: 'Fecha de descanso no coincide con el historial',
-          detalle: `Muestra desde ${p.fechaSalida ? new Date(p.fechaSalida).toLocaleDateString('es-CO') : '—'}, el historial indica ${new Date(ultimoReal.fechaSalida).toLocaleDateString('es-CO')}`
+          detalle: `Muestra desde ${p.fechaSalida ? new Date(p.fechaSalida).toLocaleDateString('es-CO',{timeZone:TZ_COL}) : '—'}, el historial indica ${new Date(ultimoReal.fechaSalida).toLocaleDateString('es-CO',{timeZone:TZ_COL})}`
         })
       }
     }
@@ -7765,17 +7955,51 @@ async function sincronizarNumAnimalesLote(loteId) {
 // Auto-descanso: lote vacío → potrero EN_DESCANSO
 async function checkLoteVacio(loteIds, fechaTs) {
   const ids = [...new Set(loteIds.filter(Boolean))]
+  const todosCerrados = []
   for (const loteId of ids) {
     const restantes = await db.animales.where({ activo: 1, loteId }).count()
     if (restantes > 0) { await sincronizarNumAnimalesLote(loteId); continue }
     const cerrados = await cerrarCiclosActivosLote(loteId, fechaTs)
     if (!cerrados.length) continue
+    todosCerrados.push(...cerrados)
     for (const ciclo of cerrados) {
       const potrero = await db.potreros.get(ciclo.potreroId)
       const nomPot = potrero ? potrero.nombre : 'potrero'
       showToast('🌿 ' + nomPot + ' pasó a descanso (lote vacío)', 'ok', 4000)
     }
   }
+  return todosCerrados  // para que "deshacer" pueda reabrirlos
+}
+
+// Reabre ciclos que se cerraron automáticamente (lote vacío) cuando se deshace
+// la baja/venta que los vació, y vuelve a poner el potrero OCUPADO.
+async function _reabrirCiclos(cerrados) {
+  for (const c of (cerrados||[])) {
+    await fsUpdate('ciclos', c.id, {activo:1, fechaSalida:undefined, diasOcupacion:undefined})
+    await fsUpdate('potreros', c.potreroId, {estado:'OCUPADO', loteActual:c.loteId, fechaSalida:undefined})
+    await sincronizarNumAnimalesLote(c.loteId)
+  }
+}
+
+// Borra los pesajes que se crearon automáticamente al dar salida a un animal
+// ("Pesaje de venta" / "Pesaje de baja") en su fecha de salida.
+async function _borrarPesajesDeSalida(a) {
+  if (!a?.fechaBaja) return 0
+  const ps = await db.pesajes.where('animalId').equals(a.id).toArray()
+  const auto = ps.filter(p => Math.abs(p.fecha - a.fechaBaja) < DIA_MS_COL && /^Pesaje de (venta|baja)$/.test(p.obs||''))
+  for (const p of auto) await fsDelete('pesajes', p.id)
+  return auto.length
+}
+
+// Deja un animal activo otra vez, limpiando TODOS los datos de su salida.
+async function _reactivarAnimal(a) {
+  await _borrarPesajesDeSalida(a)
+  await fsUpdate('animales', a.id, {
+    activo:1, causaBaja:null, fechaBaja:null, obsBaja:null,
+    pesoVenta:null, valorVenta:null, precioVentaKg:null, comprador:null,
+    loteIdSalida:null, loteNombreSalida:null,
+    loteId:null, fechaLote:null
+  })
 }
 
 async function guardarVenta() {
@@ -7784,8 +8008,14 @@ async function guardarVenta() {
   const comprador = document.getElementById('rv-comprador')?.value?.trim()||''
   const obs       = document.getElementById('rv-obs')?.value?.trim()||''
   if (!fechaStr) { showToast('Indica la fecha de venta','err'); return }
+  const fechaBaja = leerFecha('rv-fecha', {etiqueta:'la fecha de venta'}); if (fechaBaja === null) return
 
   const selAni  = _rvAnimales.filter(a => _rvSel.has(a.id))
+  // Todo animal vendido debe tener un peso de venta > 0 (si no, el precio/kg queda infinito)
+  const sinPeso = selAni.filter(a => !(rvGetPeso(a) > 0))
+  if (sinPeso.length) { showToast('Falta el peso de venta de: '+sinPeso.slice(0,5).map(a=>a.arete).join(', ')+(sinPeso.length>5?'…':''),'err',5000); return }
+  const antesIngreso = selAni.filter(a => a.fechaIngreso && fechaBaja < truncarDia(a.fechaIngreso))
+  if (antesIngreso.length) { showToast('La fecha de venta es anterior al ingreso de: '+antesIngreso.slice(0,5).map(a=>a.arete).join(', '),'err',5000); return }
   const pesoTot = selAni.reduce((s,a) => s + rvGetPeso(a), 0)
   let pxkg = 0, totalVenta = 0, vcabeza = 0
   if (_rvModoPrecio === 'pxkg') {
@@ -7805,18 +8035,25 @@ async function guardarVenta() {
 
   const btn = document.getElementById('rv-btn')
   if (btn) { btn.disabled=true; btn.textContent=`Guardando ${selAni.length} animal${selAni.length>1?'es':''}…` }
-  const fechaBaja = new Date(fechaStr+'T00:00:00').getTime()
+  // Valor por animal. En "valor total" se reparte por peso y el último animal
+  // absorbe el redondeo para que la suma cierre EXACTA con el total de la venta.
+  const valores = selAni.map(a => {
+    const pv = rvGetPeso(a)
+    return _rvModoPrecio === 'pxkg' ? Math.round(pxkg * pv)
+         : _rvModoPrecio === 'cabeza' ? Math.round(vcabeza)
+         : Math.round(totalVenta * (pv / pesoTot))
+  })
+  if (_rvModoPrecio === 'total' && valores.length) {
+    const dif = Math.round(totalVenta) - valores.reduce((s,v)=>s+v,0)
+    valores[valores.length-1] += dif
+  }
 
   const _vtLoteIds = selAni.map(a => a.loteId).filter(Boolean)
   const ahora = Date.now(), quien = USER?.nombre||'—'
   try {
-    for (const a of selAni) {
+    for (const [i, a] of selAni.entries()) {
       const pesoVenta = rvGetPeso(a)
-      const valorVenta = _rvModoPrecio === 'pxkg'
-        ? Math.round(pxkg * pesoVenta)
-        : _rvModoPrecio === 'cabeza'
-          ? Math.round(vcabeza)                              // mismo valor para cada uno
-          : Math.round(totalVenta * (pesoVenta / pesoTot))  // distribución proporcional por peso
+      const valorVenta = valores[i]
       const precioVentaKg = Math.round(valorVenta / pesoVenta)
       await fsUpdate('animales', a.id, {
         activo:0, causaBaja:'Venta', fechaBaja,
@@ -7836,6 +8073,7 @@ async function guardarVenta() {
       }
     }
     await checkLoteVacio(_vtLoteIds, fechaBaja)
+    trazar('VENTA','ANIMAL', selAni.map(a=>a.id).join(','), {n:selAni.length, fecha:fechaBaja, comprador:comprador||null, total:valores.reduce((s,v)=>s+v,0)})
     _rvSelMode = false
     closeSheet()
     showToast(`✅ ${selAni.length} animal${selAni.length>1?'es':''} vendido${selAni.length>1?'s':''}`, 'ok', 3500)
@@ -7852,17 +8090,8 @@ async function confirmarDevolverVenta(id) {
   const ok = await showConfirm(`¿Devolver ${a.arete} al inventario activo?\n\nSe borrarán los datos de venta y el animal quedará disponible para darle salida correcta.`)
   if (!ok) return
   try {
-    await fsUpdate('animales', a.id, {
-      activo: 1,
-      causaBaja: null,
-      fechaBaja: null,
-      pesoVenta: null,
-      valorVenta: null,
-      precioVentaKg: null,
-      comprador: null,
-      obsBaja: null
-    })
-    showToast(`\u2705 ${a.arete} devuelto al inventario`, 'ok', 3500)
+    await _reactivarAnimal(a)
+    showToast(`\u2705 ${a.arete} devuelto al inventario (sin lote asignado)`, 'ok', 3500)
     go('ventas')
   } catch(e) {
     showToast('Error al devolver: ' + e.message, 'err', 4000)
@@ -7872,7 +8101,7 @@ async function confirmarDevolverVenta(id) {
 async function openEditarVenta(id) {
   const a = await db.animales.get(id)
   if (!a) return
-  const fd = ts => { const d=new Date(ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0') }
+  const fd = ts => { const d=DC(ts); return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0') }
   showSheet(`
     <div class="sh-title">✏️ Editar venta — ${a.arete}<button class="sh-x" onclick="closeSheet()">✕</button></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -7922,7 +8151,8 @@ async function saveEditarVenta(id) {
   if (!fechaStr) { showToast('Indica la fecha','err'); return }
   if (!pxkg && !total) { showToast('Indica el precio o el total','err'); return }
 
-  const fechaBaja     = new Date(fechaStr+'T00:00:00').getTime()
+  const fechaBaja     = leerFecha('ev-fecha', {etiqueta:'la fecha de venta'}); if (fechaBaja === null) return
+  if (!(pesoVenta > 0)) { showToast('Indica el peso de venta','err'); return }
   const valorVenta    = total || Math.round(pxkg * pesoVenta)
   const precioVentaKg = pxkg  || (pesoVenta ? Math.round(total / pesoVenta) : 0)
 
@@ -7939,7 +8169,18 @@ async function saveEditarVenta(id) {
       comprador:   comprador || null,
       obsBaja:     obs || null
     })
+    // El pesaje de venta debe reflejar el peso y la fecha corregidos: con él se
+    // calculan el historial de peso y los kg producidos.
+    let pesajeVentaPrev = null
+    {
+      const ps = await db.pesajes.where('animalId').equals(id).toArray()
+      const pv = ps.find(p => /^Pesaje de venta$/.test(p.obs||'') && prev?.fechaBaja && Math.abs(p.fecha - prev.fechaBaja) < DIA_MS_COL)
+             || ps.find(p => prev?.fechaBaja && Math.abs(p.fecha - prev.fechaBaja) < DIA_MS_COL && p.pesoKg === prev.pesoVenta)
+      if (pv) { pesajeVentaPrev = {...pv}; await fsUpdate('pesajes', pv.id, {fecha:fechaBaja, pesoKg:pesoVenta}) }
+      else await fsAdd('pesajes', {animalId:id, fecha:fechaBaja, pesoKg:pesoVenta, metodo:'BASCULA', cc:3, obs:'Pesaje de venta', registradoPor:USER?.nombre||'—', registradoEn:Date.now()})
+    }
     pushUndo('Edición de venta', async () => {
+      if (pesajeVentaPrev) await fsUpdate('pesajes', pesajeVentaPrev.id, {fecha:pesajeVentaPrev.fecha, pesoKg:pesajeVentaPrev.pesoKg})
       await fsUpdate('animales', id, {
         fechaBaja:    prev.fechaBaja,
         pesoVenta:    prev.pesoVenta    ?? null,
@@ -7960,21 +8201,21 @@ async function saveEditarVenta(id) {
 
 async function exportarVentasPDF() {
   const modo   = _seg['ven_modo']||'todo'
-  const selMes = _seg['ven_mes'] ?? new Date().getMonth()
-  const selAnio= _seg['ven_anio']?? new Date().getFullYear()
+  const selMes = _seg['ven_mes'] ?? DC().getUTCMonth()
+  const selAnio= _seg['ven_anio']?? DC().getUTCFullYear()
   const MESES  = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
   const finca  = await getCfg('nombre_finca')||'HPRapp'
   const todos  = (await db.animales.where('activo').equals(0).toArray()).filter(a=>a.causaBaja==='Venta')
   const lista  = todos.filter(a=>{
     if (!a.fechaBaja) return modo==='todo'
-    const d=new Date(a.fechaBaja)
-    if (modo==='mes') return d.getMonth()===selMes&&d.getFullYear()===selAnio
-    if (modo==='anio') return d.getFullYear()===selAnio
+    const d=DC(a.fechaBaja)
+    if (modo==='mes') return d.getUTCMonth()===selMes&&d.getUTCFullYear()===selAnio
+    if (modo==='anio') return d.getUTCFullYear()===selAnio
     return true
   }).sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
 
   const titulo = modo==='mes' ? `${MESES[selMes]} ${selAnio}` : modo==='anio' ? String(selAnio) : 'Histórico'
-  const fd = ts => { const d=new Date(ts); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear() }
+  const fd = ts => { const d=DC(ts); return d.getUTCDate()+'/'+(d.getUTCMonth()+1)+'/'+d.getUTCFullYear() }
   const fmt= v => '$'+Math.round(v).toLocaleString('es-CO')
 
   let totalV=0,totalC=0,totalP=0
@@ -8017,18 +8258,18 @@ async function exportarVentasPDF() {
 async function exportarVentasExcel() {
   await loadXLSX()
   const modo   = _seg['ven_modo']||'todo'
-  const selMes = _seg['ven_mes'] ?? new Date().getMonth()
-  const selAnio= _seg['ven_anio']?? new Date().getFullYear()
+  const selMes = _seg['ven_mes'] ?? DC().getUTCMonth()
+  const selAnio= _seg['ven_anio']?? DC().getUTCFullYear()
   const todos  = (await db.animales.where('activo').equals(0).toArray()).filter(a=>a.causaBaja==='Venta')
   const lista  = todos.filter(a=>{
     if (!a.fechaBaja) return modo==='todo'
-    const d=new Date(a.fechaBaja)
-    if (modo==='mes') return d.getMonth()===selMes&&d.getFullYear()===selAnio
-    if (modo==='anio') return d.getFullYear()===selAnio
+    const d=DC(a.fechaBaja)
+    if (modo==='mes') return d.getUTCMonth()===selMes&&d.getUTCFullYear()===selAnio
+    if (modo==='anio') return d.getUTCFullYear()===selAnio
     return true
   }).sort((a,b)=>(b.fechaBaja||0)-(a.fechaBaja||0))
 
-  const fd = ts => { const d=new Date(ts); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear() }
+  const fd = ts => { const d=DC(ts); return d.getUTCDate()+'/'+(d.getUTCMonth()+1)+'/'+d.getUTCFullYear() }
   const wb = XLSX.utils.book_new()
   const rows = lista.map(a=>({
     'Arete':a.arete,'Nombre':a.nombre||'','Categoría':CAT[a.categoria]||a.categoria,
@@ -8070,7 +8311,9 @@ async function calcRendimientoFilas(){
     const pesoInicial = a.pesoInicial || (ps.length?ps[0].pesoKg:0) || 0
     const ultimoPesaje = ps.length ? ps[ps.length-1].pesoKg : null
     const pesoFinal = activo ? (ultimoPesaje ?? pesoInicial) : (a.pesoVenta ?? ultimoPesaje ?? pesoInicial)
-    const fechaFin = activo ? Date.now() : (a.fechaBaja || Date.now())
+    // Activos: el GDP se mide hasta la fecha del ÚLTIMO PESAJE (no hasta hoy), porque
+    // el peso final es el de ese pesaje; dividir hasta hoy subestimaba el GDP.
+    const fechaFin = activo ? (ps.length ? ps[ps.length-1].fecha : Date.now()) : (a.fechaBaja || Date.now())
     const fechaIni = a.fechaIngreso || (ps.length?ps[0].fecha:fechaFin)
     const dias = Math.max(1, Math.round((fechaFin-fechaIni)/86400000))
     const ganancia = pesoFinal - pesoInicial
@@ -8098,12 +8341,12 @@ function rendRenderPeriodos(filas){
   if(!vendidos.length) return '<p class="xs gray" style="text-align:center;padding:20px">Sin ventas registradas</p>'
 
   // Últimos 4 semestres (2 años), del más reciente al más antiguo
-  const ahora = new Date()
-  let y = ahora.getFullYear(), s = ahora.getMonth() < 6 ? 1 : 2
+  const ahora = DC()
+  let y = ahora.getUTCFullYear(), s = ahora.getUTCMonth() < 6 ? 1 : 2
   const semestres = []
   for(let i=0;i<4;i++){
-    const inicio = new Date(s===1?y:y, s===1?0:6, 1).getTime()
-    const finExcl = new Date(s===1?y:y+1, s===1?6:0, 1).getTime()
+    const inicio = colTs(y, s===1?0:6, 1)
+    const finExcl = colTs(s===1?y:y+1, s===1?6:0, 1)
     semestres.push({label:`${y} · S${s}`, inicio, fin:finExcl})
     s--
     if(s===0){ s=2; y-- }
@@ -8194,7 +8437,7 @@ function rendFiltradas(){
   if(_rendEstado!=='todos') f = f.filter(x=>x.estado===_rendEstado)
   if(_rendBusq){
     const q=_rendBusq.toLowerCase()
-    f = f.filter(x=> x.a.arete.toLowerCase().includes(q) || (x.a.nombre||'').toLowerCase().includes(q) || x.loteNom.toLowerCase().includes(q))
+    f = f.filter(x=> String(x.a.arete??"").toLowerCase().includes(q) || (x.a.nombre||'').toLowerCase().includes(q) || x.loteNom.toLowerCase().includes(q))
   }
   return f
 }
@@ -8594,7 +8837,7 @@ async function exportarParaImportar(){
       db.lluvias.orderBy('fecha').toArray()
     ])
     const wb = XLSX.utils.book_new()
-    const fd = ts => { if(!ts) return ''; const d=new Date(+ts); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear() }
+    const fd = ts => { if(!ts) return ''; const d=DC(+ts); return String(d.getUTCDate()).padStart(2,'0')+'/'+String(d.getUTCMonth()+1).padStart(2,'0')+'/'+d.getUTCFullYear() }
     const loteNomMap = {}; lotes.forEach(l=>loteNomMap[l.id]=l.nombre)
     const potNomMap  = {}; potreros.forEach(p=>potNomMap[p.id]=p.nombre)
 
@@ -8913,32 +9156,42 @@ async function importarTodo(input) {
     const ahora = Date.now()
 
     // Helper: convierte fecha de cualquier tipo (Date obj, serial Excel, string DD/MM/AAAA)
-    const parseFecha = (v) => {
-      if (!v) return null
+    // a la MEDIANOCHE DE COLOMBIA de ese día (20260923: antes quedaba a la medianoche
+    // UTC = 7 p.m. del día anterior en Colombia, y la app mostraba un día menos).
+    // Fechas futuras se rechazan (null → la fila se omite), salvo permitirFutura.
+    const parseFecha = (v, permitirFutura=false) => {
+      const t = _parseFechaCol(v)
+      if (t === null || !Number.isFinite(t)) return null
+      if (!permitirFutura && t > truncarDia(Date.now())) return null
+      return t
+    }
+    const _parseFechaCol = (v) => {
+      if (v === null || v === undefined || v === '') return null
+      // Date object de XLSX.js: se toma el día calendario redondeando al día UTC más
+      // cercano, lo que da el día correcto sin importar la zona horaria del equipo.
+      if (v instanceof Date) {
+        if (isNaN(v.getTime())) return null
+        const r = new Date(Math.round(v.getTime()/86400000)*86400000)
+        return colTs(r.getUTCFullYear(), r.getUTCMonth(), r.getUTCDate())
+      }
       // Serial numérico de Excel (ej: 46168)
-      const num = parseFloat(v)
-      if (!isNaN(num) && num > 40000 && num < 60000) return (num - 25569) * 86400000
+      const num = typeof v === 'number' ? v : (/^\d+(\.\d+)?$/.test(String(v).trim()) ? parseFloat(v) : NaN)
+      if (!isNaN(num) && num > 40000 && num < 60000) {
+        const r = new Date(Math.round(num - 25569) * 86400000)
+        return colTs(r.getUTCFullYear(), r.getUTCMonth(), r.getUTCDate())
+      }
       // String con formato DD/MM/YYYY o DD-MM-YYYY — siempre interpretamos como día/mes/año
       const s = String(v).trim()
       const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
-      if (m) { const y = m[3].length===2?'20'+m[3]:m[3]; return Date.UTC(parseInt(y),parseInt(m[2])-1,parseInt(m[1])) }
+      if (m) { const y = m[3].length===2?'20'+m[3]:m[3]; return colTs(parseInt(y),parseInt(m[2])-1,parseInt(m[1])) }
+      // AAAA-MM-DD
+      const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+      if (iso) return colTs(+iso[1], +iso[2]-1, +iso[3])
       // Formato largo español: "20 de abr de 2026" — fallback por si acaso
       const MESES_ES = {ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,sep:8,oct:9,nov:10,dic:11}
       const ml = s.match(/^(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})$/i)
-      if (ml) { const mo=MESES_ES[ml[2].toLowerCase().substring(0,3)]; if(mo!==undefined) return Date.UTC(parseInt(ml[3]),mo,parseInt(ml[1])) }
-      // Date object de XLSX.js: puede estar invertido si el PC tiene región inglesa.
-      // Reconstruimos desde los componentes UTC para evitar el problema de zona horaria,
-      // pero verificamos si el día > 12 para saber si ya viene en orden correcto.
-      if (v instanceof Date) {
-        const d = v.getUTCDate(), mo = v.getUTCMonth()+1, y = v.getUTCFullYear()
-        // Si el mes parseado > 12 es imposible → XLSX lo interpretó como DD/MM correctamente
-        // Si día <= 12 y mes <= 12, XLSX pudo haber invertido (región inglesa MM/DD).
-        // En ese caso confiamos en que el formato de celda es DD/MM → intercambiamos d y mo.
-        // Heurística: si mo > 12 → imposible como mes, usar d como mes
-        if (mo > 12) return Date.UTC(y, d-1, mo)   // caso raro pero seguro
-        return Date.UTC(y, mo-1, d)                  // asumir que XLSX lo leyó bien (celda formateada DD/MM)
-      }
-      const dt = new Date(s); return isNaN(dt.getTime()) ? null : dt.getTime()
+      if (ml) { const mo=MESES_ES[ml[2].toLowerCase().substring(0,3)]; if(mo!==undefined) return colTs(parseInt(ml[3]),mo,parseInt(ml[1])) }
+      const dt = new Date(s); return isNaN(dt.getTime()) ? null : truncarDia(dt.getTime())
     }
     // Helper: lee hoja como arrays desde fila 2 (range:0, slice(1) salta encabezados)
     const readSheet = (sh, raw=true) =>
@@ -9062,7 +9315,7 @@ async function importarTodo(input) {
         const catRaw = String(row[2]||'').trim()
         const cat = Object.keys(CAT).find(k=>k===catRaw) || Object.keys(CAT).find(k=>CAT[k]===catRaw) || 'HC'
         const pesoIni   = parseFloat(String(row[7]||'0').replace(',','.')) || 0
-        const fechaTs   = parseFecha(row[6]) || ahora
+        const fechaTs   = parseFecha(row[6]) || truncarDia(ahora)
         const loteRaw   = String(row[3]||'').trim()
         const loteNorm  = loteRaw ? (/^\d+$/.test(loteRaw) ? 'LOTE '+loteRaw : /^lote\s+\d+$/i.test(loteRaw) ? 'LOTE '+loteRaw.replace(/^lote\s+/i,'') : loteRaw) : ''
         const loteNom   = loteNorm.toLowerCase()
@@ -9098,6 +9351,7 @@ async function importarTodo(input) {
       const areteMap = {}
       todosAnimalesPes.forEach(a => areteMap[String(a.arete).trim()] = a.id)
       let addedPes=0, skipPes=0
+      const revisarPes=[]
       for (const row of rows) {
         const arete   = String(row[0]||'').trim()
         const pesoKg  = parseFloat(String(row[1]).replace(',','.')) || 0
@@ -9116,10 +9370,16 @@ async function importarTodo(input) {
           .filter(p=>p.pesoKg===pesoKg && Math.abs(truncarDia(p.fecha)-truncarDia(fechaTs))<=60*86400000).first()
         if (ruidoNacimiento) { skipPes++; continue }
         const obs = String(row[3]||'').trim()
+        // Aviso de pesos probablemente mal digitados (no se bloquean, se listan para revisar)
+        {
+          const ant = (await db.pesajes.where('animalId').equals(animalId).toArray()).filter(p=>p.fecha<fechaTs && p.pesoKg>0).sort((x,y)=>y.fecha-x.fecha)[0]
+          if (ant) { const d=Math.max(1,(fechaTs-ant.fecha)/86400000), g=(pesoKg-ant.pesoKg)/d*1000; if (g>2500||g<-1500) revisarPes.push(arete+' ('+Math.round(g)+' g/d)') }
+        }
         await fsAdd('pesajes', {animalId, fecha:fechaTs, pesoKg, metodo:'BASCULA', cc:3, ...(obs&&{obs}), registradoPor:quien, registradoEn:ahora})
         addedPes++
       }
-      if (addedPes||skipPes) resumen.push(`⚖️ Pesajes: ${addedPes} importados${skipPes?' · '+skipPes+' omitidos':''}`)
+      if (addedPes||skipPes) resumen.push(`⚖️ Pesajes: ${addedPes} importados${skipPes?' · '+skipPes+' omitidos (sin arete/peso/fecha válida o repetidos)':''}`)
+      if (revisarPes.length) resumen.push(`⚠️ Revisa estos pesos (ganancia imposible): ${revisarPes.slice(0,15).join(', ')}${revisarPes.length>15?' y '+(revisarPes.length-15)+' más':''}`)
     }
 
     _showProg(65, 'Importando labores de lotes…')
@@ -9167,7 +9427,7 @@ async function importarTodo(input) {
         const potId   = potMapLP[potNom.toLowerCase()]; if (!potId) { skipLP++; continue }
         const dup = await db.laboresPotrero.where('potreroId').equals(potId).filter(l=>l.fecha===fechaTs&&l.tipo===tipo).first()
         if (dup) { skipLP++; continue }
-        const fechaFin  = parseFecha(row[3]) || null
+        const fechaFin  = parseFecha(row[3], true) || null
         const jornales  = parseInt(String(row[4]||'0')) || 0
         const productos = String(row[5]||'').trim() || null
         const volumen   = parseFloat(String(row[6]||'').replace(',','.')) || null
@@ -9424,7 +9684,7 @@ async function compartirWhatsApp() {
     const potreros = await db.potreros.where('activo').equals(1).toArray()
     const lluvias  = await db.lluvias.orderBy('fecha').toArray()
     const ahora    = new Date()
-    const fd = (ts) => { const d=new Date(ts); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear() }
+    const fd = (ts) => { const d=DC(ts); return d.getUTCDate()+'/'+(d.getUTCMonth()+1)+'/'+d.getUTCFullYear() }
 
     // Peso total
     let pesoTotal = 0
@@ -9464,7 +9724,7 @@ async function generarPdfBlob() {
   const potreros = await db.potreros.where('activo').equals(1).toArray()
   const lluvias  = await db.lluvias.orderBy('fecha').toArray()
   const MESES    = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
-  const fd = ts => { const d=new Date(ts); return d.getDate()+' '+MESES[d.getMonth()]+' '+d.getFullYear() }
+  const fd = ts => { const d=DC(ts); return d.getUTCDate()+' '+MESES[d.getUTCMonth()]+' '+d.getUTCFullYear() }
 
   // Calcular pesos
   let pesoTotal=0, pesajes=[]
@@ -9557,7 +9817,7 @@ async function generarExcelBlob() {
     db.potreros.toArray(),db.lotes.toArray(),db.ciclos.toArray(),db.lluvias.toArray()
   ])
   const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-  const fd = ts => { const d=new Date(ts); return d.getDate()+'/'+((d.getMonth()+1))+'/'+d.getFullYear() }
+  const fd = ts => { const d=DC(ts); return d.getUTCDate()+'/'+((d.getUTCMonth()+1))+'/'+d.getUTCFullYear() }
   const wb = XLSX.utils.book_new()
   const addSheet = (name, rows) => {
     if(!rows.length) return
@@ -9602,6 +9862,8 @@ async function importarBackup(input){
   try{
     const d=JSON.parse(await file.text())
     if(!d.app||d.app!=='HPRapp'||!d.animales){await showAlert('❌ Archivo no válido. Usa un backup generado desde HPRapp.');input.value='';return}
+    // Red de seguridad: antes de borrar nada, descargar un respaldo del estado actual
+    try { await exportarBackup() } catch(e) {}
 
     // Restaurar Dexie
     await db.transaction('rw',[db.animales,db.pesajes,db.labores,db.potreros,db.lotes,db.ciclos,db.lluvias,db.usuarios,db.config,db.laboresPotrero,db.rotaciones],async()=>{
@@ -9633,10 +9895,20 @@ async function importarBackup(input){
     const tablas=['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias','usuarios']
     for(const t of tablas){
       const rows=await db[t].toArray()
+      const idsBackup=new Set(rows.map(r=>String(r.id)))
+      // Borrar de la nube lo que NO está en el respaldo (creado después), para que
+      // no reaparezca al sincronizar.
+      try{
+        const snap=await fsdb.collection(t).get()
+        const sobran=snap.docs.filter(doc=>!idsBackup.has(doc.id))
+        for(let i=0;i<sobran.length;i+=400){
+          const b=fsdb.batch(); sobran.slice(i,i+400).forEach(doc=>b.delete(doc.ref)); await b.commit()
+        }
+      }catch(e){ console.warn('restaurar: no se pudo limpiar',t,e.message) }
       for(const row of rows){
         const {id,...data}=row
         try{
-          await fsdb.collection(t).doc(String(id)).set({...data,_ts:data._ts||Date.now()})
+          await fsdb.collection(t).doc(String(id)).set({...data,_id:id,_ts:Date.now()})
         }catch(e){}
       }
     }
@@ -9776,20 +10048,79 @@ function pwaBannerDismiss() {
   if (b) b.style.display = 'none'
 }
 
-// ── Auto-actualización via GitHub API ──────────────
-async function limpiarCiclosAntiguos() {
-  try {
-    const hace1anio = Date.now() - 365*24*60*60*1000
-    const viejos = await db.ciclos
-      .filter(c => !c.activo && c.fechaEntrada && c.fechaEntrada < hace1anio)
-      .toArray()
-    if (!viejos.length) return
-    for (const c of viejos) {
-      await fsDelete('ciclos', c.id)
-    }
-    console.log(`Ciclos eliminados por antigüedad: ${viejos.length}`)
-  } catch(e) { console.warn('limpiarCiclosAntiguos:', e.message) }
+// ═══ MIGRACIÓN ÚNICA 20260923 ════════════════════════════════════════════
+// 1) Fechas a hora de Colombia: los registros importados desde Excel quedaron a la
+//    medianoche UTC (7 p.m. del día anterior en Colombia) y la app los mostraba un
+//    día antes. Se mueven +5 h a la medianoche de Colombia del día correcto.
+//    Solo se tocan valores que caen EXACTO en medianoche UTC (ts % 86400000 === 0),
+//    así que es idempotente y reversible (−5 h).
+// 2) Pesajes duplicados exactos (mismo animal, mismo día, mismo peso): se deja uno.
+// 3) Historial de lotes inicial para cada animal (base de la productividad por potrero).
+// Corre una sola vez, solo en la sesión del Administrador 1.
+const _MIG_CLAVE = 'migracion_20260923_fechas_col'
+const _MIG_CAMPOS = {
+  animales:['fechaIngreso','fechaBaja','fechaLote'], pesajes:['fecha'], labores:['fecha'],
+  ciclos:['fechaEntrada','fechaSalida'], potreros:['fechaSalida','fechaEntrada'],
+  laboresPotrero:['fecha','fechaFin'], lluvias:['fecha']
 }
+async function _migGuardar(table, cambios) {
+  // cambios: [{id, obj}] → Dexie + Firestore en lotes de 400 (merge)
+  const ts = Date.now()
+  for (let i=0; i<cambios.length; i+=400) {
+    const parte = cambios.slice(i, i+400)
+    await db.transaction('rw', db[table], async () => { for (const c of parte) await db[table].update(c.id, {...c.obj, _ts:ts}) })
+    const b = fsdb.batch()
+    parte.forEach(c => b.set(fsdb.collection(table).doc(String(c.id)), {...c.obj, _id:c.id, _ts:ts}, {merge:true}))
+    try { await b.commit() } catch(e) { console.warn('migración', table, e.message); throw e }
+  }
+}
+async function migracionesPendientes() {
+  try {
+    if (USER?.rol !== 'Administrador 1') return
+    if (await getCfg(_MIG_CLAVE)) return
+    if (!navigator.onLine) return   // se hará cuando haya conexión
+    _suppressRefreshUntil = Date.now() + 60000
+    const res = {fechas:0, dup:0, hist:0}
+    // 1) Fechas
+    for (const [t, campos] of Object.entries(_MIG_CAMPOS)) {
+      const filas = await db[t].toArray()
+      const cambios = []
+      for (const r of filas) {
+        const obj = {}
+        for (const k of campos) { const v = r[k]; if (typeof v === 'number' && Number.isFinite(v) && v % DIA_MS_COL === 0) obj[k] = v + OFF_COL }
+        if (Object.keys(obj).length) cambios.push({id:r.id, obj})
+      }
+      if (cambios.length) { await _migGuardar(t, cambios); res.fechas += cambios.length }
+    }
+    // 2) Pesajes duplicados exactos
+    {
+      const ps = (await db.pesajes.toArray()).sort((a,b)=>a.id-b.id)
+      const vistos = new Set()
+      for (const p of ps) {
+        const k = p.animalId+'|'+truncarDia(p.fecha)+'|'+p.pesoKg
+        if (vistos.has(k)) { await fsDelete('pesajes', p.id); res.dup++ } else vistos.add(k)
+      }
+    }
+    // 3) Historial de lotes
+    {
+      const an = await db.animales.toArray()
+      const cambios = an.filter(a => !Array.isArray(a.historialLotes)).map(a => ({id:a.id, obj:{historialLotes:_histLotesReconstruido(a)}}))
+      if (cambios.length) { await _migGuardar('animales', cambios); res.hist = cambios.length }
+    }
+    await setCfgSync(_MIG_CLAVE, JSON.stringify({...res, fecha:Date.now()}))
+    trazar('MIGRACION','SISTEMA','20260923',res)
+    showToast(`Datos actualizados: ${res.fechas} fechas a hora Colombia · ${res.dup} pesaje(s) duplicado(s) · historial de lotes de ${res.hist} animales`,'ok',7000)
+    _suppressRefreshUntil = 0
+    goRefrescar(PAGE, PARAMS)
+  } catch(e) {
+    console.error('migracionesPendientes:', e)
+    showToast('No se pudo completar la actualización de datos (se reintentará al abrir la app): '+e.message,'err',6000)
+  }
+}
+
+// 20260923: se eliminó limpiarCiclosAntiguos(), que en cada arranque borraba de la
+// nube los ciclos de potrero con más de 1 año. Ese historial es necesario para los
+// descansos, la productividad por potrero y la comparación año contra año.
 
 // Compara el contenido real de index.html (mismo origen, sin límite de tasa,
 // sin depender de la API de GitHub) contra un hash guardado la última vez que
@@ -9852,6 +10183,8 @@ let _resetSnapshot = null  // Guarda copia para deshacer
 let _resetTs = parseInt(localStorage.getItem('hpr_reset_ts') || '0')  // Persiste entre recargas
 
 async function ejecutarResetear() {
+  // Red de seguridad: descargar un respaldo completo antes de borrar todo
+  try { await exportarBackup() } catch(e) {}
   try {
     const tables = ['animales','pesajes','labores','potreros','lotes','ciclos','laboresPotrero','rotaciones','lluvias']
 
@@ -10004,12 +10337,11 @@ async function init(){
       _syncActive = true
       initFirebaseSync()
       await go('dashboard')
+      setTimeout(migracionesPendientes, 2500)
     } else {
       await go(ok ? 'login' : 'setup')
     }
     setTimeout(checkAppVersion, 3000)
-    // Limpiar ciclos con más de 1 año de antigüedad (inactivos únicamente)
-    limpiarCiclosAntiguos()
   } catch(e) {
     const msg = document.getElementById('boot-msg')
     const retry = document.getElementById('boot-retry')

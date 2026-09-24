@@ -1,11 +1,11 @@
-// HPRapp Service Worker v4
+// HPRapp Service Worker v5
 // Estrategia: red primero, con respaldo en caché para uso offline.
 // - Si hay conexión: siempre trae la versión más fresca de la red y actualiza el caché.
 // - Si NO hay conexión: sirve la última copia guardada (permite abrir la app en modo avión).
 // - El aviso de "nueva versión disponible" (banner azul) sigue funcionando igual,
 //   comparando el APP_VERSION del index.html contra el publicado en GitHub.
 
-const SW_VERSION = '4'
+const SW_VERSION = '5'
 const CACHE_NAME = 'hprapp-cache-v' + SW_VERSION
 
 // URL canónica del shell de la app (ignora query strings de cache-busting al guardar/leer del caché)
@@ -63,17 +63,26 @@ self.addEventListener('fetch', event => {
 
   const cacheKey = isShell ? APP_SHELL_URL : event.request
 
-  event.respondWith(
-    fetch(event.request, { cache: 'no-store' })
-      .then(res => {
+  // Red primero, pero con límite de tiempo: con señal débil en la finca, si la red
+  // no responde en 4 s se abre la copia guardada (y la red sigue actualizando el
+  // caché en segundo plano para la próxima vez).
+  const deRed = fetch(event.request, { cache: 'no-store' })
+    .then(res => {
+      if (res && (res.ok || res.type === 'opaque')) {
         const copy = res.clone()
         caches.open(CACHE_NAME).then(cache => cache.put(cacheKey, copy)).catch(() => {})
-        return res
-      })
-      .catch(() =>
-        caches.match(cacheKey).then(cached => cached || caches.match(APP_SHELL_URL))
-      )
-  )
+      }
+      return res
+    })
+  const deCache = () => caches.match(cacheKey).then(cached => cached || caches.match(APP_SHELL_URL))
+  event.respondWith(new Promise(resolve => {
+    let listo = false
+    const usar = r => { if (!listo && r) { listo = true; resolve(r) } }
+    const t = setTimeout(() => deCache().then(c => { if (c) usar(c) }), 4000)
+    deRed.then(r => { clearTimeout(t); usar(r) })
+         .catch(() => { clearTimeout(t); deCache().then(c => usar(c || Response.error())) })
+  }))
+  event.waitUntil(deRed.catch(() => {}))
 })
 
 self.addEventListener('message', event => {
