@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20260923-002'
+const APP_VERSION = '20261005-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -705,11 +705,68 @@ const CAT_REGLAS = [
   { desde:'HC',  pesoMin:180, sugeridas:['HL','NV'],   msg:'Hembra Cría lista para Levante (≥180 kg)' },
   { desde:'MC',  pesoMin:180, sugeridas:['ML'],         msg:'Macho Cría listo para Levante (≥180 kg)' },
   { desde:'HL',  pesoMin:350, sugeridas:['NV','VH','VP'], msg:'Hembra Levante lista para categoría adulta (≥350 kg)' },
-  { desde:'ML',  pesoMin:350, sugeridas:['MCB','T'],    msg:'Macho Levante listo para Ceba/Toro (≥350 kg)' },
+  // 20261005: regla de la finca (definida con el equipo): macho de 300 kg o más = MCB
+  { desde:'ML',  pesoMin:300, sugeridas:['MCB'],        msg:'Macho Levante listo para Ceba (≥300 kg)' },
 ]
 
 function getCatSugerencia(categoria, pesoKg) {
   return CAT_REGLAS.find(r => r.desde === categoria && pesoKg >= r.pesoMin) || null
+}
+
+// ── Avisos de cambio de categoría (20261005) ──────────────────────────────
+// "Luego" oculta el aviso de un animal SOLO hasta su siguiente pesaje (se guarda
+// el id del último pesaje visto). Antes se ocultaba por sesión y volvía a salir.
+const _catPospKey = id => 'catPosp_' + id
+function _catPospuesto(animalId, ultPesajeId) {
+  try { return localStorage.getItem(_catPospKey(animalId)) === String(ultPesajeId ?? 'ini') } catch(e) { return false }
+}
+// Animales activos que, por su peso actual, deben cambiar de categoría.
+async function animalesConCambioCat() {
+  const [anis, ps, lotes] = await Promise.all([db.animales.where('activo').equals(1).toArray(), db.pesajes.orderBy('fecha').toArray(), db.lotes.toArray()])
+  const ult = {}; for (const p of ps) ult[p.animalId] = p
+  const ln = Object.fromEntries(lotes.map(l=>[l.id,l.nombre]))
+  const out = []
+  for (const a of anis) {
+    const u = ult[a.id], peso = u ? u.pesoKg : (a.pesoInicial||0)
+    const regla = getCatSugerencia(a.categoria, peso)
+    if (!regla || _catPospuesto(a.id, u?.id)) continue
+    out.push({a, peso, fecha:u?u.fecha:a.fechaIngreso, regla, lote: ln[a.loteId]||'Sin lote'})
+  }
+  return out.sort((x,y)=>y.peso-x.peso)
+}
+// Cambia de categoría a varios animales a la vez, con labor de trazabilidad y deshacer.
+async function cambiarCategoriaMasivo(ids, nuevaCat) {
+  ids = (ids||[]).map(Number).filter(Boolean)
+  if (!ids.length) return
+  if (!await showConfirm(`¿Cambiar ${ids.length} animal${ids.length>1?'es':''} a ${CAT[nuevaCat]||nuevaCat}?\n\nCada cambio queda registrado como labor "Cambio de categoría".`)) return
+  const ahora = Date.now(), quien = USER?.nombre||'—', previos = []
+  try {
+    for (const id of ids) {
+      const a = await db.animales.get(id); if (!a || a.categoria === nuevaCat) continue
+      const u = await getPesoActual(id)
+      await fsUpdate('animales', id, {categoria:nuevaCat})
+      const lid = await fsAdd('labores', {animalId:id, fecha:ahora, tipo:'CAMBIO_CAT', obs:`Categoría cambiada de ${a.categoria} a ${nuevaCat}${u?' (peso '+u.pesoKg+' kg)':''}`, registradoPor:quien, registradoEn:ahora})
+      previos.push({id, cat:a.categoria, lid})
+    }
+  } catch(e) { showToast('Error al cambiar categoría: '+e.message,'err',5000) }
+  if (previos.length) {
+    trazar('CAMBIO_CAT_MASIVO','ANIMAL', previos.map(p=>p.id).join(','), {n:previos.length, a:nuevaCat})
+    pushUndo(`${previos.length} animal(es) pasados a ${nuevaCat}`, async()=>{
+      for (const p of previos) { await fsUpdate('animales', p.id, {categoria:p.cat}); await fsDelete('labores', p.lid) }
+    })
+    showToast(`✅ ${previos.length} animal(es) ahora ${nuevaCat}`,'ok',3500)
+  }
+  goRefrescar(PAGE, PARAMS)
+}
+function posponerCambioCatTodos(ids) {
+  ;(async()=>{ for (const id of ids) { const u = await getPesoActual(Number(id)); try { localStorage.setItem(_catPospKey(id), String(u?.id ?? 'ini')) } catch(e) {} } goRefrescar(PAGE, PARAMS) })()
+}
+// Aviso inmediato después de registrar pesos (individual o importación)
+async function avisarCambiosCategoria() {
+  try {
+    const lista = await animalesConCambioCat()
+    if (lista.length) showToast(`🔔 ${lista.length} animal${lista.length>1?'es':''} para cambiar de categoría — revisa el Inicio`, 'info', 5000)
+  } catch(e) {}
 }
 
 const RAZAS = ['Brahman','Cebú','Gyr','Nelore','Angus','Brangus','Simmental','Romosinuano','BON','Mestizo','Criollo','Otro']
@@ -1478,6 +1535,26 @@ async function pgDashboard() {
   // Animales activos con pesaje desactualizado (su peso final se toma del último pesaje)
   const nPesajeViejo = animales.filter(a=>{const p=_curvaPeso(a);return p.length && p[p.length-1].t < ahoraTs-120*DIA_MS}).length
 
+  const cambiosCat = await animalesConCambioCat()
+  const _cardCambiosCat = (() => {
+    if (!cambiosCat.length) return ''
+    const grupos = {}
+    for (const c of cambiosCat) { const k = c.regla.desde+'→'+c.regla.sugeridas[0]; (grupos[k] ||= {regla:c.regla, items:[]}).items.push(c) }
+    const verTodos = _seg['catVerTodos']
+    return `<div class="card mb8" style="border-left:4px solid #E65100;background:#FFF8F1">
+      <p class="bold sm" style="color:#E65100">🔔 ${cambiosCat.length} animal${cambiosCat.length>1?'es':''} para cambiar de categoría</p>
+      ${Object.values(grupos).map(g => {
+        const ids = g.items.map(c=>c.a.id)
+        const lista = (verTodos ? g.items : g.items.slice(0,6)).map(c => `<div class="row-b" style="padding:5px 0;border-bottom:1px solid #f3e5d8;cursor:pointer" onclick="go('animal-ficha',{id:${c.a.id}})"><span class="xs"><strong>${escH(c.a.arete)}</strong> · ${escH(c.lote)}</span><span class="xs gray">${c.peso} kg · ${ffd(c.fecha)}</span></div>`).join('')
+        return `<p class="xs gray" style="margin:8px 0 4px">${escH(g.regla.msg)} · ${g.items.length}</p>${lista}
+          ${g.items.length>6 && !verTodos ? `<p class="xs" style="color:#1565C0;cursor:pointer;margin-top:4px" onclick="_seg['catVerTodos']=1;go('dashboard')">Ver los ${g.items.length}</p>` : ''}
+          <div style="display:flex;gap:8px;margin-top:8px">
+            ${g.regla.sugeridas.map(cat=>`<button class="btn btn-sm" style="flex:1;background:#E65100;color:white" onclick="cambiarCategoriaMasivo([${ids.join(',')}],'${cat}')">Cambiar todos a ${cat}</button>`).join('')}
+            <button class="btn btn-sm btn-gray" onclick="posponerCambioCatTodos([${ids.join(',')}])">Luego</button>
+          </div>`
+      }).join('')}
+    </div>`
+  })()
   const _fmtKg = v => Math.round(v).toLocaleString('es-CO')
   const _fmtFecha = t => new Date(t).toLocaleDateString('es-CO',{timeZone:TZ_COL,day:'2-digit',month:'2-digit',year:'numeric'})
   const gdpColor=gdpProm===null?'gray':gdpProm>=metaN?'green':'orange'
@@ -1547,6 +1624,8 @@ async function pgDashboard() {
       </div>
     </div>
 
+
+    ${_cardCambiosCat}
 
     <div class="card mb8">
       <div class="row-b mb4">
@@ -3028,7 +3107,7 @@ async function pgAnimalFicha({id}) {
   </div>`
 
   // Banner de sugerencia de cambio de categoría
-  const catPospuesto = sessionStorage.getItem('catPospuesto_'+id)
+  const catPospuesto = _catPospuesto(id, ult?.id)
   const regla = catPospuesto ? null : getCatSugerencia(a.categoria, pesoAct)
   const bannerCat = regla ? `
     <div style="background:linear-gradient(135deg,#E65100,#BF360C);border-radius:12px;padding:14px 16px;margin-bottom:12px;box-shadow:0 2px 12px rgba(230,81,0,.3)">
@@ -3159,7 +3238,7 @@ async function pgAnimalFicha({id}) {
       : '<div class="empty"><p>Sin pesajes suficientes en el período</p></div>'}`
   }
 
-  return hdr+tabs+body
+  return hdr+bannerCat+tabs+body  // 20261005: el aviso de categoría existía pero nunca se mostraba
 }
 function setTab(pg,tab){_tab[pg]=tab}
 
@@ -3209,9 +3288,8 @@ async function saveCambioCat(animalId, nuevaCat) {
 }
 
 function posponerCambioCat(animalId) {
-  // Guardar en sessionStorage para no mostrar en esta sesión
-  sessionStorage.setItem('catPospuesto_'+animalId, '1')
-  go('animal-ficha', {id: animalId})
+  // Oculta el aviso hasta el siguiente pesaje del animal
+  ;(async()=>{ const u = await getPesoActual(animalId); try { localStorage.setItem(_catPospKey(animalId), String(u?.id ?? 'ini')) } catch(e) {} go('animal-ficha', {id: animalId}) })()
 }
 
 
@@ -3254,6 +3332,7 @@ async function savePeso(animalId) {
     await fsDelete('labores',lid)
   })
   closeSheet(); go('animal-ficha',{id:animalId})
+  avisarCambiosCategoria()
 }
 
 async function openLabor(id) {
@@ -9378,6 +9457,7 @@ async function importarTodo(input) {
         await fsAdd('pesajes', {animalId, fecha:fechaTs, pesoKg, metodo:'BASCULA', cc:3, ...(obs&&{obs}), registradoPor:quien, registradoEn:ahora})
         addedPes++
       }
+      if (addedPes) setTimeout(avisarCambiosCategoria, 1500)
       if (addedPes||skipPes) resumen.push(`⚖️ Pesajes: ${addedPes} importados${skipPes?' · '+skipPes+' omitidos (sin arete/peso/fecha válida o repetidos)':''}`)
       if (revisarPes.length) resumen.push(`⚠️ Revisa estos pesos (ganancia imposible): ${revisarPes.slice(0,15).join(', ')}${revisarPes.length>15?' y '+(revisarPes.length-15)+' más':''}`)
     }
