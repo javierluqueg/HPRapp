@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261006-001'
+const APP_VERSION = '20261006-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1479,7 +1479,8 @@ async function pgDashboard() {
   function produccionPeriodo(D0, D1){
     const r = {D0, D1, dias:Math.max(1,(D1-D0)/DIA_MS), invIni:0, invFin:0, ingresados:0, nIngresados:0,
       nacidos:0, nNacidos:0, vendidos:0, nVendidos:0, cedidos:0, nCedidos:0, muertosKg:0, nMuertes:0,
-      nInicio:0, nExpuestos:0, sinPeso:0, gdpGan:0, gdpDias:0, gdpN:0, gdpAtipicos:0}
+      nInicio:0, nExpuestos:0, sinPeso:0, gdpGan:0, gdpDias:0, gdpN:0, gdpAtipicos:0,
+      sinPesajePost:[], revisar:[]}
     for(const a of _todosAnim){
       const E = a.fechaIngreso || -Infinity
       const B = a.activo===1 ? Infinity : (a.fechaBaja || null)
@@ -1496,7 +1497,11 @@ async function pgDashboard() {
         const g=_pesoEn(pts,tb)-_pesoEn(pts,ta), d=(tb-ta)/DIA_MS, gdpA=g/d*1000
         if(gdpA<-1500 || gdpA>2500) r.gdpAtipicos++
         else { r.gdpGan+=g; r.gdpDias+=d; r.gdpN++ }
+        // Precisión: ganancias poco creíbles (probable error de peso) → listar para revisar
+        if((gdpA>1200 || gdpA<-300) && a.causaBaja!=='Muerte') r.revisar.push({id:a.id, ar:a.arete, gdp:Math.round(gdpA)})
       }
+      // Precisión: activos cuyo único peso es el de ingreso → todavía no suman ganancia
+      if(B===Infinity && pts[pts.length-1].t <= (Number.isFinite(E)?E:pts[0].t) + DIA_MS && E < D1 - 15*DIA_MS) r.sinPesajePost.push(a.arete)
 
       if(E < D0) r.nInicio++
       if(salioEnPer && a.causaBaja==='Muerte'){
@@ -1556,7 +1561,6 @@ async function pgDashboard() {
   }
 
   // Animales activos con pesaje desactualizado (su peso final se toma del último pesaje)
-  const nPesajeViejo = animales.filter(a=>{const p=_curvaPeso(a);return p.length && p[p.length-1].t < ahoraTs-120*DIA_MS}).length
 
   const _fmtKg = v => Math.round(v).toLocaleString('es-CO')
   const _fmtFecha = t => new Date(t).toLocaleDateString('es-CO',{timeZone:TZ_COL,day:'2-digit',month:'2-digit',year:'numeric'})
@@ -1652,19 +1656,28 @@ async function pgDashboard() {
         </div>
       </div>`:''}
       <p class="xs gray mb8">${_fmtFecha(rP.D0)} → ${_fmtFecha(rP.D1)} · ${Math.round(rP.dias)} días${periodoRecortado?' (desde el inicio de registros)':''}</p>
-      <div class="row-b mb4"><span class="xs gray">Kg en finca al inicio</span><span class="xs bold">${_fmtKg(rP.invIni)} kg</span></div>
-      <div class="row-b mb4"><span class="xs gray">Kg en finca al final</span><span class="xs bold">${_fmtKg(rP.invFin)} kg</span></div>
-      ${rP.nVendidos?`<div class="row-b mb4"><span class="xs gray">+ Vendidos (${rP.nVendidos})</span><span class="xs bold">+${_fmtKg(rP.vendidos)} kg</span></div>`:''}
-      ${rP.nCedidos?`<div class="row-b mb4"><span class="xs gray">+ Cedidos (${rP.nCedidos})</span><span class="xs bold">+${_fmtKg(rP.cedidos)} kg</span></div>`:''}
-      ${rP.nIngresados?`<div class="row-b mb4"><span class="xs gray">− Ingresados / comprados (${rP.nIngresados})</span><span class="xs bold">-${_fmtKg(rP.ingresados)} kg</span></div>`:''}
-      ${rP.nNacidos?`<div class="row-b mb4"><span class="xs gray">Nacimientos (${rP.nNacidos}) · su peso cuenta como producción</span><span class="xs bold">${_fmtKg(rP.nacidos)} kg</span></div>`:''}
-      ${rP.nMuertes?`<div class="row-b mb4"><span class="xs gray">🔴 Muertes (${rP.nMuertes} · ${rP.pctMort.toFixed(1)}% del hato)</span><span class="xs bold" style="color:#C62828">-${_fmtKg(rP.muertosKg)} kg</span></div>`:''}
-      <div class="row-b mb4" style="border-top:1px solid #E0E0E0;padding-top:6px"><span class="sm gray">Producción neta del período</span><span class="sm bold" style="color:${rP.produccion>=0?'#2E7D32':'#C62828'}">${rP.produccion>=0?'+':''}${_fmtKg(rP.produccion)} kg</span></div>
-      <div class="row-b mb4"><span class="sm bold">Kg producidos / ha útil / año</span><span class="sm bold" style="color:${rP.kgHaAnio>=0?'#1565C0':'#C62828'};font-size:1rem">${rP.kgHaAnio.toFixed(1)}</span></div>
-      <div class="row-b mb4"><span class="xs gray">GDP del período (${rP.gdpN} animales)</span><span class="xs bold ${rP.gdp===null?'gray':rP.gdp>=metaN?'green':'orange'}">${rP.gdp!==null?rP.gdp+' g/día':'—'}</span></div>
-      <p class="xs gray" style="margin-top:6px;line-height:1.35">Área útil ${area.toFixed(1)} ha (pasto + rastrojo). ${rP.gdpAtipicos?rP.gdpAtipicos+' animal(es) con GDP atípico excluidos del GDP. ':''}${rP.sinPeso?rP.sinPeso+' animal(es) sin ningún peso registrado. ':''}${nPesajeViejo?`⚠️ ${nPesajeViejo} animales activos sin pesaje en más de 120 días: su peso final es el del último pesaje. `:''}${rP.dias<300?`⚠️ Solo ${Math.round(rP.dias)} días de registros: el valor por año es una proyección y puede variar con la estación.`:''}</p>
-      ${porAnio.length?`<p class="xs bold" style="margin-top:12px;margin-bottom:4px">Año contra año · kg/ha útil/año</p>
-      ${porAnio.map(r=>`<div class="row-b mb4"><span class="xs gray">${r.anio}${r.parcial?' <span style="opacity:.7">(parcial, anualizado)</span>':''}${r.nMuertes?' · 🔴 '+r.nMuertes:''}</span><span class="xs bold" style="color:${r.kgHaAnio>=0?'#1565C0':'#C62828'}">${r.kgHaAnio.toFixed(1)} <span class="gray" style="font-weight:400">(${r.produccion>=0?'+':''}${_fmtKg(r.produccion)} kg)</span></span></div>`).join('')}`:''}
+      <div class="row-b mb4"><span class="sm bold">Kg ganados en el período</span><span class="bold" style="font-size:1.15rem;color:${rP.produccion>=0?'#2E7D32':'#C62828'}">${rP.produccion>=0?'+':''}${_fmtKg(rP.produccion)} kg</span></div>
+      <div class="row-b mb4"><span class="sm bold">Kg / ha útil / año</span><span class="bold" style="font-size:1.15rem;color:${rP.kgHaAnio>=0?'#1565C0':'#C62828'}">${rP.kgHaAnio.toFixed(1)}</span></div>
+      <div class="row-b mb4"><span class="xs gray">GDP · ${rP.gdpN} animales</span><span class="xs bold ${rP.gdp===null?'gray':rP.gdp>=metaN?'green':'orange'}">${rP.gdp!==null?rP.gdp+' g/día':'—'}</span></div>
+      ${rP.nMuertes?`<div class="row-b mb4"><span class="xs gray">🔴 Muertes · ${rP.nMuertes} (${rP.pctMort.toFixed(1)}%)</span><span class="xs bold" style="color:#C62828">-${_fmtKg(rP.muertosKg)} kg</span></div>`:''}
+      ${(rP.sinPesajePost.length||rP.revisar.length)?`<details style="margin-top:8px;background:#FFF8E1;border-radius:8px;padding:6px 10px"><summary class="xs" style="cursor:pointer;color:#8D6E00">⚠️ Precisión: ${rP.sinPesajePost.length?rP.sinPesajePost.length+' sin pesaje desde su ingreso':''}${rP.sinPesajePost.length&&rP.revisar.length?' · ':''}${rP.revisar.length?rP.revisar.length+' con ganancia atípica':''}</summary>
+        ${rP.sinPesajePost.length?`<p class="xs gray" style="margin-top:6px">Sin pesaje desde su ingreso (todavía no suman ganancia): ${rP.sinPesajePost.slice(0,40).map(escH).join(', ')}${rP.sinPesajePost.length>40?' y '+(rP.sinPesajePost.length-40)+' más':''}</p>`:''}
+        ${rP.revisar.length?`<p class="xs gray" style="margin-top:6px">Ganancia atípica (más de 1,2 kg/día o pérdida de peso) — revisar el peso: ${rP.revisar.sort((x,y)=>y.gdp-x.gdp).map(x=>`<span style="cursor:pointer;text-decoration:underline" onclick="go('animal-ficha',{id:${x.id}})">${escH(x.ar)}</span> (${x.gdp} g/d)`).join(', ')}</p>`:''}
+      </details>`:''}
+      <details style="margin-top:6px"><summary class="xs gray" style="cursor:pointer">Cómo se calcula</summary>
+        <div style="margin-top:6px">
+          <div class="row-b"><span class="xs gray">Kg al inicio</span><span class="xs">${_fmtKg(rP.invIni)}</span></div>
+          <div class="row-b"><span class="xs gray">Kg al final</span><span class="xs">${_fmtKg(rP.invFin)}</span></div>
+          ${rP.nVendidos?`<div class="row-b"><span class="xs gray">+ Vendidos (${rP.nVendidos})</span><span class="xs">+${_fmtKg(rP.vendidos)}</span></div>`:''}
+          ${rP.nCedidos?`<div class="row-b"><span class="xs gray">+ Cedidos (${rP.nCedidos})</span><span class="xs">+${_fmtKg(rP.cedidos)}</span></div>`:''}
+          ${rP.nIngresados?`<div class="row-b"><span class="xs gray">− Comprados / ingresados (${rP.nIngresados})</span><span class="xs">-${_fmtKg(rP.ingresados)}</span></div>`:''}
+          ${rP.nNacidos?`<div class="row-b"><span class="xs gray">Nacimientos (${rP.nNacidos})</span><span class="xs">${_fmtKg(rP.nacidos)}</span></div>`:''}
+          ${rP.nMuertes?`<div class="row-b"><span class="xs gray">− Muertes, último peso (${rP.nMuertes})</span><span class="xs">-${_fmtKg(rP.muertosKg)}</span></div>`:''}
+          <p class="xs gray" style="margin-top:4px">Área útil ${area.toFixed(1)} ha (pasto + rastrojo).${rP.dias<300?` Valor por año proyectado con ${Math.round(rP.dias)} días.`:''}</p>
+        </div>
+      </details>
+      ${porAnio.length>1?`<p class="xs bold" style="margin-top:10px;margin-bottom:4px">Año contra año · kg/ha útil/año</p>
+      ${porAnio.map(r=>`<div class="row-b mb4"><span class="xs gray">${r.anio}${r.parcial?' (parcial)':''}</span><span class="xs bold" style="color:${r.kgHaAnio>=0?'#1565C0':'#C62828'}">${r.kgHaAnio.toFixed(1)} <span class="gray" style="font-weight:400">(${r.produccion>=0?'+':''}${_fmtKg(r.produccion)} kg)</span></span></div>`).join('')}`:''}
     </div>
 
     <div class="g3 mb8">
