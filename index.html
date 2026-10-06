@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261006-002'
+const APP_VERSION = '20261006-003'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1660,10 +1660,6 @@ async function pgDashboard() {
       <div class="row-b mb4"><span class="sm bold">Kg / ha útil / año</span><span class="bold" style="font-size:1.15rem;color:${rP.kgHaAnio>=0?'#1565C0':'#C62828'}">${rP.kgHaAnio.toFixed(1)}</span></div>
       <div class="row-b mb4"><span class="xs gray">GDP · ${rP.gdpN} animales</span><span class="xs bold ${rP.gdp===null?'gray':rP.gdp>=metaN?'green':'orange'}">${rP.gdp!==null?rP.gdp+' g/día':'—'}</span></div>
       ${rP.nMuertes?`<div class="row-b mb4"><span class="xs gray">🔴 Muertes · ${rP.nMuertes} (${rP.pctMort.toFixed(1)}%)</span><span class="xs bold" style="color:#C62828">-${_fmtKg(rP.muertosKg)} kg</span></div>`:''}
-      ${(rP.sinPesajePost.length||rP.revisar.length)?`<details style="margin-top:8px;background:#FFF8E1;border-radius:8px;padding:6px 10px"><summary class="xs" style="cursor:pointer;color:#8D6E00">⚠️ Precisión: ${rP.sinPesajePost.length?rP.sinPesajePost.length+' sin pesaje desde su ingreso':''}${rP.sinPesajePost.length&&rP.revisar.length?' · ':''}${rP.revisar.length?rP.revisar.length+' con ganancia atípica':''}</summary>
-        ${rP.sinPesajePost.length?`<p class="xs gray" style="margin-top:6px">Sin pesaje desde su ingreso (todavía no suman ganancia): ${rP.sinPesajePost.slice(0,40).map(escH).join(', ')}${rP.sinPesajePost.length>40?' y '+(rP.sinPesajePost.length-40)+' más':''}</p>`:''}
-        ${rP.revisar.length?`<p class="xs gray" style="margin-top:6px">Ganancia atípica (más de 1,2 kg/día o pérdida de peso) — revisar el peso: ${rP.revisar.sort((x,y)=>y.gdp-x.gdp).map(x=>`<span style="cursor:pointer;text-decoration:underline" onclick="go('animal-ficha',{id:${x.id}})">${escH(x.ar)}</span> (${x.gdp} g/d)`).join(', ')}</p>`:''}
-      </details>`:''}
       <details style="margin-top:6px"><summary class="xs gray" style="cursor:pointer">Cómo se calcula</summary>
         <div style="margin-top:6px">
           <div class="row-b"><span class="xs gray">Kg al inicio</span><span class="xs">${_fmtKg(rP.invIni)}</span></div>
