@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261005-001'
+const APP_VERSION = '20261006-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -761,11 +761,34 @@ async function cambiarCategoriaMasivo(ids, nuevaCat) {
 function posponerCambioCatTodos(ids) {
   ;(async()=>{ for (const id of ids) { const u = await getPesoActual(Number(id)); try { localStorage.setItem(_catPospKey(id), String(u?.id ?? 'ini')) } catch(e) {} } goRefrescar(PAGE, PARAMS) })()
 }
+// Tarjeta de aviso de cambio de categoría — se muestra en la pestaña Ganado (20261006)
+async function renderCardCambiosCat() {
+  const cambiosCat = await animalesConCambioCat()
+  return (() => {
+    if (!cambiosCat.length) return ''
+    const grupos = {}
+    for (const c of cambiosCat) { const k = c.regla.desde+'→'+c.regla.sugeridas[0]; (grupos[k] ||= {regla:c.regla, items:[]}).items.push(c) }
+    const verTodos = _seg['catVerTodos']
+    return `<div class="card mb8" style="border-left:4px solid #E65100;background:#FFF8F1">
+      <p class="bold sm" style="color:#E65100">🔔 ${cambiosCat.length} animal${cambiosCat.length>1?'es':''} para cambiar de categoría</p>
+      ${Object.values(grupos).map(g => {
+        const ids = g.items.map(c=>c.a.id)
+        const lista = (verTodos ? g.items : g.items.slice(0,6)).map(c => `<div class="row-b" style="padding:5px 0;border-bottom:1px solid #f3e5d8;cursor:pointer" onclick="go('animal-ficha',{id:${c.a.id}})"><span class="xs"><strong>${escH(c.a.arete)}</strong> · ${escH(c.lote)}</span><span class="xs gray">${c.peso} kg · ${ffd(c.fecha)}</span></div>`).join('')
+        return `<p class="xs gray" style="margin:8px 0 4px">${escH(g.regla.msg)} · ${g.items.length}</p>${lista}
+          ${g.items.length>6 && !verTodos ? `<p class="xs" style="color:#1565C0;cursor:pointer;margin-top:4px" onclick="_seg['catVerTodos']=1;go('ganado')">Ver los ${g.items.length}</p>` : ''}
+          <div style="display:flex;gap:8px;margin-top:8px">
+            ${g.regla.sugeridas.map(cat=>`<button class="btn btn-sm" style="flex:1;background:#E65100;color:white" onclick="cambiarCategoriaMasivo([${ids.join(',')}],'${cat}')">Cambiar todos a ${cat}</button>`).join('')}
+            <button class="btn btn-sm btn-gray" onclick="posponerCambioCatTodos([${ids.join(',')}])">Luego</button>
+          </div>`
+      }).join('')}
+    </div>`
+  })()
+}
 // Aviso inmediato después de registrar pesos (individual o importación)
 async function avisarCambiosCategoria() {
   try {
     const lista = await animalesConCambioCat()
-    if (lista.length) showToast(`🔔 ${lista.length} animal${lista.length>1?'es':''} para cambiar de categoría — revisa el Inicio`, 'info', 5000)
+    if (lista.length) showToast(`🔔 ${lista.length} animal${lista.length>1?'es':''} para cambiar de categoría — revisa la pestaña Ganado`, 'info', 5000)
   } catch(e) {}
 }
 
@@ -1535,26 +1558,6 @@ async function pgDashboard() {
   // Animales activos con pesaje desactualizado (su peso final se toma del último pesaje)
   const nPesajeViejo = animales.filter(a=>{const p=_curvaPeso(a);return p.length && p[p.length-1].t < ahoraTs-120*DIA_MS}).length
 
-  const cambiosCat = await animalesConCambioCat()
-  const _cardCambiosCat = (() => {
-    if (!cambiosCat.length) return ''
-    const grupos = {}
-    for (const c of cambiosCat) { const k = c.regla.desde+'→'+c.regla.sugeridas[0]; (grupos[k] ||= {regla:c.regla, items:[]}).items.push(c) }
-    const verTodos = _seg['catVerTodos']
-    return `<div class="card mb8" style="border-left:4px solid #E65100;background:#FFF8F1">
-      <p class="bold sm" style="color:#E65100">🔔 ${cambiosCat.length} animal${cambiosCat.length>1?'es':''} para cambiar de categoría</p>
-      ${Object.values(grupos).map(g => {
-        const ids = g.items.map(c=>c.a.id)
-        const lista = (verTodos ? g.items : g.items.slice(0,6)).map(c => `<div class="row-b" style="padding:5px 0;border-bottom:1px solid #f3e5d8;cursor:pointer" onclick="go('animal-ficha',{id:${c.a.id}})"><span class="xs"><strong>${escH(c.a.arete)}</strong> · ${escH(c.lote)}</span><span class="xs gray">${c.peso} kg · ${ffd(c.fecha)}</span></div>`).join('')
-        return `<p class="xs gray" style="margin:8px 0 4px">${escH(g.regla.msg)} · ${g.items.length}</p>${lista}
-          ${g.items.length>6 && !verTodos ? `<p class="xs" style="color:#1565C0;cursor:pointer;margin-top:4px" onclick="_seg['catVerTodos']=1;go('dashboard')">Ver los ${g.items.length}</p>` : ''}
-          <div style="display:flex;gap:8px;margin-top:8px">
-            ${g.regla.sugeridas.map(cat=>`<button class="btn btn-sm" style="flex:1;background:#E65100;color:white" onclick="cambiarCategoriaMasivo([${ids.join(',')}],'${cat}')">Cambiar todos a ${cat}</button>`).join('')}
-            <button class="btn btn-sm btn-gray" onclick="posponerCambioCatTodos([${ids.join(',')}])">Luego</button>
-          </div>`
-      }).join('')}
-    </div>`
-  })()
   const _fmtKg = v => Math.round(v).toLocaleString('es-CO')
   const _fmtFecha = t => new Date(t).toLocaleDateString('es-CO',{timeZone:TZ_COL,day:'2-digit',month:'2-digit',year:'numeric'})
   const gdpColor=gdpProm===null?'gray':gdpProm>=metaN?'green':'orange'
@@ -1624,8 +1627,6 @@ async function pgDashboard() {
       </div>
     </div>
 
-
-    ${_cardCambiosCat}
 
     <div class="card mb8">
       <div class="row-b mb4">
@@ -2216,7 +2217,8 @@ async function pgGanado() {
         Ver más (${todosList.length - totalMostrados} restantes)
       </button>` : ''
 
-  return `${resumenGan}
+  const cardCat = await renderCardCambiosCat()
+  return `${cardCat}${resumenGan}
     <div class="inp-wrap mb8">
       <input id="ganBusq" class="inp" placeholder="🔍 Buscar por arete, raza, color, descripción…" value="${_ganBusq}" oninput="_ganBusq=this.value;filtGanado(this.value);document.getElementById('ganBusqClear').style.display=this.value?'flex':'none'">
       <span id="ganBusqClear" onclick="limpiarBusqGanado()" style="display:${_ganBusq?'flex':'none'};position:absolute;right:10px;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;background:#ddd;color:#555;align-items:center;justify-content:center;font-size:.85rem;cursor:pointer;pointer-events:auto">✕</span>
