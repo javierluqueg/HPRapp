@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261012-001'
+const APP_VERSION = '20261013-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1310,6 +1310,7 @@ async function doLogin(pin) {
     initFirebaseSync()
     // Mostrar bienvenida solo la primera vez por usuario en este dispositivo
     setTimeout(migracionesPendientes, 2500)
+    setTimeout(avisoRevisionGeneral, 7000)
     const key = 'bienvenida_' + USER?.id
     const visto = localStorage.getItem(key)
     if (!visto) {
@@ -7896,6 +7897,219 @@ async function ejecutarVerificacionIntegridad() {
 }
 
 // ═══════════════════════════════════════════════════
+// REVISIÓN GENERAL DE DATOS (20261013)
+// ═══════════════════════════════════════════════════
+// Recorre todas las tablas buscando datos inconsistentes. Solo lectura: no
+// corrige nada, muestra cada hallazgo para que el administrador decida.
+// Origen: 13-10-2026 se descubrió la lluvia del 1er semestre 2026 triplicada por
+// reimportaciones con fechas corridas; esta revisión existe para que ese tipo de
+// error se detecte solo y no dependa de que alguien lo note.
+const REV_GPD_MAX = 1.5   // kg/día — por encima es casi seguro un error de peso o de arete
+const REV_GPD_MIN = -0.5  // kg/día — pérdidas mayores sugieren error de peso o de arete
+const REV_PRECIO_MIN = 3000, REV_PRECIO_MAX = 15000  // $/kg de venta razonable
+const REV_LLUVIA_MAX = 120 // mm en un día
+
+async function revisionGeneralDatos() {
+  const D = DIA_MS_COL, ahora = Date.now()
+  const fd = ts => ts ? new Date(ts).toLocaleDateString('es-CO', {timeZone:TZ_COL, day:'2-digit', month:'2-digit', year:'numeric'}) : '—'
+  const dia = ts => truncarDia(ts)
+  const [A, P, C, LO, PO, LP, LL, RO] = await Promise.all([
+    db.animales.toArray(), db.pesajes.toArray(), db.ciclos.toArray(), db.lotes.toArray(),
+    db.potreros.toArray(), db.laboresPotrero.toArray(), db.lluvias.toArray(), db.rotaciones.toArray()
+  ])
+  const am = Object.fromEntries(A.map(a => [a.id, a]))
+  const lm = Object.fromEntries(LO.map(l => [l.id, l]))
+  const pm = Object.fromEntries(PO.map(p => [p.id, p]))
+  const norm = s => String(s ?? '').trim().toLowerCase()
+  const ar = a => a ? a.arete : '¿animal borrado?'
+  const H = []
+  const grupo = (area, titulo, nivel, explicacion) => { const g = {area, titulo, nivel, explicacion, items: []}; H.push(g); return g.items }
+
+  // ── ANIMALES ──
+  const gDup = grupo('Animales', 'Aretes repetidos', 'alto', 'Dos animales con el mismo número (sin distinguir mayúsculas). Se corrige con la convención del sufijo "R" en el más reciente.')
+  const byArete = {}
+  A.forEach(a => { const k = norm(a.arete); if (k) (byArete[k] ||= []).push(a) })
+  Object.values(byArete).filter(v => v.length > 1).forEach(v => gDup.push(v.map(a => `${a.arete} (${a.activo === 1 ? 'activo' : 'baja ' + fd(a.fechaBaja)})`).join(' / ')))
+  const gSinAr = grupo('Animales', 'Animales sin arete', 'alto', '')
+  A.filter(a => !norm(a.arete)).forEach(a => gSinAr.push('ID ' + a.id))
+  const gSinLote = grupo('Animales', 'Activos sin lote válido', 'alto', 'El animal está activo pero no tiene lote, o su lote no existe o está inactivo.')
+  A.filter(a => a.activo === 1 && (!a.loteId || !lm[a.loteId] || lm[a.loteId].activo !== 1)).forEach(a => gSinLote.push(`${a.arete}${a.loteId && lm[a.loteId] ? ' · ' + lm[a.loteId].nombre + ' (inactivo)' : ''}`))
+  const gFechas = grupo('Animales', 'Fechas de ingreso/baja imposibles', 'alto', 'Sin fecha de ingreso, fecha futura, o baja anterior al ingreso.')
+  A.forEach(a => {
+    if (!a.fechaIngreso) gFechas.push(`${a.arete}: sin fecha de ingreso`)
+    else if (a.fechaIngreso > ahora + D) gFechas.push(`${a.arete}: ingreso futuro ${fd(a.fechaIngreso)}`)
+    if (a.fechaBaja && a.fechaIngreso && dia(a.fechaBaja) < dia(a.fechaIngreso)) gFechas.push(`${a.arete}: baja ${fd(a.fechaBaja)} antes del ingreso ${fd(a.fechaIngreso)}`)
+  })
+  const gBaja = grupo('Animales', 'Bajas incompletas', 'medio', 'Animal dado de baja sin fecha o sin causa.')
+  A.filter(a => a.activo !== 1).forEach(a => {
+    if (!a.fechaBaja) gBaja.push(`${a.arete}: sin fecha de baja`)
+    if (!a.causaBaja) gBaja.push(`${a.arete}: sin causa de baja`)
+  })
+  const gVenta = grupo('Ventas', 'Ventas incompletas', 'alto', 'Venta sin valor, sin peso de venta o sin pesaje de venta en la fecha.')
+  const pesA = {}
+  P.forEach(p => (pesA[p.animalId] ||= []).push(p))
+  A.filter(a => a.activo !== 1 && a.causaBaja === 'Venta').forEach(a => {
+    if (!(a.valorVenta > 0)) gVenta.push(`${a.arete} (${fd(a.fechaBaja)}): sin valor de venta`)
+    if (!(a.pesoVenta > 0)) gVenta.push(`${a.arete} (${fd(a.fechaBaja)}): sin peso de venta`)
+    else if (!(pesA[a.id] || []).some(p => Math.abs(dia(p.fecha) - dia(a.fechaBaja)) <= D)) gVenta.push(`${a.arete} (${fd(a.fechaBaja)}): sin pesaje de venta`)
+  })
+  const gPrecio = grupo('Ventas', `Precio por kg fuera de rango ($${REV_PRECIO_MIN.toLocaleString('es-CO')}–$${REV_PRECIO_MAX.toLocaleString('es-CO')})`, 'medio', 'Puede ser una venta por cabeza (terneros) o un valor mal digitado.')
+  A.filter(a => a.activo !== 1 && a.causaBaja === 'Venta' && !a.ventaPorCabeza && a.valorVenta > 0 && a.pesoVenta > 0).forEach(a => {
+    const pk = a.valorVenta / a.pesoVenta
+    if (pk < REV_PRECIO_MIN || pk > REV_PRECIO_MAX) gPrecio.push(`${a.arete} (${fd(a.fechaBaja)}, ${a.comprador || 'sin comprador'}): ${a.pesoVenta} kg · $${Math.round(a.valorVenta).toLocaleString('es-CO')} = $${Math.round(pk).toLocaleString('es-CO')}/kg`)
+  })
+  const ultimoPeso = a => { const ps = (pesA[a.id] || []).filter(p => p.pesoKg > 0).sort((x, y) => y.fecha - x.fecha); return ps[0]?.pesoKg ?? a.pesoInicial }
+  const gCat = grupo('Animales', 'Categoría de machos vs. peso (regla 300 kg)', 'medio', 'Machos de 300 kg o más = MCB; por debajo de 300 kg = ML.')
+  A.filter(a => a.activo === 1 && a.categoria === 'ML').forEach(a => { const w = ultimoPeso(a); if (w >= 300) gCat.push(`${a.arete}: ML con ${w} kg → debería ser MCB`) })
+  A.filter(a => a.activo === 1 && a.categoria === 'MCB').forEach(a => { const w = ultimoPeso(a); if (w > 0 && w < 300) gCat.push(`${a.arete}: MCB con ${w} kg → debería ser ML`) })
+
+  // ── PESAJES ──
+  const gPesInv = grupo('Pesajes', 'Pesajes inválidos', 'alto', 'Sin animal, con peso 0 o mayor a 1.000 kg, o con fecha futura.')
+  P.forEach(p => {
+    if (!am[p.animalId]) gPesInv.push(`Pesaje ${p.id}: el animal no existe`)
+    if (!(p.pesoKg > 0) || p.pesoKg > 1000) gPesInv.push(`${ar(am[p.animalId])} ${fd(p.fecha)}: ${p.pesoKg} kg`)
+    if (p.fecha > ahora + D) gPesInv.push(`${ar(am[p.animalId])}: fecha futura ${fd(p.fecha)}`)
+  })
+  const gPesDup = grupo('Pesajes', 'Dos pesajes del mismo animal el mismo día', 'alto', 'Duplica el dato y distorsiona la ganancia de peso.')
+  const gPesFuera = grupo('Pesajes', 'Pesajes fuera de la estadía del animal', 'medio', 'Pesaje antes de la fecha de ingreso o después de la baja. Suele indicar fechas corridas al importar.')
+  const gGPD = grupo('Pesajes', `Ganancia de peso irreal (fuera de ${REV_GPD_MIN * 1000} a ${REV_GPD_MAX * 1000} g/día)`, 'alto', 'Entre dos pesajes separados al menos 7 días. Suele ser un peso mal digitado o un arete cruzado.')
+  Object.entries(pesA).forEach(([id, ps]) => {
+    const a = am[id]; if (!a) return
+    const porDia = {}
+    ps.forEach(p => (porDia[dia(p.fecha)] ||= []).push(p))
+    Object.values(porDia).filter(v => v.length > 1).forEach(v => gPesDup.push(`${a.arete} ${fd(v[0].fecha)}: ${v.map(x => x.pesoKg + ' kg').join(', ')}`))
+    ps.forEach(p => {
+      if (a.fechaIngreso && dia(p.fecha) < dia(a.fechaIngreso)) gPesFuera.push(`${a.arete}: pesaje ${fd(p.fecha)} antes del ingreso ${fd(a.fechaIngreso)}`)
+      if (a.fechaBaja && dia(p.fecha) > dia(a.fechaBaja)) gPesFuera.push(`${a.arete}: pesaje ${fd(p.fecha)} después de la baja ${fd(a.fechaBaja)}`)
+    })
+    const s = ps.filter(p => p.pesoKg > 0).sort((x, y) => x.fecha - y.fecha)
+    for (let i = 1; i < s.length; i++) {
+      const d = (dia(s[i].fecha) - dia(s[i - 1].fecha)) / D
+      if (d < 7) continue
+      const g = (s[i].pesoKg - s[i - 1].pesoKg) / d
+      if (g > REV_GPD_MAX || g < REV_GPD_MIN) gGPD.push(`${a.arete}: ${fd(s[i - 1].fecha)} ${s[i - 1].pesoKg} kg → ${fd(s[i].fecha)} ${s[i].pesoKg} kg = ${Math.round(g * 1000)} g/día`)
+    }
+  })
+
+  // ── LOTES / POTREROS / CICLOS ──
+  const gCic = grupo('Rotación', 'Ciclos con datos imposibles', 'alto', 'Salida antes de la entrada, ciclo activo con fecha de salida, ciclo cerrado sin salida, o lote/potrero inexistente.')
+  C.forEach(c => {
+    const nom = `${c.nombreLote || lm[c.loteId]?.nombre || 'Lote ?'} · ${pm[c.potreroId]?.nombre || 'potrero ?'}`
+    if (c.fechaSalida && c.fechaEntrada && dia(c.fechaSalida) < dia(c.fechaEntrada)) gCic.push(`${nom}: salida ${fd(c.fechaSalida)} antes de la entrada ${fd(c.fechaEntrada)}`)
+    if (c.activo === 1 && c.fechaSalida) gCic.push(`${nom}: activo pero con salida ${fd(c.fechaSalida)}`)
+    if (c.activo !== 1 && !c.fechaSalida) gCic.push(`${nom}: cerrado sin fecha de salida`)
+    if (!pm[c.potreroId] || !lm[c.loteId]) gCic.push(`${nom}: lote o potrero inexistente (ciclo ${c.id})`)
+    if (c.fechaEntrada > ahora + D) gCic.push(`${nom}: entrada futura ${fd(c.fechaEntrada)}`)
+  })
+  const gSolape = grupo('Rotación', 'Dos lotes en el mismo potrero al mismo tiempo', 'medio', 'Solapes de más de 1 día entre ciclos de lotes distintos en un mismo potrero.')
+  const cPot = {}
+  C.forEach(c => (cPot[c.potreroId] ||= []).push(c))
+  Object.values(cPot).forEach(cs => {
+    for (let i = 0; i < cs.length; i++) for (let j = i + 1; j < cs.length; j++) {
+      const a = cs[i], b = cs[j]
+      if (a.loteId === b.loteId || !a.fechaEntrada || !b.fechaEntrada) continue
+      const ae = a.fechaSalida || ahora, be = b.fechaSalida || ahora
+      if (a.fechaEntrada < be - D && b.fechaEntrada < ae - D) gSolape.push(`${pm[a.potreroId]?.nombre}: ${a.nombreLote} (${fd(a.fechaEntrada)}–${fd(a.fechaSalida)}) y ${b.nombreLote} (${fd(b.fechaEntrada)}–${fd(b.fechaSalida)})`)
+    }
+  })
+  const gLote = grupo('Rotación', 'Lotes que no cuadran con su potrero', 'alto', 'Lote con animales sin potrero asignado, o lote vacío que sigue ocupando un potrero.')
+  const vivos = {}
+  A.filter(a => a.activo === 1).forEach(a => vivos[a.loteId] = (vivos[a.loteId] || 0) + 1)
+  LO.filter(l => l.activo === 1).forEach(l => {
+    const act = C.filter(c => c.loteId === l.id && c.activo === 1)
+    if (vivos[l.id] && !act.length) gLote.push(`${l.nombre}: ${vivos[l.id]} animales sin potrero activo`)
+    if (!vivos[l.id] && act.length) gLote.push(`${l.nombre}: vacío pero ocupa ${act.map(c => pm[c.potreroId]?.nombre || '?').join(', ')}`)
+  })
+  try {
+    const dups = await detectarCiclosDuplicados()
+    const gCD = grupo('Rotación', 'Ciclos duplicados / fantasma', 'medio', 'Se corrigen abajo en "Ciclos duplicados / fantasma".')
+    dups.forEach(g => gCD.push(`${g.loteNombre} · ${g.potreroNombre}: ${g.miembros.length} registros para una estadía`))
+  } catch (e) { console.warn('revision ciclos dup', e) }
+  const gNom = grupo('Rotación', 'Nombres o datos de potreros/lotes', 'bajo', 'Nombres repetidos, potreros sin área, rotaciones con potreros que ya no existen.')
+  const nLo = {}, nPo = {}
+  LO.filter(l => l.activo === 1).forEach(l => (nLo[norm(l.nombre)] ||= []).push(l))
+  PO.filter(p => p.activo === 1).forEach(p => (nPo[norm(p.nombre)] ||= []).push(p))
+  Object.values(nLo).filter(v => v.length > 1).forEach(v => gNom.push(`Lote repetido: ${v[0].nombre}`))
+  Object.values(nPo).filter(v => v.length > 1).forEach(v => gNom.push(`Potrero repetido: ${v[0].nombre}`))
+  PO.filter(p => p.activo === 1 && !(p.areaHa > 0)).forEach(p => gNom.push(`${p.nombre}: sin área`))
+  RO.filter(r => r.activo === 1).forEach(r => (r.potreroIds || []).filter(id => !pm[id]).forEach(id => gNom.push(`Rotación ${r.nombre}: potrero ${id} no existe`)))
+  LP.filter(x => !pm[x.potreroId]).forEach(x => gNom.push(`Labor de potrero ${x.id}: potrero inexistente`))
+  LP.filter(x => x.fechaFin && dia(x.fechaFin) < dia(x.fecha)).forEach(x => gNom.push(`Labor ${x.tipo} en ${pm[x.potreroId]?.nombre || '?'}: termina ${fd(x.fechaFin)} antes de empezar ${fd(x.fecha)}`))
+
+  // ── LLUVIAS ──
+  const gLl = grupo('Lluvias', 'Lluvias repetidas o imposibles', 'alto', 'Dos registros el mismo día, más de ' + REV_LLUVIA_MAX + ' mm en un día, o fecha futura.')
+  const gLlSeg = grupo('Lluvias', 'Misma lluvia en días seguidos (confirmar)', 'bajo', 'Puede ser real (dos aguaceros iguales) o una copia con la fecha corrida. Si ya lo confirmaste, ignóralo.')
+  const llS = [...LL].sort((a, b) => a.fecha - b.fecha)
+  const llDia = {}
+  llS.forEach(x => (llDia[dia(x.fecha)] ||= []).push(x))
+  Object.values(llDia).filter(v => v.length > 1).forEach(v => gLl.push(`${fd(v[0].fecha)}: ${v.length} registros (${v.map(x => x.mm + ' mm').join(', ')})`))
+  for (let i = 1; i < llS.length; i++) {
+    const a = llS[i - 1], b = llS[i]
+    const d = (dia(b.fecha) - dia(a.fecha)) / D
+    if (d >= 1 && d <= 3 && a.mm === b.mm && a.mm >= 5) gLlSeg.push(`${fd(a.fecha)} y ${fd(b.fecha)}: ${a.mm} mm ambos días — confirmar que no sea una copia corrida`)
+  }
+  LL.filter(x => x.mm > REV_LLUVIA_MAX).forEach(x => gLl.push(`${fd(x.fecha)}: ${x.mm} mm — confirmar`))
+  LL.filter(x => x.fecha > ahora + D).forEach(x => gLl.push(`${fd(x.fecha)}: fecha futura`))
+
+  // Hallazgos que el administrador ya revisó y decidió dejar así (se guardan en
+  // config 'rev_ignorados' y se sincronizan entre equipos).
+  let ign = []
+  try { ign = JSON.parse(await getCfg('rev_ignorados') || '[]') } catch (e) {}
+  const ignSet = new Set(ign)
+  H.forEach(g => { const antes = g.items.length; const quedan = g.items.filter(t => !ignSet.has(g.titulo + '|' + t)); g.items.length = 0; g.items.push(...quedan); g.ignorados = antes - quedan.length })
+  return H.filter(g => g.items.length)
+}
+
+async function marcarRevisado(clave) {
+  let ign = []
+  try { ign = JSON.parse(await getCfg('rev_ignorados') || '[]') } catch (e) {}
+  if (!ign.includes(clave)) ign.push(clave)
+  await setCfgSync('rev_ignorados', JSON.stringify(ign))
+  showToast('Marcado como revisado ✓', 'ok')
+  ejecutarRevisionGeneral()
+}
+
+async function ejecutarRevisionGeneral() {
+  const el = document.getElementById('revision-resultados')
+  if (el) el.innerHTML = '<p class="xs gray center" style="padding:16px">⏳ Revisando todos los datos…</p>'
+  let H
+  try { H = await revisionGeneralDatos() }
+  catch (e) { if (el) el.innerHTML = `<div class="card mb8" style="border-left:4px solid #C62828"><p class="xs">Error al revisar: ${escH(e.message)}</p></div>`; return }
+  try { localStorage.setItem('rev_general_ultima', JSON.stringify({ts: Date.now(), n: H.reduce((t, g) => t + g.items.length, 0)})) } catch (e) {}
+  if (!el) return
+  if (!H.length) {
+    el.innerHTML = `<div class="card mb8" style="background:#E8F5E9;border-left:4px solid #2E7D32"><p class="bold sm" style="color:#2E7D32">✅ No se encontraron inconsistencias</p></div>`
+    return
+  }
+  const col = {alto: '#C62828', medio: '#E65100', bajo: '#757575'}
+  const orden = {alto: 0, medio: 1, bajo: 2}
+  H.sort((a, b) => orden[a.nivel] - orden[b.nivel])
+  const total = H.reduce((t, g) => t + g.items.length, 0)
+  el.innerHTML = `<p class="xs gray mb8">${total} hallazgo${total > 1 ? 's' : ''} en ${H.length} grupo${H.length > 1 ? 's' : ''}. Toca cada grupo para ver el detalle.</p>` +
+    H.map(g => `<details class="card mb8" style="border-left:4px solid ${col[g.nivel]}">
+      <summary style="cursor:pointer;list-style:none">
+        <p class="bold sm">${escH(g.titulo)} <span style="background:${col[g.nivel]};color:#fff;border-radius:10px;padding:1px 8px;font-size:.72rem">${g.items.length}</span></p>
+        <p class="xs gray" style="margin-top:2px">${escH(g.area)}${g.explicacion ? ' · ' + escH(g.explicacion) : ''}</p>
+      </summary>
+      <div style="margin-top:8px;max-height:320px;overflow:auto">${g.items.map(t => `<div class="row-b" style="padding:3px 0;border-top:1px solid #eee;gap:8px"><p class="xs" style="flex:1">${escH(t)}</p>${USER?.rol === 'Administrador 1' ? `<button onclick="marcarRevisado(decodeURIComponent('${encodeURIComponent(g.titulo + '|' + t).replace(/'/g, '%27')}'))" style="border:1px solid #ccc;background:#fff;border-radius:6px;padding:2px 6px;font-size:.68rem;cursor:pointer;white-space:nowrap">✓ Ya revisado</button>` : ''}</div>`).join('')}</div>
+    </details>`).join('')
+}
+
+// Aviso automático: al iniciar sesión el Administrador 1, una vez al día, corre la
+// revisión en segundo plano y avisa si hay hallazgos de nivel alto.
+async function avisoRevisionGeneral() {
+  try {
+    if (USER?.rol !== 'Administrador 1') return
+    const hoy = new Date().toLocaleDateString('es-CO', {timeZone: TZ_COL})
+    if (localStorage.getItem('rev_general_aviso') === hoy) return
+    const H = await revisionGeneralDatos()
+    localStorage.setItem('rev_general_aviso', hoy)
+    const altos = H.filter(g => g.nivel === 'alto').reduce((t, g) => t + g.items.length, 0)
+    if (altos) showToast(`⚠️ ${altos} posible${altos > 1 ? 's' : ''} inconsistencia${altos > 1 ? 's' : ''} en los datos — revisa Config › Integridad`, 'err', 7000)
+  } catch (e) { console.warn('avisoRevisionGeneral', e) }
+}
+
+// ═══════════════════════════════════════════════════
 // DETECCIÓN DE CICLOS DUPLICADOS / FANTASMA
 // ═══════════════════════════════════════════════════
 // Bug histórico: cuando un lote cambiaba de potrero, el ciclo anterior a veces
@@ -8676,7 +8890,13 @@ async function pgConfig() {
   if(tab==='rendimiento') return tabs + await renderRendimiento()
   if(tab==='integridad'){
     return tabs + `
-      <div class="card mb10">
+      <div class="card mb10" style="border-left:4px solid #1565C0">
+        <p class="bold sm mb8">📋 Revisión general de datos</p>
+        <p class="xs gray mb12">Busca datos inconsistentes en toda la app: aretes repetidos, pesajes duplicados o con fechas imposibles, ganancias de peso irreales, ventas incompletas, ciclos y lotes que no cuadran, lluvias repetidas o corridas. Solo lee, no cambia nada.</p>
+        <button class="btn btn-b" onclick="ejecutarRevisionGeneral()">▶ Revisar todos los datos</button>
+      </div>
+      <div id="revision-resultados"></div>
+      <div class="card mb10" style="margin-top:16px">
         <p class="bold sm mb8">🔍 Verificación de integridad de potreros</p>
         <p class="xs gray mb12">Revisa que el estado y los días mostrados de cada potrero coincidan con el historial real de ciclos. Útil si notas un potrero con días de ocupación o descanso que no cuadran.</p>
         <button class="btn btn-b" onclick="ejecutarVerificacionIntegridad()">▶ Ejecutar verificación</button>
@@ -9541,7 +9761,7 @@ async function importarTodo(input) {
         const dosis    = String(row[3]||'').trim()||undefined
         const obs      = String(row[5]||'').trim()||undefined
         for (const animal of animalesLote) {
-          const dup = await db.labores.where('animalId').equals(animal.id).filter(l=>l.fecha===fechaTs&&l.tipo===tipo).first()
+          const dup = await db.labores.where('animalId').equals(animal.id).filter(l=>truncarDia(l.fecha)===truncarDia(fechaTs)&&l.tipo===tipo).first()
           if (!dup) await fsAdd('labores',{animalId:animal.id,fecha:fechaTs,tipo,producto,dosis,obs,registradoPor:quien,registradoEn:ahora})
         }
         addedLL++
@@ -9565,7 +9785,7 @@ async function importarTodo(input) {
         const tipo    = String(row[1]||'').trim().toUpperCase(); if (!tiposValidos.includes(tipo)) { skipLP++; continue }
         const fechaTs = parseFecha(row[2]); if (!fechaTs) { skipLP++; continue }
         const potId   = potMapLP[potNom.toLowerCase()]; if (!potId) { skipLP++; continue }
-        const dup = await db.laboresPotrero.where('potreroId').equals(potId).filter(l=>l.fecha===fechaTs&&l.tipo===tipo).first()
+        const dup = await db.laboresPotrero.where('potreroId').equals(potId).filter(l=>truncarDia(l.fecha)===truncarDia(fechaTs)&&l.tipo===tipo).first()
         if (dup) { skipLP++; continue }
         const fechaFin  = parseFecha(row[3], true) || null
         const jornales  = parseInt(String(row[4]||'0')) || 0
@@ -9606,17 +9826,25 @@ async function importarTodo(input) {
     const shLluv = wb.SheetNames.find(s => /LLUVIA/i.test(s))
     if (shLluv) {
       const rows = readSheet(shLluv, true).filter(r => r[0] && r[1])
-      let addedLl=0, dupLl=0, errLl=0
+      let addedLl=0, dupLl=0, errLl=0, corrLl=0
       for (const row of rows) {
         const fechaTs = parseFecha(row[0]); const mm = parseFloat(String(row[1]).replace(',','.')) || 0
         if (!fechaTs || !mm) { errLl++; continue }
-        const existe = await db.lluvias.where('fecha').equals(fechaTs).first()
+        // Dedup por día calendario (no milisegundo exacto). Bug 13-10-2026: reimportar el
+        // historial con fechas corridas 1-3 días lo triplicó porque solo se comparaba la
+        // fecha exacta.
+        const dia0 = truncarDia(fechaTs)
+        const existe = await db.lluvias.where('fecha').between(dia0, dia0 + DIA_MS_COL - 1, true, true).first()
         if (existe) { dupLl++; continue }
+        // Segunda barrera: la misma cantidad de mm a ≤3 días de un registro existente es
+        // casi siempre el mismo aguacero con la fecha corrida — se omite y se reporta.
+        const corrida = await db.lluvias.where('fecha').between(dia0 - 3*DIA_MS_COL, dia0 + 4*DIA_MS_COL - 1, true, true).filter(l => l.mm === mm).first()
+        if (corrida) { corrLl++; continue }
         const obs = String(row[2]||'').trim()||undefined
         await fsAdd('lluvias', {fecha:fechaTs, mm, ...(obs&&{obs})})
         addedLl++
       }
-      resumen.push(`🌧 Lluvias: ${addedLl} importadas${dupLl?' · '+dupLl+' ya existían':''}${errLl?' · '+errLl+' sin fecha':''}`)
+      resumen.push(`🌧 Lluvias: ${addedLl} importadas${dupLl?' · '+dupLl+' ya existían':''}${corrLl?' · '+corrLl+' omitidas (mismos mm a ≤3 días de un registro existente: posible fecha corrida)':''}${errLl?' · '+errLl+' sin fecha':''}`)
     }
 
     _showProg(93, 'Importando ciclos…')
