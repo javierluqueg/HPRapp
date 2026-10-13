@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261006-003'
+const APP_VERSION = '20261012-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -2922,7 +2922,7 @@ async function openLoteSeleccionados(){
   if(tienenLote>0&&sinLote>0) subTitle=`${sinLote} sin lote · ${tienenLote} cambiarán de lote`
   else if(tienenLote===n) subTitle=`Los ${n} animal${n>1?'es':''} cambiarán de lote`
   else subTitle=`${n} animal${n>1?'es':''} sin lote asignado`
-  const loteOpts=lotes.map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')
+  const loteOpts=await _opcionesLote(lotes)
   const hoy=toD(Date.now())
   showSheet(`
     <div style="padding:4px 0 10px;border-bottom:1px solid #eee;margin-bottom:14px">
@@ -2996,7 +2996,7 @@ async function saveLoteSeleccionados(){
 // ═══════════════════════════════════════════════════
 async function pgAnimalNuevo() {
   const lotes=await db.lotes.where('activo').equals(1).toArray()
-  const loteOpts=`<option value="">Sin asignar</option>${lotes.map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')}`
+  const loteOpts=`<option value="">Sin asignar</option>${await _opcionesLote(lotes)}`
   return `
     <div class="inp-row">
       <div class="field"><label>Arete *</label><input id="an-ar" class="inp" placeholder="Ej: 001"></div>
@@ -3385,7 +3385,7 @@ async function openCambiarLote(id) {
     <div class="field"><label>Lote</label>
       <select id="cl-lote" class="inp">
         <option value="">Sin asignar</option>
-        ${lotes.map(l=>`<option value="${l.id}"${a.loteId===l.id?' selected':''}>${l.nombre}</option>`).join('')}
+        ${await _opcionesLote(lotes, a.loteId)}
       </select></div>
     <div class="field"><label>Fecha de adición al lote</label>
       <input id="cl-f" class="inp" type="date" value="${toD(Date.now())}"></div>
@@ -3487,6 +3487,14 @@ async function saveEditarAnimal(id) {
   go('animal-ficha', {id})
 }
 
+// Opciones <select> de lotes: primero los que tienen ganado (con su número de
+// animales), luego los vacíos marcados "(vacío)". No cambia nombres ni ids.
+async function _opcionesLote(lotes, selId=null) {
+  const act = await db.animales.where('activo').equals(1).toArray()
+  const n = {}; for (const a of act) if (a.loteId) n[a.loteId] = (n[a.loteId]||0) + 1
+  const ord = [...lotes].sort((a,b) => (n[b.id]?1:0) - (n[a.id]?1:0) || String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true,sensitivity:'base'}))
+  return ord.map(l => `<option value="${l.id}"${selId===l.id?' selected':''}>${escH(l.nombre)}${n[l.id]?` · ${n[l.id]} anim`:' (vacío)'}</option>`).join('')
+}
 function escH(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 
 async function darBaja(id) {
@@ -3690,8 +3698,21 @@ async function pgLotes() {
     const promLote = aLote.length ? pesoLote/aLote.length : 0
     const resumen=`<span style="font-weight:700;color:#1a1a1a;font-size:.95rem">${aLote.length}</span> <span style="font-size:.85rem">anim</span> · <span style="color:#388E3C;font-weight:700;font-size:.95rem">${Math.round(pesoLote).toLocaleString('es-CO')} kg</span>${aLote.length?` <span style="font-size:.8rem;color:#888">(${Math.round(promLote).toLocaleString('es-CO')} kg/anim prom.)</span>`:''}`
     const busqData=`${l.nombre} ${potrerosL.map(p=>p.nombre).join(' ')}`.toLowerCase()
+    const vacio = !aLote.length && !paresL.length
+    if(vacio && !_loteSelMode){
+      const ultC=(await db.ciclos.where('loteId').equals(l.id).toArray()).filter(c=>c.fechaSalida).sort((a,b)=>b.fechaSalida-a.fechaSalida)[0]
+      const ultPot=ultC?await db.potreros.get(ultC.potreroId):null
+      const desde=await _fechaUltimaSalidaLote(l.id, ultC?.fechaSalida)
+      return {vacio:true, html:`<div class="card lote-card" data-busq="${busqData} ${ultPot?escH(ultPot.nombre).toLowerCase():''}" style="cursor:pointer;padding:9px 14px;margin-bottom:6px;background:#F7F7F7;border-left:4px solid #CFCFCF" onclick="go('lote-ficha',{id:${l.id}})">
+        <div style="display:flex;align-items:center;gap:8px">
+          <p style="flex:1;min-width:0;font-size:.95rem;font-weight:700;color:#777;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(l.nombre)}</p>
+          <span style="font-size:.78rem;color:#888;text-align:right">vacío desde ${ffd(desde)}${ultPot?`<br>último: ${escH(ultPot.nombre)}`:''}</span>
+          <span style="color:#ccc;font-size:1.1rem;flex-shrink:0">›</span>
+        </div>
+      </div>`}
+    }
     if(_loteSelMode){
-      return `<div class="card border-l4 lote-card ${sel?'bl-red':'bl-blue'}" data-busq="${busqData}" style="cursor:pointer;padding:12px 14px;margin-bottom:7px;${sel?'background:#FFF5F5':''}" onclick="toggleLoteSel(${l.id})">
+      return {vacio, html:`<div class="card border-l4 lote-card ${sel?'bl-red':'bl-blue'}" data-busq="${busqData}" style="cursor:pointer;padding:12px 14px;margin-bottom:7px;${sel?'background:#FFF5F5':''}" onclick="toggleLoteSel(${l.id})">
         <div style="display:flex;align-items:center;gap:10px">
           <div style="width:20px;height:20px;border-radius:5px;border:2px solid ${sel?'#C62828':'#ccc'};background:${sel?'#C62828':'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
             ${sel?'<span style="color:white;font-size:12px;font-weight:700">✓</span>':''}
@@ -3704,13 +3725,13 @@ async function pgLotes() {
           </div>
           <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.85rem;padding:5px 9px;flex-shrink:0">${badgeTxt}</span>
         </div>
-      </div>`
+      </div>`}
     }
-    return `<div class="card border-l4 lote-card bl-blue" data-busq="${busqData}" style="cursor:pointer;padding:12px 14px;margin-bottom:7px" onclick="go('lote-ficha',{id:${l.id}})">
+    return {vacio, html:`<div class="card border-l4 lote-card bl-blue" data-busq="${busqData}" style="cursor:pointer;padding:12px 14px;margin-bottom:7px" onclick="go('lote-ficha',{id:${l.id}})">
       <div style="display:flex;align-items:center;gap:8px">
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-            <p style="font-size:1.08rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.nombre}</p>
+            <p style="font-size:1.08rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(l.nombre)}</p>
             <span class="badge ${pot?'bg-orange':'bg-gray'}" style="font-size:.85rem;padding:5px 9px;flex-shrink:0">${badgeTxt}</span>
           </div>
           <p style="font-size:.9rem;color:#777;margin-top:5px">${resumen}</p>
@@ -3719,7 +3740,7 @@ async function pgLotes() {
         </div>
         <span style="color:#ccc;font-size:1.2rem;flex-shrink:0">›</span>
       </div>
-    </div>`
+    </div>`}
   }))
 
   const hint=_loteSelMode?`<p class="xs gray center mb8">Toca un lote para seleccionarlo</p>`:''
@@ -3729,7 +3750,17 @@ async function pgLotes() {
       style="padding-left:34px;font-size:.87rem"
       oninput="_loteBusq=this.value;filtrarLotes(this.value)">
   </div>`
-  return busqInput + hint + cards.join('')
+  if(_loteSelMode) return busqInput + hint + cards.map(c=>c.html).join('')
+  const con=cards.filter(c=>!c.vacio), vac=cards.filter(c=>c.vacio)
+  const nAnim=animales.filter(a=>a.loteId && lotes.some(l=>l.id===a.loteId)).length
+  const resumenTop=`<p class="sm" style="margin:0 2px 8px;color:#555"><b>${con.length}</b> lote${con.length!==1?'s':''} con ganado · <b>${nAnim.toLocaleString('es-CO')}</b> animales</p>`
+  const secVac=vac.length?`<details id="lotes-vacios" ${_loteBusq?'open':''} style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:.9rem;font-weight:700;color:#777;padding:6px 2px">Lotes vacíos (${vac.length})</summary>
+      <div style="margin-top:6px">${vac.map(c=>c.html).join('')}</div>
+    </details>`:''
+  // Encabezado: número de lotes con ganado resaltado
+  if(PAGE==='lotes') $('hdrTitle').innerHTML=`Lotes <span title="Lotes con ganado" style="display:inline-block;background:#1565C0;color:#fff;border-radius:12px;padding:1px 10px;font-size:.85em;font-weight:800;vertical-align:middle">${con.length}</span>`
+  return busqInput + resumenTop + con.map(c=>c.html).join('') + secVac
 }
 
 // ═══════════════════════════════════════════════════
@@ -3739,6 +3770,7 @@ function activarSelLotes(){ _loteSelMode=true; _loteSelected.clear(); go('lotes'
 function cancelarSelLotes(){ _loteSelMode=false; _loteSelected.clear(); go('lotes') }
 function filtrarLotes(q){
   const term=(q||'').toLowerCase().trim()
+  const dv=document.getElementById('lotes-vacios'); if(dv&&term) dv.open=true
   document.querySelectorAll('.lote-card').forEach(c=>{
     c.style.display=(!term||c.dataset.busq.includes(term))?'':'none'
   })
@@ -3886,7 +3918,7 @@ async function openAccionQuitarLote(){
   }))
   const n=ids.length
   const lotes=await db.lotes.where('activo').equals(1).toArray()
-  const lotesOpts=lotes.filter(l=>l.id!==_editLoteId).map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')
+  const lotesOpts=await _opcionesLote(lotes.filter(l=>l.id!==_editLoteId))
   const causas=['Muerte','Venta','Cesión']
   const hoy=toD(Date.now())
   showSheet(`
@@ -4772,7 +4804,7 @@ async function openMoverLoteMasivo(loteOrigenId) {
     <p class="sm gray mb12">${n} animal${n!==1?'es':''} seleccionado${n!==1?'s':''}</p>
     <div class="field"><label>Lote destino</label>
       <select id="ml-lote" class="inp">
-        ${opciones.map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')}
+        ${await _opcionesLote(opciones)}
       </select></div>
     <div class="field"><label>Fecha de adición al lote</label>
       <input id="ml-f" class="inp" type="date" value="${toD(Date.now())}"></div>
@@ -4794,13 +4826,14 @@ async function saveMoverLoteMasivo(loteOrigenId) {
   if (!ids.length) { showToast('Selecciona al menos un animal','err'); return }
   if (btn) { btn.disabled = true; btn.textContent = `Moviendo ${ids.length}…` }
   const originales = []
+  let cerradosMv = []
   try {
     for (const id of ids) {
       const a = await db.animales.get(id)
-      originales.push({id, loteId: a?.loteId, fechaLote: a?.fechaLote})
+      originales.push({id, loteId: a?.loteId, fechaLote: a?.fechaLote, historialLotes: a?.historialLotes})
       await fsUpdate('animales', id, { loteId: destId, fechaLote: fecha })
     }
-    await checkLoteVacio([loteOrigenId], Date.now())
+    cerradosMv = await checkLoteVacio([loteOrigenId], fecha)
     await sincronizarNumAnimalesLote(destId)
   } catch(e) {
     showToast('Error al mover animales','err', 4000)
@@ -4812,8 +4845,9 @@ async function saveMoverLoteMasivo(loteOrigenId) {
   _lfSelMode = false; _lfSelected = new Set()
   pushUndo(`${n} animal${n!==1?'es':''} movido${n!==1?'s':''} de lote`, async () => {
     for (const o of originales) {
-      await fsUpdate('animales', o.id, { loteId: o.loteId, fechaLote: o.fechaLote })
+      await fsUpdate('animales', o.id, { loteId: o.loteId, fechaLote: o.fechaLote, historialLotes: o.historialLotes ?? _histLotesReconstruido({...o, activo:1}) })
     }
+    await _reabrirCiclos(cerradosMv)
     await sincronizarNumAnimalesLote(loteOrigenId)
     await sincronizarNumAnimalesLote(destId)
   })
@@ -6587,7 +6621,7 @@ async function openIngresarDesde(potreroId) {
     <div class="field"><label>Lote</label>
       <select id="il2-lote" class="inp">
         <option value="">Seleccionar lote…</option>
-        ${sinCiclo.map(l=>`<option value="${l.id}">${l.nombre}</option>`).join('')}
+        ${await _opcionesLote(sinCiclo)}
       </select></div>
     <div class="field"><label>Fecha de ingreso</label>
       <input id="il2-f" class="inp" type="date" value="${toD(Date.now())}"></div>
@@ -7771,7 +7805,8 @@ async function cerrarCiclosActivosLote(loteId, fechaTs, excluirPotreroId) {
   const cerrados = []
   for (const c of activos) {
     if (excluirPotreroId && c.potreroId === excluirPotreroId) continue
-    await fsUpdate('ciclos', c.id, { activo: 0, fechaSalida: fecha, diasOcupacion: diasEntre(c.fechaEntrada||fecha, fecha) })
+    const fSal = Math.max(fecha, c.fechaEntrada || fecha)
+    await fsUpdate('ciclos', c.id, { activo: 0, fechaSalida: fSal, diasOcupacion: diasEntre(c.fechaEntrada||fSal, fSal) })
     cerrados.push(c)
     // Blindaje: este ciclo puede ser un huérfano antiguo (p.ej. de antes de
     // esta corrección) que coexistía con una ocupación real y posterior del
@@ -7785,7 +7820,7 @@ async function cerrarCiclosActivosLote(loteId, fechaTs, excluirPotreroId) {
     if (!hayUnoMasReciente) {
       await fsUpdate('potreros', c.potreroId, {
         estado: 'EN_DESCANSO', numAnimales: 0,
-        loteActual: null, fechaSalida: fecha
+        loteActual: null, fechaSalida: fSal
       })
     }
   }
@@ -8043,13 +8078,27 @@ async function sincronizarNumAnimalesLote(loteId) {
 }
 
 // Auto-descanso: lote vacío → potrero EN_DESCANSO
+// Fecha en que el lote quedó vacío = la salida MÁS RECIENTE de sus animales
+// según su historial de lotes (venta, muerte, cesión o traslado, con la fecha
+// del movimiento, no la del día en que se registra). Así, aunque los registros
+// se hagan días después o en desorden, el potrero se cierra en la fecha real.
+async function _fechaUltimaSalidaLote(loteId, fallback) {
+  let max = -Infinity
+  await db.animales.each(a => {
+    for (const h of (a.historialLotes||[])) if (h.loteId === loteId && Number.isFinite(h.hasta) && h.hasta > max) max = h.hasta
+  })
+  const tope = Date.now()
+  if (Number.isFinite(max)) return Math.min(max, tope)
+  return Number.isFinite(fallback) ? Math.min(fallback, tope) : tope
+}
+
 async function checkLoteVacio(loteIds, fechaTs) {
   const ids = [...new Set(loteIds.filter(Boolean))]
   const todosCerrados = []
   for (const loteId of ids) {
     const restantes = await db.animales.where({ activo: 1, loteId }).count()
     if (restantes > 0) { await sincronizarNumAnimalesLote(loteId); continue }
-    const cerrados = await cerrarCiclosActivosLote(loteId, fechaTs)
+    const cerrados = await cerrarCiclosActivosLote(loteId, await _fechaUltimaSalidaLote(loteId, fechaTs))
     if (!cerrados.length) continue
     todosCerrados.push(...cerrados)
     for (const ciclo of cerrados) {
