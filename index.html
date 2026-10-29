@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261028-003'
+const APP_VERSION = '20261028-004'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1455,14 +1455,15 @@ function cerrarBienvenida() {
 // ═══════════════════════════════════════════════════
 // DÍAS DE OCUPACIÓN POR POTRERO (20261028-003)
 // ═══════════════════════════════════════════════════
-// Indicador para el equipo, sintetizado (pedido de Javier 28-10-2026): semestre,
+// Indicador para el equipo, sintetizado (pedido de Javier 28-10-2026): período,
 // días promedio y una barra con los mismos rangos y colores del semáforo de potreros.
 // Reglas:
 //  · Unidad = cada ocupación (ciclo) de un lote en un potrero; lote en varios potreros a la
 //    vez = una ocupación por potrero. Promedio SIMPLE. Sin metas en la app.
 //  · Días = días calendario entre entrada y salida (corte a medianoche, diasEntre).
-//  · Entran al semestre las ocupaciones que SALIERON en él y las que seguían ABIERTAS al
-//    cierre; las abiertas se cortan hoy o, si el semestre ya terminó, en su último día.
+//  · Período con el mismo selector de Rendimiento (6m · 12m · Fechas). Entran las ocupaciones
+//    que SALIERON en él y las que seguían ABIERTAS al cierre; las abiertas se cortan hoy o,
+//    si el período ya terminó, en su último día (un período cerrado no cambia después).
 //  · Una ocupación abierta que todavía no cumple 1 día (entró hoy) aún no se cuenta.
 //  · Ocupaciones cerradas el mismo día (0 días) y fechas imposibles no se cuentan: se
 //    revisan en Config › Integridad (errores seguros, para Javier y Claude, no para el equipo).
@@ -1481,27 +1482,25 @@ const OCUP_RANGOS = [
 // Color del número grande según el semáforo (amarillo un poco más oscuro para que se lea sobre fondo claro)
 const _ocupColor = d => { const c = semOcup(Math.round(d)).cls; return c === 'on-verde' ? '#2E7D32' : c === 'on-azul' ? '#1565C0' : c === 'on-amarillo' ? '#E6A100' : '#D32F2F' }
 
-// Semestres con datos (desde el inicio hasta hoy), más reciente primero
-function _ocupSemestres() {
-  const out = []
-  const d = DC(Date.now())
-  let y = d.getUTCFullYear(), s = d.getUTCMonth() < 6 ? 1 : 2
-  const di = DC(OCUP_INICIO), yIni = di.getUTCFullYear(), sIni = di.getUTCMonth() < 6 ? 1 : 2
-  while ((y > yIni || (y === yIni && s >= sIni)) && out.length < 20) {
-    out.push({v: y + '-' + s, l: `S${s} ${y} (${s === 1 ? 'ene–jun' : 'jul–dic'})`})
-    if (s === 2) s = 1; else { s = 2; y-- }
-  }
-  return out
-}
-
-// Semestre elegido → {D0, D1} (D0 medianoche del primer día; D1 último instante, nunca después de hoy)
+// Período elegido: mismo selector que "Rendimiento por período" (6m · 12m · 📅 Fechas, 12m por defecto).
+// Devuelve D0 (medianoche del primer día) y D1 (último instante del último día, nunca después de hoy).
 function _ocupPeriodoSel() {
-  const sems = _ocupSemestres()
-  const sel = sems.some(x => x.v === _seg['oc_sem']) ? _seg['oc_sem'] : sems[0].v
-  const [y, s] = sel.split('-').map(Number)
-  const D0 = Math.max(OCUP_INICIO, s === 1 ? colTs(y, 0, 1) : colTs(y, 6, 1))
-  const D1 = Math.min((s === 1 ? colTs(y, 6, 1) : colTs(y + 1, 0, 1)) - 1, truncarDia(Date.now()) + DIA_MS_COL - 1)
-  return {sel, sems, D0, D1}
+  const finHoy = truncarDia(Date.now()) + DIA_MS_COL - 1
+  let p = parseInt(_seg['oc_p'] ?? '365')
+  if (![180, 365, -1].includes(p)) p = 365
+  const esCustom = p === -1
+  const desde = esCustom ? (_seg['oc_desde'] || '') : ''
+  const hasta = esCustom ? (_seg['oc_hasta'] || toD(Date.now())) : ''
+  let D1 = finHoy, D0
+  if (esCustom) {
+    const h = fromDFin(hasta); if (Number.isFinite(h)) D1 = Math.min(h, finHoy)
+    const d = fromD(desde); D0 = Number.isFinite(d) ? d : OCUP_INICIO
+  } else {
+    D0 = truncarDia(D1) - (p - 1) * DIA_MS_COL
+  }
+  const recortado = D0 < OCUP_INICIO
+  D0 = Math.max(D0, OCUP_INICIO)
+  return {p, esCustom, desde, hasta, D0, D1, recortado: recortado && !esCustom, invalido: D1 < D0}
 }
 
 // Cálculo puro (sin acceso a la base): se puede probar con datos simulados.
@@ -1529,11 +1528,22 @@ function calcOcupacion(ciclos, D0, D1) {
 
 async function cardOcupacion() {
   try {
-    const {sel, sems, D0, D1} = _ocupPeriodoSel()
-    const r = calcOcupacion(await db.ciclos.toArray(), D0, D1)
-    const selector = `<select class="inp" style="width:auto;padding:5px 8px;font-size:.78rem" onchange="_seg['oc_sem']=this.value;go('dashboard')">${sems.map(s => `<option value="${s.v}"${s.v === sel ? ' selected' : ''}>${s.l}</option>`).join('')}</select>`
-    const cab = `<div class="row-b mb8" style="gap:8px"><p class="bold sm" style="margin:0">🔄 Días de ocupación</p>${selector}</div>`
-    if (!r.n) return `<div class="card mb8">${cab}<p class="xs gray">Sin ocupaciones en este semestre.</p></div>`
+    const per = _ocupPeriodoSel()
+    const fdC = t => new Date(t).toLocaleDateString('es-CO', {timeZone: TZ_COL, day: '2-digit', month: '2-digit', year: 'numeric'})
+    const btns = [{v:180, l:'6m'}, {v:365, l:'12m'}, {v:-1, l:'📅 Fechas'}]
+      .map(b => `<button class="${b.v === per.p ? 'on' : ''}" onclick="_seg['oc_p']=${b.v};go('dashboard')">${b.l}</button>`).join('')
+    const fechas = per.esCustom ? `<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px">
+        <div style="flex:1"><label style="font-size:.7rem;color:#888;display:block;margin-bottom:3px">Desde</label>
+          <input type="date" class="inp" style="padding:7px 10px;font-size:.82rem" value="${escH(per.desde)}" onchange="_seg['oc_desde']=this.value;go('dashboard')"></div>
+        <div style="flex:1"><label style="font-size:.7rem;color:#888;display:block;margin-bottom:3px">Hasta</label>
+          <input type="date" class="inp" style="padding:7px 10px;font-size:.82rem" value="${escH(per.hasta)}" onchange="_seg['oc_hasta']=this.value;go('dashboard')"></div>
+      </div>` : ''
+    const cab = `<p class="bold sm mb8">🔄 Días de ocupación</p>
+      <div class="seg" style="margin-bottom:10px">${btns}</div>${fechas}
+      <p class="xs gray mb8">${fdC(per.D0)} → ${fdC(per.D1)}${per.recortado ? ' (desde el inicio de registros)' : ''}</p>`
+    if (per.invalido) return `<div class="card mb8">${cab}<p class="xs" style="color:#C62828">La fecha "Desde" es posterior a "Hasta".</p></div>`
+    const r = calcOcupacion(await db.ciclos.toArray(), per.D0, per.D1)
+    if (!r.n) return `<div class="card mb8">${cab}<p class="xs gray">Sin ocupaciones en este período.</p></div>`
     const pct = x => Math.round(x.n / r.n * 100)
     const barra = `<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;background:#EEE;margin:10px 0 6px">
         ${r.rangos.filter(x => x.n).map(x => `<div style="width:${x.n / r.n * 100}%;background:${x.color}"></div>`).join('')}</div>
