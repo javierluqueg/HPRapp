@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261028-002'
+const APP_VERSION = '20261028-003'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1453,315 +1453,99 @@ function cerrarBienvenida() {
 
 // ═══════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════
-// DÍAS DE OCUPACIÓN POR POTRERO (20261028-002)
+// DÍAS DE OCUPACIÓN POR POTRERO (20261028-003)
 // ═══════════════════════════════════════════════════
-// Indicador de manejo rotacional: cuántos días permanece un lote en cada potrero.
-// Reglas acordadas con Javier (28-10-2026):
-//  · Unidad = cada ocupación (ciclo) de un lote en un potrero. Si un lote ocupa varios
-//    potreros a la vez, cada potrero es una ocupación aparte.
+// Indicador para el equipo, sintetizado (pedido de Javier 28-10-2026): semestre,
+// días promedio y una barra con los mismos rangos y colores del semáforo de potreros.
+// Reglas:
+//  · Unidad = cada ocupación (ciclo) de un lote en un potrero; lote en varios potreros a la
+//    vez = una ocupación por potrero. Promedio SIMPLE. Sin metas en la app.
 //  · Días = días calendario entre entrada y salida (corte a medianoche, diasEntre).
-//  · Entra al período toda ocupación que SALIÓ dentro del período, más las que seguían
-//    ABIERTAS al cierre del período. Las abiertas se cortan el día del cálculo o, si el
-//    período ya terminó, en su fecha final (así un semestre cerrado no cambia después).
-//  · Ocupaciones de 0 días se excluyen del promedio y solo se cuentan aparte.
-//  · Promedio SIMPLE (cada ocupación vale igual). Sin metas en la app.
-//  · Ocupaciones sospechosas (> 30 días, cerrada sin fecha de salida, activa con salida)
-//    se cuentan igual y se marcan con ⚠️ para revisarlas.
-//  · Ciclos huérfanos (_huerfano, cerrados con "Corregir estado") no son ocupaciones reales: se excluyen.
+//  · Entran al semestre las ocupaciones que SALIERON en él y las que seguían ABIERTAS al
+//    cierre; las abiertas se cortan hoy o, si el semestre ya terminó, en su último día.
+//  · Una ocupación abierta que todavía no cumple 1 día (entró hoy) aún no se cuenta.
+//  · Ocupaciones cerradas el mismo día (0 días) y fechas imposibles no se cuentan: se
+//    revisan en Config › Integridad (errores seguros, para Javier y Claude, no para el equipo).
+//  · Ciclos huérfanos (cerrados con "Corregir estado") no son ocupaciones reales: no se cuentan.
+//  · Ocupaciones largas se toman como reales (no se pueden verificar); el semáforo de
+//    potreros ya alerta en rojo desde el día 16 mientras ocurren.
 //  · Datos desde el censo inicial: 01/06/2026.
 const OCUP_INICIO = colTs(2026, 5, 1)
-const OCUP_SOSPECHA_DIAS = 30
+// Mismos rangos y colores del semáforo de ocupación (SEM_OCUP / renderSem)
 const OCUP_RANGOS = [
-  {l:'1–3 días',  min:1,  max:3},
-  {l:'4–7 días',  min:4,  max:7},
-  {l:'8–14 días', min:8,  max:14},
-  {l:'> 14 días', min:15, max:Infinity},
+  {l:`1–${SEM_OCUP.azul}`,                        min:1,                    max:SEM_OCUP.azul,     color:'#4CAF50'},
+  {l:`${SEM_OCUP.azul+1}–${SEM_OCUP.amarillo}`,   min:SEM_OCUP.azul+1,      max:SEM_OCUP.amarillo, color:'#1565C0'},
+  {l:`${SEM_OCUP.amarillo+1}–${SEM_OCUP.rojo}`,   min:SEM_OCUP.amarillo+1,  max:SEM_OCUP.rojo,     color:'#FFC107'},
+  {l:`+${SEM_OCUP.rojo}`,                         min:SEM_OCUP.rojo+1,      max:Infinity,          color:'#F44336'},
 ]
+// Color del número grande según el semáforo (amarillo un poco más oscuro para que se lea sobre fondo claro)
+const _ocupColor = d => { const c = semOcup(Math.round(d)).cls; return c === 'on-verde' ? '#2E7D32' : c === 'on-azul' ? '#1565C0' : c === 'on-amarillo' ? '#E6A100' : '#D32F2F' }
 
-// Período elegido en la tarjeta → {D0, D1, etiqueta, terminado}
-// D0 = medianoche del primer día; D1 = último instante del último día (ambos hora Colombia).
-function _ocupPeriodoSel() {
-  const ahora = Date.now()
-  const hoy0 = truncarDia(ahora)
-  const finHoy = hoy0 + DIA_MS_COL - 1
-  const modo = ['sem','6m','12m','fechas'].includes(_seg['oc_modo']) ? _seg['oc_modo'] : 'sem'
-  let D0, D1, etiqueta
-  if (modo === 'sem') {
-    const d = DC(ahora)
-    const actual = d.getUTCFullYear() + '-' + (d.getUTCMonth() < 6 ? 1 : 2)
-    const sel = /^\d{4}-[12]$/.test(_seg['oc_sem'] || '') ? _seg['oc_sem'] : actual
-    const [y, s] = sel.split('-').map(Number)
-    D0 = s === 1 ? colTs(y, 0, 1) : colTs(y, 6, 1)
-    D1 = (s === 1 ? colTs(y, 6, 1) : colTs(y + 1, 0, 1)) - 1
-    etiqueta = `S${s} ${y}`
-  } else if (modo === '6m' || modo === '12m') {
-    const n = modo === '6m' ? 180 : 365
-    D1 = finHoy
-    D0 = hoy0 - (n - 1) * DIA_MS_COL
-    etiqueta = modo === '6m' ? 'Últimos 6 meses' : 'Últimos 12 meses'
-  } else {
-    const dd = fromD(_seg['oc_desde'] || '')
-    const dh = fromDFin(_seg['oc_hasta'] || '')
-    D0 = Number.isFinite(dd) ? dd : OCUP_INICIO
-    D1 = Number.isFinite(dh) ? dh : finHoy
-    etiqueta = 'Fechas elegidas'
-  }
-  const recortado = D0 < OCUP_INICIO
-  D0 = Math.max(D0, OCUP_INICIO)
-  const futuro = D1 > finHoy
-  D1 = Math.min(D1, finHoy)
-  return {modo, D0, D1, etiqueta, recortado, terminado: !futuro && D1 < finHoy, invalido: D1 < D0}
-}
-
-// Semestres disponibles para el selector (desde el inicio de datos hasta hoy), más reciente primero
+// Semestres con datos (desde el inicio hasta hoy), más reciente primero
 function _ocupSemestres() {
   const out = []
   const d = DC(Date.now())
   let y = d.getUTCFullYear(), s = d.getUTCMonth() < 6 ? 1 : 2
-  const yIni = DC(OCUP_INICIO).getUTCFullYear(), sIni = DC(OCUP_INICIO).getUTCMonth() < 6 ? 1 : 2
-  while (y > yIni || (y === yIni && s >= sIni)) {
+  const di = DC(OCUP_INICIO), yIni = di.getUTCFullYear(), sIni = di.getUTCMonth() < 6 ? 1 : 2
+  while ((y > yIni || (y === yIni && s >= sIni)) && out.length < 20) {
     out.push({v: y + '-' + s, l: `S${s} ${y} (${s === 1 ? 'ene–jun' : 'jul–dic'})`})
     if (s === 2) s = 1; else { s = 2; y-- }
-    if (out.length > 20) break
   }
   return out
 }
 
+// Semestre elegido → {D0, D1} (D0 medianoche del primer día; D1 último instante, nunca después de hoy)
+function _ocupPeriodoSel() {
+  const sems = _ocupSemestres()
+  const sel = sems.some(x => x.v === _seg['oc_sem']) ? _seg['oc_sem'] : sems[0].v
+  const [y, s] = sel.split('-').map(Number)
+  const D0 = Math.max(OCUP_INICIO, s === 1 ? colTs(y, 0, 1) : colTs(y, 6, 1))
+  const D1 = Math.min((s === 1 ? colTs(y, 6, 1) : colTs(y + 1, 0, 1)) - 1, truncarDia(Date.now()) + DIA_MS_COL - 1)
+  return {sel, sems, D0, D1}
+}
+
 // Cálculo puro (sin acceso a la base): se puede probar con datos simulados.
-// ciclos: registros de la tabla ciclos · potMap/loteMap: id → registro · D0/D1: período
-function calcOcupacion(ciclos, potMap, loteMap, D0, D1) {
-  const filas = []
-  let nCero = 0, nInvalidos = 0, nHuerfanos = 0
+function calcOcupacion(ciclos, D0, D1) {
+  const dias = []
   for (const c of ciclos) {
-    if (!c || !Number.isFinite(+c.fechaEntrada) || !c.fechaEntrada) continue
+    if (!c || !c.fechaEntrada || !Number.isFinite(+c.fechaEntrada) || c._huerfano) continue
     const E = +c.fechaEntrada
-    if (E > D1) continue                                   // entró después del período
-    const tieneSalida = Number.isFinite(+c.fechaSalida) && !!c.fechaSalida
-    const S = tieneSalida ? +c.fechaSalida : null
-    if (tieneSalida && truncarDia(S) < truncarDia(D0)) continue   // ya había salido antes del período
-    const avisos = []
-    if (tieneSalida && truncarDia(S) < truncarDia(E)) { nInvalidos++; continue }  // salida antes de entrada: dato imposible
-    // Ciclo huérfano cerrado por "Corregir estado": su salida es la fecha de la corrección, no una salida real
-    if (c._huerfano) { nHuerfanos++; continue }
-    if (!tieneSalida && c.activo !== 1) avisos.push('cerrada sin fecha de salida')
-    if (tieneSalida && c.activo === 1) avisos.push('activa pero con fecha de salida')
-    // Abierta al cierre del período (sin salida, o salió después del período) → se corta en D1
-    const abierta = !tieneSalida || S > D1
-    const salidaEf = abierta ? D1 : S
-    const dias = diasEntre(E, salidaEf)
-    if (dias <= 0) { nCero++; continue }
-    if (dias > OCUP_SOSPECHA_DIAS) avisos.push(`más de ${OCUP_SOSPECHA_DIAS} días`)
-    const pot = potMap[c.potreroId]
-    if (!pot) avisos.push('potrero no encontrado')
-    filas.push({
-      id: c.id,
-      potreroId: c.potreroId,
-      potrero: pot?.nombre || ('Potrero #' + c.potreroId),
-      loteId: c.loteId,
-      lote: loteMap[c.loteId]?.nombre || c.nombreLote || ('Lote #' + c.loteId),
-      animales: +c.numAnimales || 0,
-      entrada: truncarDia(E),
-      salida: truncarDia(salidaEf),
-      dias, abierta, avisos,
-    })
+    if (E > D1) continue                                            // entró después del período
+    const S = (c.fechaSalida && Number.isFinite(+c.fechaSalida)) ? +c.fechaSalida : null
+    if (S !== null && truncarDia(S) < truncarDia(D0)) continue      // salió antes del período
+    if (S !== null && truncarDia(S) < truncarDia(E)) continue       // fecha imposible → Integridad
+    const abierta = S === null || S > D1
+    const d = diasEntre(E, abierta ? D1 : S)
+    if (d <= 0) continue    // abierta que entró hoy (aún sin 1 día) o cerrada el mismo día (→ Integridad)
+    dias.push(d)
   }
-  filas.sort((a, b) => b.dias - a.dias || a.potrero.localeCompare(b.potrero, 'es', {numeric:true}))
-  const dias = filas.map(f => f.dias).sort((a, b) => a - b)
   const n = dias.length
-  const prom = n ? dias.reduce((s, x) => s + x, 0) / n : null
-  const mediana = n ? (n % 2 ? dias[(n - 1) / 2] : (dias[n / 2 - 1] + dias[n / 2]) / 2) : null
-  const rangos = OCUP_RANGOS.map(r => ({...r, n: dias.filter(x => x >= r.min && x <= r.max).length}))
-  const agrupar = key => {
-    const m = new Map()
-    for (const f of filas) {
-      const k = f[key]   // por nombre, igual que el COUNTIF del Excel
-      if (!m.has(k)) m.set(k, {nombre: f[key], n: 0, suma: 0, max: 0, abiertas: 0})
-      const g = m.get(k); g.n++; g.suma += f.dias; g.max = Math.max(g.max, f.dias); if (f.abierta) g.abiertas++
-    }
-    return [...m.values()].map(g => ({...g, prom: g.suma / g.n}))
-      .sort((a, b) => b.prom - a.prom || a.nombre.localeCompare(b.nombre, 'es', {numeric:true}))
-  }
   return {
-    filas, n, prom, mediana, max: filas[0] || null, rangos,
-    nAbiertas: filas.filter(f => f.abierta).length,
-    nAvisos: filas.filter(f => f.avisos.length).length,
-    nCero, nInvalidos, nHuerfanos,
-    porPotrero: agrupar('potrero'), porLote: agrupar('lote'),
+    n,
+    prom: n ? dias.reduce((s, x) => s + x, 0) / n : null,
+    rangos: OCUP_RANGOS.map(r => ({...r, n: dias.filter(x => x >= r.min && x <= r.max).length})),
   }
 }
-
-async function _ocupDatos() {
-  const per = _ocupPeriodoSel()
-  const [ciclos, potreros, lotes] = await Promise.all([db.ciclos.toArray(), db.potreros.toArray(), db.lotes.toArray()])
-  const potMap = Object.fromEntries(potreros.map(p => [p.id, p]))
-  const loteMap = Object.fromEntries(lotes.map(l => [l.id, l]))
-  const r = per.invalido ? calcOcupacion([], potMap, loteMap, per.D0, per.D1) : calcOcupacion(ciclos, potMap, loteMap, per.D0, per.D1)
-  return {per, r}
-}
-
-const _ocupFmt = v => v === null || v === undefined ? '—' : (Math.round(v * 10) / 10).toLocaleString('es-CO', {minimumFractionDigits: 1, maximumFractionDigits: 1})
-const _ocupColor = d => d <= 3 ? '#2E7D32' : d <= 7 ? '#F9A825' : d <= 14 ? '#EF6C00' : '#C62828'
 
 async function cardOcupacion() {
-  let per, r
-  try { ({per, r} = await _ocupDatos()) }
-  catch (e) { console.error('cardOcupacion', e); return `<div class="card mb8"><p class="bold sm">🔄 Días de ocupación</p><p class="xs gray">No se pudo calcular: ${escH(e.message || e)}</p></div>` }
-  const fd = t => new Date(t).toLocaleDateString('es-CO', {timeZone: TZ_COL, day: '2-digit', month: '2-digit', year: 'numeric'})
-  const fdc = t => new Date(t).toLocaleDateString('es-CO', {timeZone: TZ_COL, day: '2-digit', month: '2-digit'})
-  const modos = [{v:'sem', l:'Semestre'}, {v:'6m', l:'6m'}, {v:'12m', l:'12m'}, {v:'fechas', l:'📅 Fechas'}]
-  const segBtns = modos.map(m => `<button class="${m.v === per.modo ? 'on' : ''}" onclick="_seg['oc_modo']='${m.v}';go('dashboard')">${m.l}</button>`).join('')
-  const sems = _ocupSemestres()
-  const semSel = /^\d{4}-[12]$/.test(_seg['oc_sem'] || '') ? _seg['oc_sem'] : sems[0]?.v
-  const selector = per.modo === 'sem'
-    ? `<select class="inp" style="padding:7px 10px;font-size:.82rem;margin-bottom:10px" onchange="_seg['oc_sem']=this.value;go('dashboard')">${sems.map(s => `<option value="${s.v}"${s.v === semSel ? ' selected' : ''}>${s.l}</option>`).join('')}</select>`
-    : per.modo === 'fechas'
-    ? `<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px">
-        <div style="flex:1"><label style="font-size:.7rem;color:#888;display:block;margin-bottom:3px">Desde</label>
-          <input type="date" class="inp" style="padding:7px 10px;font-size:.82rem" min="${toD(OCUP_INICIO)}" max="${hoyCol()}" value="${escH(_seg['oc_desde'] || toD(OCUP_INICIO))}" onchange="_seg['oc_desde']=this.value;go('dashboard')"></div>
-        <div style="flex:1"><label style="font-size:.7rem;color:#888;display:block;margin-bottom:3px">Hasta</label>
-          <input type="date" class="inp" style="padding:7px 10px;font-size:.82rem" min="${toD(OCUP_INICIO)}" max="${hoyCol()}" value="${escH(_seg['oc_hasta'] || hoyCol())}" onchange="_seg['oc_hasta']=this.value;go('dashboard')"></div>
-      </div>`
-    : ''
-  const cab = `<div class="row-b mb8"><p class="bold sm" style="margin:0">🔄 Días de ocupación por potrero</p>
-      ${r.n ? `<button onclick="exportarOcupacionExcel()" style="border:none;background:#2E7D32;color:#fff;border-radius:8px;padding:5px 10px;font-size:.72rem;font-weight:700;cursor:pointer">⬇ Excel</button>` : ''}</div>
-    <div class="seg" style="margin-bottom:10px">${segBtns}</div>${selector}
-    <p class="xs gray mb8">${fd(per.D0)} → ${fd(per.D1)}${per.recortado ? ' (los datos empiezan el 01/06/2026)' : ''}${per.terminado ? '' : ' · ocupaciones abiertas contadas hasta hoy'}</p>`
-  if (per.invalido) return `<div class="card mb8">${cab}<p class="xs" style="color:#C62828">La fecha "Desde" es posterior a "Hasta".</p></div>`
-  if (!r.n) return `<div class="card mb8">${cab}<p class="xs gray">Sin ocupaciones registradas en este período.${r.nCero ? ` (${r.nCero} de 0 días excluidas)` : ''}</p></div>`
-
-  const maxR = Math.max(...r.rangos.map(x => x.n), 1)
-  const barras = r.rangos.map(x => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-      <span class="xs gray" style="width:62px;flex-shrink:0">${x.l}</span>
-      <div style="flex:1;background:#F1F1F1;border-radius:4px;height:12px;overflow:hidden"><div style="height:100%;width:${Math.round(x.n / maxR * 100)}%;background:${_ocupColor(x.min)};border-radius:4px"></div></div>
-      <span class="xs bold" style="width:58px;text-align:right">${x.n} · ${Math.round(x.n / r.n * 100)}%</span></div>`).join('')
-  const tablaGrupo = (lista, titulo) => `<details style="margin-top:6px"><summary class="xs bold" style="cursor:pointer;color:#1565C0">${titulo} (${lista.length})</summary>
-      <div style="margin-top:6px">${lista.map(g => `<div class="row-b" style="padding:4px 0;border-bottom:1px solid #f4f4f4">
-        <span class="xs">${escH(g.nombre)} <span class="gray">· ${g.n} ocup.${g.abiertas ? ' · ' + g.abiertas + ' abierta' + (g.abiertas > 1 ? 's' : '') : ''}</span></span>
-        <span class="xs bold" style="color:${_ocupColor(g.prom)}">${_ocupFmt(g.prom)} d <span class="gray" style="font-weight:400">(máx ${g.max})</span></span></div>`).join('')}</div></details>`
-  const listaCiclos = `<details style="margin-top:6px"><summary class="xs bold" style="cursor:pointer;color:#1565C0">Cada ocupación (${r.n})</summary>
-      <div style="margin-top:6px">${r.filas.map(f => `<div style="padding:5px 0;border-bottom:1px solid #f4f4f4">
-        <div class="row-b"><span class="xs bold">${escH(f.potrero)} <span class="gray" style="font-weight:400">· ${escH(f.lote)}${f.animales ? ' · ' + f.animales + ' anim.' : ''}</span></span>
-          <span class="xs bold" style="color:${_ocupColor(f.dias)}">${f.dias} d</span></div>
-        <p class="xs gray">${fdc(f.entrada)} → ${fdc(f.salida)}${f.abierta ? ' <span style="color:#E65100;font-weight:700">· abierta</span>' : ''}${f.avisos.length ? ` <span style="color:#C62828;font-weight:700">⚠️ ${escH(f.avisos.join(', '))}</span>` : ''}</p>
-      </div>`).join('')}</div></details>`
-  const notas = [
-    r.nAbiertas ? `${r.nAbiertas} abierta${r.nAbiertas > 1 ? 's' : ''} (lote aún en el potrero al cierre)` : '',
-    r.nCero ? `${r.nCero} de 0 días excluida${r.nCero > 1 ? 's' : ''}` : '',
-    r.nInvalidos ? `<span style="color:#C62828">${r.nInvalidos} con salida antes de la entrada, excluida${r.nInvalidos > 1 ? 's' : ''} (corregir en Config › Integridad)</span>` : '',
-    r.nHuerfanos ? `${r.nHuerfanos} ciclo${r.nHuerfanos > 1 ? 's' : ''} huérfano${r.nHuerfanos > 1 ? 's' : ''} (cerrados por corrección) excluido${r.nHuerfanos > 1 ? 's' : ''}` : '',
-    r.nAvisos ? `<span style="color:#C62828">⚠️ ${r.nAvisos} para revisar</span>` : '',
-  ].filter(Boolean).join(' · ')
-
-  return `<div class="card mb8">${cab}
-    <div style="display:flex;gap:8px;margin-bottom:10px">
-      <div style="flex:1.3;background:#F5F5F5;border-radius:10px;padding:8px;text-align:center">
-        <p style="font-size:1.6rem;font-weight:900;color:${_ocupColor(r.prom)};line-height:1.1">${_ocupFmt(r.prom)}</p>
-        <p style="font-size:.65rem;color:#777">días promedio</p></div>
-      <div style="flex:1;background:#F5F5F5;border-radius:10px;padding:8px;text-align:center">
-        <p style="font-size:1.15rem;font-weight:800;color:#444;line-height:1.3">${r.n}</p><p style="font-size:.65rem;color:#777">ocupaciones</p></div>
-      <div style="flex:1;background:#F5F5F5;border-radius:10px;padding:8px;text-align:center">
-        <p style="font-size:1.15rem;font-weight:800;color:#444;line-height:1.3">${_ocupFmt(r.mediana)}</p><p style="font-size:.65rem;color:#777">mediana</p></div>
-    </div>
-    <div class="row-b mb8"><span class="xs gray">Ocupación más larga</span><span class="xs bold" style="color:${_ocupColor(r.max.dias)}">${r.max.dias} d · ${escH(r.max.potrero)} (${escH(r.max.lote)})${r.max.abierta ? ' · abierta' : ''}</span></div>
-    ${barras}
-    ${notas ? `<p class="xs gray" style="margin-top:6px">${notas}</p>` : ''}
-    ${tablaGrupo(r.porPotrero, 'Por potrero')}
-    ${tablaGrupo(r.porLote, 'Por lote')}
-    ${listaCiclos}
-  </div>`
-}
-
-// Excel del período elegido en la tarjeta, con fórmulas vivas
-async function exportarOcupacionExcel() {
   try {
-    await loadXLSX()
-    const {per, r} = await _ocupDatos()
-    if (!r.n) { showToast('No hay ocupaciones en el período', 'err', 3000); return }
-    const serial = t => { const d = DC(t); return (Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(1899, 11, 30)) / 86400000 }
-    const cel = (v, z) => typeof v === 'number' ? (z ? {t:'n', v, z} : {t:'n', v}) : {t:'s', v: String(v ?? '')}
-    const fx = (f, z) => (z ? {t:'n', f, z} : {t:'n', f})
-    const wb = XLSX.utils.book_new()
-
-    // Hoja OCUPACIONES
-    const ult = r.n + 1
-    const ws = {}
-    const cab = ['N°', 'POTRERO', 'LOTE', 'ANIMALES', 'ENTRADA', 'SALIDA / CORTE', 'DÍAS', 'ESTADO', 'AVISO']
-    cab.forEach((h, i) => ws[XLSX.utils.encode_cell({r: 0, c: i})] = cel(h))
-    r.filas.forEach((f, i) => {
-      const R = i + 1, x = R + 1
-      const fila = [cel(R), cel(f.potrero), cel(f.lote), cel(f.animales), cel(serial(f.entrada), 'dd/mm/yyyy'), cel(serial(f.salida), 'dd/mm/yyyy'),
-        fx(`F${x}-E${x}`, '0'), cel(f.abierta ? 'ABIERTA (corte)' : 'CERRADA'), cel(f.avisos.join(', '))]
-      fila.forEach((v, c) => ws[XLSX.utils.encode_cell({r: R, c})] = v)
-    })
-    ws['!ref'] = XLSX.utils.encode_range({s: {r: 0, c: 0}, e: {r: r.n, c: cab.length - 1}})
-    ws['!cols'] = [{wch: 5}, {wch: 16}, {wch: 14}, {wch: 10}, {wch: 12}, {wch: 15}, {wch: 7}, {wch: 16}, {wch: 34}]
-    ws['!autofilter'] = {ref: `A1:I${ult}`}
-
-    const rgDias = `OCUPACIONES!$G$2:$G$${ult}`
-    // Hoja RESUMEN
-    const fdt = t => { const d = DC(t); return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + d.getUTCFullYear() }
-    const res = [
-      [cel('DÍAS DE OCUPACIÓN POR POTRERO'), cel('')],
-      [cel('Período'), cel(`${per.etiqueta}: ${fdt(per.D0)} a ${fdt(per.D1)}`)],
-      [cel('Generado'), cel(ffdHora(Date.now()))],
-      [cel(''), cel('')],
-      [cel('Ocupaciones'), fx(`COUNT(${rgDias})`, '0')],
-      [cel('Promedio (días)'), fx(`ROUND(AVERAGE(${rgDias}),1)`, '0.0')],
-      [cel('Mediana (días)'), fx(`MEDIAN(${rgDias})`, '0.0')],
-      [cel('Máximo (días)'), fx(`MAX(${rgDias})`, '0')],
-      [cel('Abiertas al corte'), fx(`COUNTIF(OCUPACIONES!$H$2:$H$${ult},"ABIERTA*")`, '0')],
-      [cel(''), cel('')],
-      [cel('RANGO'), cel('OCUPACIONES'), cel('%')],
-      ...OCUP_RANGOS.map((g, i) => {
-        const x = 12 + i
-        const f = g.max === Infinity ? `COUNTIF(${rgDias},">=${g.min}")` : `COUNTIFS(${rgDias},">=${g.min}",${rgDias},"<=${g.max}")`
-        return [cel(g.l), fx(f, '0'), fx(`IF($B$5=0,0,B${x}/$B$5)`, '0%')]
-      }),
-      [cel(''), cel('')],
-      [cel('Excluidas por 0 días'), cel(r.nCero)],
-      [cel('Excluidas por salida antes de la entrada'), cel(r.nInvalidos)],
-      [cel('Excluidos ciclos huérfanos (cerrados por corrección)'), cel(r.nHuerfanos)],
-      [cel(''), cel('')],
-      [cel('Reglas: promedio simple por ocupación; un lote en varios potreros cuenta una ocupación por potrero; las ocupaciones abiertas se cortan en la fecha final del período (o hoy); las de 0 días no se cuentan. Datos desde 01/06/2026.'), cel('')],
-    ]
-    const wsR = XLSX.utils.aoa_to_sheet([[]])
-    res.forEach((row, R) => row.forEach((v, c) => wsR[XLSX.utils.encode_cell({r: R, c})] = v))
-    wsR['!ref'] = XLSX.utils.encode_range({s: {r: 0, c: 0}, e: {r: res.length - 1, c: 2}})
-    wsR['!cols'] = [{wch: 40}, {wch: 34}, {wch: 8}]
-
-    // Hojas POR POTRERO y POR LOTE (fórmulas sobre OCUPACIONES)
-    const hojaGrupo = (lista, col, titulo) => {
-      const w = {}
-      ;[titulo, 'OCUPACIONES', 'PROMEDIO DÍAS', 'MÁXIMO DÍAS'].forEach((h, c) => w[XLSX.utils.encode_cell({r: 0, c})] = cel(h))
-      const rg = `OCUPACIONES!$${col}$2:$${col}$${ult}`
-      lista.forEach((g, i) => {
-        const x = i + 2
-        w['A' + x] = cel(g.nombre)
-        w['B' + x] = fx(`COUNTIF(${rg},A${x})`, '0')
-        w['C' + x] = fx(`ROUND(AVERAGEIF(${rg},A${x},${rgDias}),1)`, '0.0')
-        w['D' + x] = fx(`SUMPRODUCT(MAX((${rg}=A${x})*${rgDias}))`, '0')   // compatible con cualquier Excel (MAXIFS da #NAME? en algunos)
-      })
-      w['!ref'] = XLSX.utils.encode_range({s: {r: 0, c: 0}, e: {r: lista.length, c: 3}})
-      w['!cols'] = [{wch: 18}, {wch: 13}, {wch: 15}, {wch: 13}]
-      return w
-    }
-    XLSX.utils.book_append_sheet(wb, wsR, 'RESUMEN')
-    XLSX.utils.book_append_sheet(wb, ws, 'OCUPACIONES')
-    XLSX.utils.book_append_sheet(wb, hojaGrupo(r.porPotrero, 'B', 'POTRERO'), 'POR POTRERO')
-    XLSX.utils.book_append_sheet(wb, hojaGrupo(r.porLote, 'C', 'LOTE'), 'POR LOTE')
-
-    const buf = XLSX.write(wb, {bookType: 'xlsx', type: 'array'})
-    const blob = new Blob([buf], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
-    const fname = `HPRapp-DiasOcupacion-${toD(per.D0).split('-').reverse().join('-')}_a_${toD(per.D1).split('-').reverse().join('-')}.xlsx`
-    const file = new File([blob], fname, {type: blob.type})
-    if (navigator.canShare && navigator.canShare({files: [file]})) {
-      try { await navigator.share({files: [file], title: 'Días de ocupación'}); return } catch (e) { if (e.name === 'AbortError') return }
-    }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click()
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+    const {sel, sems, D0, D1} = _ocupPeriodoSel()
+    const r = calcOcupacion(await db.ciclos.toArray(), D0, D1)
+    const selector = `<select class="inp" style="width:auto;padding:5px 8px;font-size:.78rem" onchange="_seg['oc_sem']=this.value;go('dashboard')">${sems.map(s => `<option value="${s.v}"${s.v === sel ? ' selected' : ''}>${s.l}</option>`).join('')}</select>`
+    const cab = `<div class="row-b mb8" style="gap:8px"><p class="bold sm" style="margin:0">🔄 Días de ocupación</p>${selector}</div>`
+    if (!r.n) return `<div class="card mb8">${cab}<p class="xs gray">Sin ocupaciones en este semestre.</p></div>`
+    const pct = x => Math.round(x.n / r.n * 100)
+    const barra = `<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;background:#EEE;margin:10px 0 6px">
+        ${r.rangos.filter(x => x.n).map(x => `<div style="width:${x.n / r.n * 100}%;background:${x.color}"></div>`).join('')}</div>
+      <div style="display:flex;justify-content:space-between;gap:4px">
+        ${r.rangos.map(x => `<span style="font-size:.7rem;color:#555;white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${x.color};margin-right:3px"></span>${x.l} d <b>${pct(x)}%</b></span>`).join('')}</div>`
+    return `<div class="card mb8">${cab}
+      <p style="text-align:center;line-height:1.1"><span style="font-size:2rem;font-weight:900;color:${_ocupColor(r.prom)}">${(Math.round(r.prom * 10) / 10).toLocaleString('es-CO', {minimumFractionDigits: 1, maximumFractionDigits: 1})}</span>
+        <span style="font-size:.8rem;color:#777"> días promedio por potrero</span></p>
+      ${barra}</div>`
   } catch (e) {
-    console.error('exportarOcupacionExcel', e)
-    showToast('No se pudo generar el Excel: ' + (e.message || e), 'err', 5000)
+    console.error('cardOcupacion', e)
+    return `<div class="card mb8"><p class="bold sm">🔄 Días de ocupación</p><p class="xs gray">No se pudo calcular.</p></div>`
   }
 }
 
@@ -8471,6 +8255,13 @@ async function revisionGeneralDatos() {
     if (c.activo !== 1 && !c.fechaSalida) gCic.push(`${nom}: cerrado sin fecha de salida`)
     if (!pm[c.potreroId] || !lm[c.loteId]) gCic.push(`${nom}: lote o potrero inexistente (ciclo ${c.id})`)
     if (c.fechaEntrada > ahora + D) gCic.push(`${nom}: entrada futura ${fd(c.fechaEntrada)}`)
+  })
+  // Ocupaciones cerradas el mismo día (20261028-003): no cuentan en "Días de ocupación".
+  // Suelen ser correcciones o un registro mal hecho; si fue un paso real de horas, marcar "Ya revisado".
+  const gCero = grupo('Rotación', 'Ocupaciones cerradas el mismo día (0 días)', 'bajo', 'El lote entró y salió del potrero el mismo día. No se cuentan en los días de ocupación. Si fue real (un paso de pocas horas), márcalo como revisado.')
+  C.forEach(c => {
+    if (c._huerfano || c.activo === 1 || !c.fechaEntrada || !c.fechaSalida) return
+    if (dia(c.fechaSalida) === dia(c.fechaEntrada)) gCero.push(`${c.nombreLote || lm[c.loteId]?.nombre || 'Lote ?'} · ${pm[c.potreroId]?.nombre || 'potrero ?'}: entró y salió el ${fd(c.fechaEntrada)}`)
   })
   const gSolape = grupo('Rotación', 'Dos lotes en el mismo potrero al mismo tiempo', 'medio', 'Solapes de más de 1 día entre ciclos de lotes distintos en un mismo potrero.')
   const cPot = {}
