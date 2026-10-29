@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261013-002'
+const APP_VERSION = '20261028-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -915,6 +915,37 @@ async function _areteLibreR(arete) {
   let cand = String(arete).trim() + 'R'
   while (await _buscarArete(cand)) cand += 'R'
   return cand
+}
+// ── Regla 28-10-2026 (Javier): la R solo se usa cuando el número choca con un animal ACTIVO.
+// Si el número solo existe en un animal vendido/muerto, se reutiliza SIN R y con esta observación.
+const NOTA_ARETE_REUSADO = 'Número ya usado en un animal vendido anteriormente. Verificar en el próximo pesaje o venta.'
+async function _buscarAreteActivo(arete, excluirId=null) {
+  const k = String(arete ?? '').trim().toLowerCase()
+  if (!k) return null
+  return await db.animales.filter(a => a.activo === 1 && a.id !== excluirId && String(a.arete ?? '').trim().toLowerCase() === k).first() || null
+}
+function _conNotaReuso(desc) {
+  const d = String(desc || '').trim()
+  return d.includes(NOTA_ARETE_REUSADO) ? d : (d ? d + ' · ' : '') + NOTA_ARETE_REUSADO
+}
+// ── Búsqueda aproximada de aretes (solo para BUSCAR; la identidad sigue siendo exacta:
+// "033-A" y "33A" son animales distintos). Ignora mayúsculas, guiones, espacios, puntos y ceros a la izquierda.
+function _areteBusq(s) { return String(s ?? '').toLowerCase().replace(/[\s\-_.\/]/g, '').replace(/^0+(?=.)/, '') }
+// Rango de coincidencia: 0 exacto · 1 igual normalizado · 2 empieza igual · 3 contiene · -1 no coincide
+function _areteRango(arete, q) {
+  const a = String(arete ?? '').toLowerCase().trim(), ql = String(q ?? '').toLowerCase().trim()
+  if (!ql) return -1
+  if (a === ql) return 0
+  const an = _areteBusq(a), qn = _areteBusq(ql)
+  if (qn && an === qn) return 1
+  if (a.startsWith(ql) || (qn && an.startsWith(qn))) return 2
+  if (a.includes(ql) || (qn && an.includes(qn))) return 3
+  return -1
+}
+function _ordenarPorArete(lista, q, get = x => x.arete) {
+  if (!String(q ?? '').trim()) return lista
+  const r = x => { const v = _areteRango(get(x), q); return v < 0 ? 9 : v }
+  return lista.map((x, i) => [x, r(x), i]).sort((u, v) => u[1] - v[1] || u[2] - v[2]).map(u => u[0])
 }
 function _descArete(a) {
   return a.activo === 1 ? 'activo' : `dado de baja${a.causaBaja ? ' (' + a.causaBaja.toLowerCase() + ')' : ''}${a.fechaBaja ? ' el ' + ffd(a.fechaBaja) : ''}`
@@ -2155,8 +2186,8 @@ async function pgGanado() {
   const aniSinLote=animales.filter(a=>!a.loteId)
   // Listas para armar tarjetas/paginación: respetan el filtro de categoría/adjudicación/búsqueda activo
   const busqL = _ganBusq.toLowerCase()
-  const pasaBusq = a => !busqL || (a.arete+' '+(a.nombre||'')+' '+(a.raza||'')+' '+(a.color||'')+' '+(a.descripcion||'')+' '+(a.categoria||'')).toLowerCase().includes(busqL)
-  let aniSinLoteF = aniSinLote.filter(pasaBusq), aniConLoteF = aniConLote.filter(pasaBusq)
+  const pasaBusq = a => !busqL || _areteRango(a.arete, busqL) >= 0 || (a.arete+' '+(a.nombre||'')+' '+(a.raza||'')+' '+(a.color||'')+' '+(a.descripcion||'')+' '+(a.categoria||'')).toLowerCase().includes(busqL)
+  let aniSinLoteF = _ordenarPorArete(aniSinLote.filter(pasaBusq), busqL), aniConLoteF = _ordenarPorArete(aniConLote.filter(pasaBusq), busqL)
   if(_ganFiltroCat){ aniSinLoteF = aniSinLoteF.filter(a=>a.categoria===_ganFiltroCat); aniConLoteF = aniConLoteF.filter(a=>a.categoria===_ganFiltroCat) }
   if(_ganFiltroAdj==='sin') aniConLoteF = []
   if(_ganFiltroAdj==='con') aniSinLoteF = []
@@ -2358,9 +2389,10 @@ function previewSelPalabra(q) {
     (a.nombre||'').toLowerCase().includes(ql)||
     (a.raza||'').toLowerCase().includes(ql)||
     (a.color||'').toLowerCase().includes(ql)||
-    (a.arete||'').toLowerCase().includes(ql)||
+    _areteRango(a.arete, ql) >= 0 ||
     (a.categoria||'').toLowerCase().includes(ql)
   )
+  _spdMatches = _ordenarPorArete(_spdMatches, ql)
   // Por defecto seleccionar todos los resultados
   _spdSel = new Set(_spdMatches.map(a=>a.id))
   _spdRenderLista()
@@ -3065,13 +3097,18 @@ async function saveAnimal() {
     const f=$('an-ar'); if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('El arete es requerido','err'); return
   }
-  let areteFinal = arete
-  const exist = await _buscarArete(arete)
-  if (exist) {
-    if (exist.activo === 1) { showToast(`Ya existe el arete "${exist.arete}" (activo)`, 'err', 4000); return }
+  let areteFinal = arete, reusoArete = false
+  const existAct = await _buscarAreteActivo(arete)
+  if (existAct) {
     const sug = await _areteLibreR(arete)
-    if (!await showConfirm(`El arete "${exist.arete}" ya existe: ${_descArete(exist)}.\n\nPara no repetirlo, este animal se registrará como "${sug}".\n\n¿Continuar?`)) return
+    if (!await showConfirm(`El arete "${existAct.arete}" ya existe en un animal ACTIVO.\n\nPara diferenciarlos en campo, este animal se registrará como "${sug}".\n\n¿Continuar?`)) return
     areteFinal = sug
+  } else {
+    const exist = await _buscarArete(arete)
+    if (exist) {
+      if (!await showConfirm(`El arete "${exist.arete}" ya fue usado: ${_descArete(exist)}.\n\nSe registrará igual, sin R, con la observación:\n"${NOTA_ARETE_REUSADO}"\n\n¿Continuar?`)) return
+      reusoArete = true
+    }
   }
   const pesoIni=parseFloat($('an-peso')?.value)||0
   const loteId=$('an-lote')?.value?parseInt($('an-lote').value):undefined
@@ -3081,7 +3118,7 @@ async function saveAnimal() {
   if (_fPeso && truncarDia(_fPeso) < truncarDia(_fIng)) { showToast('La fecha del pesaje no puede ser anterior al ingreso a la finca','err',5000); return }
   const anData={
     arete:areteFinal, nombre:$('an-nm')?.value?.trim()||'', categoria:$('an-cat')?.value||'',
-    raza:$('an-rz')?.value||'', color:$('an-color')?.value?.trim()||'', descripcion:$('an-desc')?.value?.trim()||'',
+    raza:$('an-rz')?.value||'', color:$('an-color')?.value?.trim()||'', descripcion:reusoArete?_conNotaReuso($('an-desc')?.value):($('an-desc')?.value?.trim()||''),
     loteId, fechaLote:loteId?_fLote:undefined,
     pesoInicial:pesoIni, precioPorKg:parseFloat($('an-precio')?.value)||0,
     fechaIngreso:_fIng,
@@ -3493,8 +3530,17 @@ async function saveEditarAnimal(id) {
     const f=$('ea-ar'); if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('El arete es requerido','err'); return
   }
-  const exist = await _buscarArete(arete, id)
-  if (exist) { showToast(`Ya existe el arete "${exist.arete}" (${_descArete(exist)}). Usa la convención del sufijo R.`, 'err', 5000); return }
+  const exist = await _buscarAreteActivo(arete, id)
+  if (exist) { showToast(`Ya existe el arete "${exist.arete}" en un animal activo. Usa la convención del sufijo R.`, 'err', 5000); return }
+  let reusoEA = false
+  {
+    const prevA = await db.animales.get(id)
+    const existB = String(prevA?.arete ?? '').trim().toLowerCase() !== arete.toLowerCase() ? await _buscarArete(arete, id) : null
+    if (existB) {
+      if (!await showConfirm(`El arete "${existB.arete}" ya fue usado: ${_descArete(existB)}.\n\nSe guardará sin R, con la observación:\n"${NOTA_ARETE_REUSADO}"\n\n¿Continuar?`)) return
+      reusoEA = true
+    }
+  }
   const fechaEA = leerFecha('ea-fi', {requerida:false, etiqueta:'la fecha de ingreso'}); if (fechaEA === null) return
   const btn = $('ea-btn')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
@@ -3507,7 +3553,7 @@ async function saveEditarAnimal(id) {
       categoria:$('ea-cat')?.value          || '',
       raza:     $('ea-rz')?.value           || '',
       color:    $('ea-color')?.value?.trim()|| '',
-      descripcion: $('ea-desc')?.value?.trim() || '',
+      descripcion: reusoEA ? _conNotaReuso($('ea-desc')?.value) : ($('ea-desc')?.value?.trim() || ''),
       fechaIngreso: fechaEA,
       precioPorKg:  parseFloat($('ea-precio')?.value)||0,
       procedencia:  $('ea-proc')?.value?.trim() || '',
@@ -5303,12 +5349,13 @@ function filtrarAnimalesLote(){
   const fColor=$('aa-color')?.value||''
   const fuente=_aaTab==='disp'?_aniLoteLibres:_aniLoteEnOtros
   _aniLoteFiltrada=fuente.filter(a=>{
-    if(ql&&!((a.arete||'').toLowerCase().includes(ql)||(a.nombre||'').toLowerCase().includes(ql))) return false
+    if(ql&&!(_areteRango(a.arete, ql) >= 0||(a.nombre||'').toLowerCase().includes(ql))) return false
     if(fCat&&a.categoria!==fCat) return false
     if(fRaza&&a.raza!==fRaza) return false
     if(fColor&&(a.color||'')!==fColor) return false
     return true
   })
+  if(ql) _aniLoteFiltrada=_ordenarPorArete(_aniLoteFiltrada, ql)
   const el=$('aa-lista'); if(!el) return
   const esTraslado=_aaTab==='traslado'
   el.innerHTML=_aniLoteFiltrada.length?_aniLoteFiltrada.map(a=>{
@@ -7559,11 +7606,11 @@ function rvFiltrar() {
     rvUpdBtnContinuar()
     return
   }
-  _rvFiltrados = _rvAnimales.filter(a =>
-    String(a.arete??"").toLowerCase().includes(q) ||
+  _rvFiltrados = _ordenarPorArete(_rvAnimales.filter(a =>
+    _areteRango(a.arete, q) >= 0 ||
     (a.nombre||'').toLowerCase().includes(q) ||
     a._loteNom.toLowerCase().includes(q)
-  ).slice(0, 60)
+  ), q).slice(0, 60)
   rvRenderLista()
 }
 
@@ -7968,9 +8015,9 @@ async function revisionGeneralDatos() {
   const grupo = (area, titulo, nivel, explicacion) => { const g = {area, titulo, nivel, explicacion, items: []}; H.push(g); return g.items }
 
   // ── ANIMALES ──
-  const gDup = grupo('Animales', 'Aretes repetidos', 'alto', 'Dos animales con el mismo número (sin distinguir mayúsculas). Se corrige con la convención del sufijo "R" en el más reciente.')
+  const gDup = grupo('Animales', 'Aretes repetidos entre activos', 'alto', 'Dos animales ACTIVOS con el mismo número (sin distinguir mayúsculas). Se corrige con la convención del sufijo "R" en el más reciente. Un número que solo se repite con un animal vendido o muerto es válido (regla 28-10-2026) y no se reporta.')
   const byArete = {}
-  A.forEach(a => { const k = norm(a.arete); if (k) (byArete[k] ||= []).push(a) })
+  A.filter(a => a.activo === 1).forEach(a => { const k = norm(a.arete); if (k) (byArete[k] ||= []).push(a) })
   Object.values(byArete).filter(v => v.length > 1).forEach(v => gDup.push(v.map(a => `${a.arete} (${a.activo === 1 ? 'activo' : 'baja ' + fd(a.fechaBaja)})`).join(' / ')))
   const gSinAr = grupo('Animales', 'Animales sin arete', 'alto', '')
   A.filter(a => !norm(a.arete)).forEach(a => gSinAr.push('ID ' + a.id))
@@ -8837,7 +8884,7 @@ function rendFiltradas(){
   if(_rendEstado!=='todos') f = f.filter(x=>x.estado===_rendEstado)
   if(_rendBusq){
     const q=_rendBusq.toLowerCase()
-    f = f.filter(x=> String(x.a.arete??"").toLowerCase().includes(q) || (x.a.nombre||'').toLowerCase().includes(q) || x.loteNom.toLowerCase().includes(q))
+    f = _ordenarPorArete(f.filter(x=> _areteRango(x.a.arete, q) >= 0 || (x.a.nombre||'').toLowerCase().includes(q) || x.loteNom.toLowerCase().includes(q)), q, x=>x.a.arete)
   }
   return f
 }
@@ -9708,11 +9755,15 @@ async function importarTodo(input) {
         let areteNuevo = arete
         const precioKg = parseFloat(String(row[10]||'0').replace(',','.')) || null
         // Si el arete es de un animal ya dado de baja y esta fila ingresa después de esa
-        // baja, es un animal distinto: se crea con el sufijo R en vez de omitirlo.
+        // baja, es un animal distinto: se crea con el MISMO número (sin R) y con la
+        // observación de número reutilizado (regla 28-10-2026: la R solo para choques entre activos).
+        let reusoImp = false
         if (existe && existe.activo !== 1 && existe.fechaBaja) {
           const fIngFila = parseFecha(row[6])
           if (fIngFila && truncarDia(fIngFila) > truncarDia(existe.fechaBaja)) {
-            areteNuevo = await _areteLibreR(arete); renA.push(`${arete}→${areteNuevo}`); existe = null
+            const act = await _buscarAreteActivo(arete)
+            if (act) { existe = act }
+            else { reusoImp = true; renA.push(arete); existe = null }
           }
         }
 
@@ -9740,7 +9791,7 @@ async function importarTodo(input) {
           arete:areteNuevo, nombre:undefined,
           categoria:cat, raza:String(row[4]||'').trim(),
           color:String(row[5]||'').trim()||undefined,
-          pesoInicial:pesoIni, descripcion:String(row[12]||'').trim()||undefined,
+          pesoInicial:pesoIni, descripcion:reusoImp?_conNotaReuso(row[12]):(String(row[12]||'').trim()||undefined),
           procedencia:String(row[11]||'').trim()||undefined,
           estadoSanitario:'SANO', activo:1, fechaIngreso:fechaTs,
           loteId, fechaLote:loteId?fechaTs:undefined,
@@ -9753,7 +9804,7 @@ async function importarTodo(input) {
         }
         addedA++
       }
-      resumen.push(`🐄 Animales: ${addedA} importados${updA?' · '+updA+' precios actualizados':''}${dupA?' · '+dupA+' ya existían':''}${sinArete?' · '+sinArete+' sin arete':''}${renA.length?' · '+renA.length+' con sufijo R por arete de un animal dado de baja ('+renA.slice(0,8).join(', ')+(renA.length>8?'…':'')+')':''}`)
+      resumen.push(`🐄 Animales: ${addedA} importados${updA?' · '+updA+' precios actualizados':''}${dupA?' · '+dupA+' ya existían':''}${sinArete?' · '+sinArete+' sin arete':''}${renA.length?' · '+renA.length+' con número ya usado por un animal dado de baja, registrados sin R y con observación ('+renA.slice(0,8).join(', ')+(renA.length>8?'…':'')+')':''}`)
     }
 
     _showProg(55, 'Importando pesajes…')
@@ -9763,8 +9814,17 @@ async function importarTodo(input) {
     if (shPes) {
       const rows = readSheet(shPes, true).filter(r => r[0] && r[1])
       const todosAnimalesPes = await db.animales.toArray()
-      const areteMap = {}
-      todosAnimalesPes.forEach(a => areteMap[String(a.arete).trim()] = a.id)
+      // Aretes sin distinguir mayúsculas; si un número está repetido (activo + vendido), se toma
+      // el animal que estaba en la finca en la fecha del pesaje, prefiriendo el activo.
+      const areteMulti = {}
+      todosAnimalesPes.forEach(a => { const k = String(a.arete ?? '').trim().toLowerCase(); if (k) (areteMulti[k] ||= []).push(a) })
+      const animalPesaje = (ar, f) => {
+        const c = areteMulti[String(ar ?? '').trim().toLowerCase()] || []
+        if (c.length < 2) return c[0]?.id
+        const d = truncarDia(f)
+        const vivos = c.filter(a => (!a.fechaIngreso || truncarDia(a.fechaIngreso) <= d) && (a.activo === 1 || !a.fechaBaja || truncarDia(a.fechaBaja) >= d))
+        return (vivos.find(a => a.activo === 1) || vivos[0] || c.find(a => a.activo === 1) || c[0]).id
+      }
       let addedPes=0, skipPes=0
       const revisarPes=[]
       for (const row of rows) {
@@ -9772,7 +9832,7 @@ async function importarTodo(input) {
         const pesoKg  = parseFloat(String(row[1]).replace(',','.')) || 0
         const fechaTs = parseFecha(row[2])
         if (!arete || !pesoKg || !fechaTs) { skipPes++; continue }
-        const animalId = areteMap[arete]; if (!animalId) { skipPes++; continue }
+        const animalId = animalPesaje(arete, fechaTs); if (!animalId) { skipPes++; continue }
         // Dedup por día calendario (no milisegundo exacto): evita que reimportar un Excel
         // ya exportado (que trae la hoja PESAJES con el historial) cree filas repetidas
         // solo porque la hora del timestamp original no coincide con la del reimport.
