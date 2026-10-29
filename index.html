@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261028-001'
+const APP_VERSION = '20261028-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -454,7 +454,9 @@ function _histLotesAplicar(prev, obj) {
   const antes = prev ? (prev.loteId ?? null) : null
   const ahora = obj.loteId ?? null
   if (antes === ahora) return
-  const cuando = (ahora && obj.fechaLote) || obj.fechaBaja || Date.now()
+  // _fechaMov = fecha real del movimiento (transitoria, no se guarda). Regla 12-10-2026:
+  // la fecha válida es la del movimiento, nunca la del día en que se registra.
+  const cuando = obj._fechaMov || (ahora && obj.fechaLote) || obj.fechaBaja || Date.now()
   const hist = prev ? (Array.isArray(prev.historialLotes) ? prev.historialLotes.map(h=>({...h})) : _histLotesReconstruido(prev)) : []
   const abierto = hist.length ? hist[hist.length-1] : null
   if (abierto && !abierto.hasta) abierto.hasta = Math.max(cuando, abierto.desde||0)
@@ -488,6 +490,7 @@ async function fsUpdate(table, id, obj) {
     obj = {...obj}
     _histLotesAplicar(await db.animales.get(id), obj)
   }
+  if ('_fechaMov' in obj) { obj = {...obj}; delete obj._fechaMov }
   const ts = Date.now()
   await db[table].update(id, {...obj, _ts: ts})
   _suppressRefreshUntil = Date.now() + 4000  // Suprimir refresh por 4s
@@ -1449,6 +1452,319 @@ function cerrarBienvenida() {
 
 
 // ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+// DÍAS DE OCUPACIÓN POR POTRERO (20261028-002)
+// ═══════════════════════════════════════════════════
+// Indicador de manejo rotacional: cuántos días permanece un lote en cada potrero.
+// Reglas acordadas con Javier (28-10-2026):
+//  · Unidad = cada ocupación (ciclo) de un lote en un potrero. Si un lote ocupa varios
+//    potreros a la vez, cada potrero es una ocupación aparte.
+//  · Días = días calendario entre entrada y salida (corte a medianoche, diasEntre).
+//  · Entra al período toda ocupación que SALIÓ dentro del período, más las que seguían
+//    ABIERTAS al cierre del período. Las abiertas se cortan el día del cálculo o, si el
+//    período ya terminó, en su fecha final (así un semestre cerrado no cambia después).
+//  · Ocupaciones de 0 días se excluyen del promedio y solo se cuentan aparte.
+//  · Promedio SIMPLE (cada ocupación vale igual). Sin metas en la app.
+//  · Ocupaciones sospechosas (> 30 días, cerrada sin fecha de salida, activa con salida)
+//    se cuentan igual y se marcan con ⚠️ para revisarlas.
+//  · Ciclos huérfanos (_huerfano, cerrados con "Corregir estado") no son ocupaciones reales: se excluyen.
+//  · Datos desde el censo inicial: 01/06/2026.
+const OCUP_INICIO = colTs(2026, 5, 1)
+const OCUP_SOSPECHA_DIAS = 30
+const OCUP_RANGOS = [
+  {l:'1–3 días',  min:1,  max:3},
+  {l:'4–7 días',  min:4,  max:7},
+  {l:'8–14 días', min:8,  max:14},
+  {l:'> 14 días', min:15, max:Infinity},
+]
+
+// Período elegido en la tarjeta → {D0, D1, etiqueta, terminado}
+// D0 = medianoche del primer día; D1 = último instante del último día (ambos hora Colombia).
+function _ocupPeriodoSel() {
+  const ahora = Date.now()
+  const hoy0 = truncarDia(ahora)
+  const finHoy = hoy0 + DIA_MS_COL - 1
+  const modo = ['sem','6m','12m','fechas'].includes(_seg['oc_modo']) ? _seg['oc_modo'] : 'sem'
+  let D0, D1, etiqueta
+  if (modo === 'sem') {
+    const d = DC(ahora)
+    const actual = d.getUTCFullYear() + '-' + (d.getUTCMonth() < 6 ? 1 : 2)
+    const sel = /^\d{4}-[12]$/.test(_seg['oc_sem'] || '') ? _seg['oc_sem'] : actual
+    const [y, s] = sel.split('-').map(Number)
+    D0 = s === 1 ? colTs(y, 0, 1) : colTs(y, 6, 1)
+    D1 = (s === 1 ? colTs(y, 6, 1) : colTs(y + 1, 0, 1)) - 1
+    etiqueta = `S${s} ${y}`
+  } else if (modo === '6m' || modo === '12m') {
+    const n = modo === '6m' ? 180 : 365
+    D1 = finHoy
+    D0 = hoy0 - (n - 1) * DIA_MS_COL
+    etiqueta = modo === '6m' ? 'Últimos 6 meses' : 'Últimos 12 meses'
+  } else {
+    const dd = fromD(_seg['oc_desde'] || '')
+    const dh = fromDFin(_seg['oc_hasta'] || '')
+    D0 = Number.isFinite(dd) ? dd : OCUP_INICIO
+    D1 = Number.isFinite(dh) ? dh : finHoy
+    etiqueta = 'Fechas elegidas'
+  }
+  const recortado = D0 < OCUP_INICIO
+  D0 = Math.max(D0, OCUP_INICIO)
+  const futuro = D1 > finHoy
+  D1 = Math.min(D1, finHoy)
+  return {modo, D0, D1, etiqueta, recortado, terminado: !futuro && D1 < finHoy, invalido: D1 < D0}
+}
+
+// Semestres disponibles para el selector (desde el inicio de datos hasta hoy), más reciente primero
+function _ocupSemestres() {
+  const out = []
+  const d = DC(Date.now())
+  let y = d.getUTCFullYear(), s = d.getUTCMonth() < 6 ? 1 : 2
+  const yIni = DC(OCUP_INICIO).getUTCFullYear(), sIni = DC(OCUP_INICIO).getUTCMonth() < 6 ? 1 : 2
+  while (y > yIni || (y === yIni && s >= sIni)) {
+    out.push({v: y + '-' + s, l: `S${s} ${y} (${s === 1 ? 'ene–jun' : 'jul–dic'})`})
+    if (s === 2) s = 1; else { s = 2; y-- }
+    if (out.length > 20) break
+  }
+  return out
+}
+
+// Cálculo puro (sin acceso a la base): se puede probar con datos simulados.
+// ciclos: registros de la tabla ciclos · potMap/loteMap: id → registro · D0/D1: período
+function calcOcupacion(ciclos, potMap, loteMap, D0, D1) {
+  const filas = []
+  let nCero = 0, nInvalidos = 0, nHuerfanos = 0
+  for (const c of ciclos) {
+    if (!c || !Number.isFinite(+c.fechaEntrada) || !c.fechaEntrada) continue
+    const E = +c.fechaEntrada
+    if (E > D1) continue                                   // entró después del período
+    const tieneSalida = Number.isFinite(+c.fechaSalida) && !!c.fechaSalida
+    const S = tieneSalida ? +c.fechaSalida : null
+    if (tieneSalida && truncarDia(S) < truncarDia(D0)) continue   // ya había salido antes del período
+    const avisos = []
+    if (tieneSalida && truncarDia(S) < truncarDia(E)) { nInvalidos++; continue }  // salida antes de entrada: dato imposible
+    // Ciclo huérfano cerrado por "Corregir estado": su salida es la fecha de la corrección, no una salida real
+    if (c._huerfano) { nHuerfanos++; continue }
+    if (!tieneSalida && c.activo !== 1) avisos.push('cerrada sin fecha de salida')
+    if (tieneSalida && c.activo === 1) avisos.push('activa pero con fecha de salida')
+    // Abierta al cierre del período (sin salida, o salió después del período) → se corta en D1
+    const abierta = !tieneSalida || S > D1
+    const salidaEf = abierta ? D1 : S
+    const dias = diasEntre(E, salidaEf)
+    if (dias <= 0) { nCero++; continue }
+    if (dias > OCUP_SOSPECHA_DIAS) avisos.push(`más de ${OCUP_SOSPECHA_DIAS} días`)
+    const pot = potMap[c.potreroId]
+    if (!pot) avisos.push('potrero no encontrado')
+    filas.push({
+      id: c.id,
+      potreroId: c.potreroId,
+      potrero: pot?.nombre || ('Potrero #' + c.potreroId),
+      loteId: c.loteId,
+      lote: loteMap[c.loteId]?.nombre || c.nombreLote || ('Lote #' + c.loteId),
+      animales: +c.numAnimales || 0,
+      entrada: truncarDia(E),
+      salida: truncarDia(salidaEf),
+      dias, abierta, avisos,
+    })
+  }
+  filas.sort((a, b) => b.dias - a.dias || a.potrero.localeCompare(b.potrero, 'es', {numeric:true}))
+  const dias = filas.map(f => f.dias).sort((a, b) => a - b)
+  const n = dias.length
+  const prom = n ? dias.reduce((s, x) => s + x, 0) / n : null
+  const mediana = n ? (n % 2 ? dias[(n - 1) / 2] : (dias[n / 2 - 1] + dias[n / 2]) / 2) : null
+  const rangos = OCUP_RANGOS.map(r => ({...r, n: dias.filter(x => x >= r.min && x <= r.max).length}))
+  const agrupar = key => {
+    const m = new Map()
+    for (const f of filas) {
+      const k = f[key]   // por nombre, igual que el COUNTIF del Excel
+      if (!m.has(k)) m.set(k, {nombre: f[key], n: 0, suma: 0, max: 0, abiertas: 0})
+      const g = m.get(k); g.n++; g.suma += f.dias; g.max = Math.max(g.max, f.dias); if (f.abierta) g.abiertas++
+    }
+    return [...m.values()].map(g => ({...g, prom: g.suma / g.n}))
+      .sort((a, b) => b.prom - a.prom || a.nombre.localeCompare(b.nombre, 'es', {numeric:true}))
+  }
+  return {
+    filas, n, prom, mediana, max: filas[0] || null, rangos,
+    nAbiertas: filas.filter(f => f.abierta).length,
+    nAvisos: filas.filter(f => f.avisos.length).length,
+    nCero, nInvalidos, nHuerfanos,
+    porPotrero: agrupar('potrero'), porLote: agrupar('lote'),
+  }
+}
+
+async function _ocupDatos() {
+  const per = _ocupPeriodoSel()
+  const [ciclos, potreros, lotes] = await Promise.all([db.ciclos.toArray(), db.potreros.toArray(), db.lotes.toArray()])
+  const potMap = Object.fromEntries(potreros.map(p => [p.id, p]))
+  const loteMap = Object.fromEntries(lotes.map(l => [l.id, l]))
+  const r = per.invalido ? calcOcupacion([], potMap, loteMap, per.D0, per.D1) : calcOcupacion(ciclos, potMap, loteMap, per.D0, per.D1)
+  return {per, r}
+}
+
+const _ocupFmt = v => v === null || v === undefined ? '—' : (Math.round(v * 10) / 10).toLocaleString('es-CO', {minimumFractionDigits: 1, maximumFractionDigits: 1})
+const _ocupColor = d => d <= 3 ? '#2E7D32' : d <= 7 ? '#F9A825' : d <= 14 ? '#EF6C00' : '#C62828'
+
+async function cardOcupacion() {
+  let per, r
+  try { ({per, r} = await _ocupDatos()) }
+  catch (e) { console.error('cardOcupacion', e); return `<div class="card mb8"><p class="bold sm">🔄 Días de ocupación</p><p class="xs gray">No se pudo calcular: ${escH(e.message || e)}</p></div>` }
+  const fd = t => new Date(t).toLocaleDateString('es-CO', {timeZone: TZ_COL, day: '2-digit', month: '2-digit', year: 'numeric'})
+  const fdc = t => new Date(t).toLocaleDateString('es-CO', {timeZone: TZ_COL, day: '2-digit', month: '2-digit'})
+  const modos = [{v:'sem', l:'Semestre'}, {v:'6m', l:'6m'}, {v:'12m', l:'12m'}, {v:'fechas', l:'📅 Fechas'}]
+  const segBtns = modos.map(m => `<button class="${m.v === per.modo ? 'on' : ''}" onclick="_seg['oc_modo']='${m.v}';go('dashboard')">${m.l}</button>`).join('')
+  const sems = _ocupSemestres()
+  const semSel = /^\d{4}-[12]$/.test(_seg['oc_sem'] || '') ? _seg['oc_sem'] : sems[0]?.v
+  const selector = per.modo === 'sem'
+    ? `<select class="inp" style="padding:7px 10px;font-size:.82rem;margin-bottom:10px" onchange="_seg['oc_sem']=this.value;go('dashboard')">${sems.map(s => `<option value="${s.v}"${s.v === semSel ? ' selected' : ''}>${s.l}</option>`).join('')}</select>`
+    : per.modo === 'fechas'
+    ? `<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px">
+        <div style="flex:1"><label style="font-size:.7rem;color:#888;display:block;margin-bottom:3px">Desde</label>
+          <input type="date" class="inp" style="padding:7px 10px;font-size:.82rem" min="${toD(OCUP_INICIO)}" max="${hoyCol()}" value="${escH(_seg['oc_desde'] || toD(OCUP_INICIO))}" onchange="_seg['oc_desde']=this.value;go('dashboard')"></div>
+        <div style="flex:1"><label style="font-size:.7rem;color:#888;display:block;margin-bottom:3px">Hasta</label>
+          <input type="date" class="inp" style="padding:7px 10px;font-size:.82rem" min="${toD(OCUP_INICIO)}" max="${hoyCol()}" value="${escH(_seg['oc_hasta'] || hoyCol())}" onchange="_seg['oc_hasta']=this.value;go('dashboard')"></div>
+      </div>`
+    : ''
+  const cab = `<div class="row-b mb8"><p class="bold sm" style="margin:0">🔄 Días de ocupación por potrero</p>
+      ${r.n ? `<button onclick="exportarOcupacionExcel()" style="border:none;background:#2E7D32;color:#fff;border-radius:8px;padding:5px 10px;font-size:.72rem;font-weight:700;cursor:pointer">⬇ Excel</button>` : ''}</div>
+    <div class="seg" style="margin-bottom:10px">${segBtns}</div>${selector}
+    <p class="xs gray mb8">${fd(per.D0)} → ${fd(per.D1)}${per.recortado ? ' (los datos empiezan el 01/06/2026)' : ''}${per.terminado ? '' : ' · ocupaciones abiertas contadas hasta hoy'}</p>`
+  if (per.invalido) return `<div class="card mb8">${cab}<p class="xs" style="color:#C62828">La fecha "Desde" es posterior a "Hasta".</p></div>`
+  if (!r.n) return `<div class="card mb8">${cab}<p class="xs gray">Sin ocupaciones registradas en este período.${r.nCero ? ` (${r.nCero} de 0 días excluidas)` : ''}</p></div>`
+
+  const maxR = Math.max(...r.rangos.map(x => x.n), 1)
+  const barras = r.rangos.map(x => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span class="xs gray" style="width:62px;flex-shrink:0">${x.l}</span>
+      <div style="flex:1;background:#F1F1F1;border-radius:4px;height:12px;overflow:hidden"><div style="height:100%;width:${Math.round(x.n / maxR * 100)}%;background:${_ocupColor(x.min)};border-radius:4px"></div></div>
+      <span class="xs bold" style="width:58px;text-align:right">${x.n} · ${Math.round(x.n / r.n * 100)}%</span></div>`).join('')
+  const tablaGrupo = (lista, titulo) => `<details style="margin-top:6px"><summary class="xs bold" style="cursor:pointer;color:#1565C0">${titulo} (${lista.length})</summary>
+      <div style="margin-top:6px">${lista.map(g => `<div class="row-b" style="padding:4px 0;border-bottom:1px solid #f4f4f4">
+        <span class="xs">${escH(g.nombre)} <span class="gray">· ${g.n} ocup.${g.abiertas ? ' · ' + g.abiertas + ' abierta' + (g.abiertas > 1 ? 's' : '') : ''}</span></span>
+        <span class="xs bold" style="color:${_ocupColor(g.prom)}">${_ocupFmt(g.prom)} d <span class="gray" style="font-weight:400">(máx ${g.max})</span></span></div>`).join('')}</div></details>`
+  const listaCiclos = `<details style="margin-top:6px"><summary class="xs bold" style="cursor:pointer;color:#1565C0">Cada ocupación (${r.n})</summary>
+      <div style="margin-top:6px">${r.filas.map(f => `<div style="padding:5px 0;border-bottom:1px solid #f4f4f4">
+        <div class="row-b"><span class="xs bold">${escH(f.potrero)} <span class="gray" style="font-weight:400">· ${escH(f.lote)}${f.animales ? ' · ' + f.animales + ' anim.' : ''}</span></span>
+          <span class="xs bold" style="color:${_ocupColor(f.dias)}">${f.dias} d</span></div>
+        <p class="xs gray">${fdc(f.entrada)} → ${fdc(f.salida)}${f.abierta ? ' <span style="color:#E65100;font-weight:700">· abierta</span>' : ''}${f.avisos.length ? ` <span style="color:#C62828;font-weight:700">⚠️ ${escH(f.avisos.join(', '))}</span>` : ''}</p>
+      </div>`).join('')}</div></details>`
+  const notas = [
+    r.nAbiertas ? `${r.nAbiertas} abierta${r.nAbiertas > 1 ? 's' : ''} (lote aún en el potrero al cierre)` : '',
+    r.nCero ? `${r.nCero} de 0 días excluida${r.nCero > 1 ? 's' : ''}` : '',
+    r.nInvalidos ? `<span style="color:#C62828">${r.nInvalidos} con salida antes de la entrada, excluida${r.nInvalidos > 1 ? 's' : ''} (corregir en Config › Integridad)</span>` : '',
+    r.nHuerfanos ? `${r.nHuerfanos} ciclo${r.nHuerfanos > 1 ? 's' : ''} huérfano${r.nHuerfanos > 1 ? 's' : ''} (cerrados por corrección) excluido${r.nHuerfanos > 1 ? 's' : ''}` : '',
+    r.nAvisos ? `<span style="color:#C62828">⚠️ ${r.nAvisos} para revisar</span>` : '',
+  ].filter(Boolean).join(' · ')
+
+  return `<div class="card mb8">${cab}
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <div style="flex:1.3;background:#F5F5F5;border-radius:10px;padding:8px;text-align:center">
+        <p style="font-size:1.6rem;font-weight:900;color:${_ocupColor(r.prom)};line-height:1.1">${_ocupFmt(r.prom)}</p>
+        <p style="font-size:.65rem;color:#777">días promedio</p></div>
+      <div style="flex:1;background:#F5F5F5;border-radius:10px;padding:8px;text-align:center">
+        <p style="font-size:1.15rem;font-weight:800;color:#444;line-height:1.3">${r.n}</p><p style="font-size:.65rem;color:#777">ocupaciones</p></div>
+      <div style="flex:1;background:#F5F5F5;border-radius:10px;padding:8px;text-align:center">
+        <p style="font-size:1.15rem;font-weight:800;color:#444;line-height:1.3">${_ocupFmt(r.mediana)}</p><p style="font-size:.65rem;color:#777">mediana</p></div>
+    </div>
+    <div class="row-b mb8"><span class="xs gray">Ocupación más larga</span><span class="xs bold" style="color:${_ocupColor(r.max.dias)}">${r.max.dias} d · ${escH(r.max.potrero)} (${escH(r.max.lote)})${r.max.abierta ? ' · abierta' : ''}</span></div>
+    ${barras}
+    ${notas ? `<p class="xs gray" style="margin-top:6px">${notas}</p>` : ''}
+    ${tablaGrupo(r.porPotrero, 'Por potrero')}
+    ${tablaGrupo(r.porLote, 'Por lote')}
+    ${listaCiclos}
+  </div>`
+}
+
+// Excel del período elegido en la tarjeta, con fórmulas vivas
+async function exportarOcupacionExcel() {
+  try {
+    await loadXLSX()
+    const {per, r} = await _ocupDatos()
+    if (!r.n) { showToast('No hay ocupaciones en el período', 'err', 3000); return }
+    const serial = t => { const d = DC(t); return (Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(1899, 11, 30)) / 86400000 }
+    const cel = (v, z) => typeof v === 'number' ? (z ? {t:'n', v, z} : {t:'n', v}) : {t:'s', v: String(v ?? '')}
+    const fx = (f, z) => (z ? {t:'n', f, z} : {t:'n', f})
+    const wb = XLSX.utils.book_new()
+
+    // Hoja OCUPACIONES
+    const ult = r.n + 1
+    const ws = {}
+    const cab = ['N°', 'POTRERO', 'LOTE', 'ANIMALES', 'ENTRADA', 'SALIDA / CORTE', 'DÍAS', 'ESTADO', 'AVISO']
+    cab.forEach((h, i) => ws[XLSX.utils.encode_cell({r: 0, c: i})] = cel(h))
+    r.filas.forEach((f, i) => {
+      const R = i + 1, x = R + 1
+      const fila = [cel(R), cel(f.potrero), cel(f.lote), cel(f.animales), cel(serial(f.entrada), 'dd/mm/yyyy'), cel(serial(f.salida), 'dd/mm/yyyy'),
+        fx(`F${x}-E${x}`, '0'), cel(f.abierta ? 'ABIERTA (corte)' : 'CERRADA'), cel(f.avisos.join(', '))]
+      fila.forEach((v, c) => ws[XLSX.utils.encode_cell({r: R, c})] = v)
+    })
+    ws['!ref'] = XLSX.utils.encode_range({s: {r: 0, c: 0}, e: {r: r.n, c: cab.length - 1}})
+    ws['!cols'] = [{wch: 5}, {wch: 16}, {wch: 14}, {wch: 10}, {wch: 12}, {wch: 15}, {wch: 7}, {wch: 16}, {wch: 34}]
+    ws['!autofilter'] = {ref: `A1:I${ult}`}
+
+    const rgDias = `OCUPACIONES!$G$2:$G$${ult}`
+    // Hoja RESUMEN
+    const fdt = t => { const d = DC(t); return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + d.getUTCFullYear() }
+    const res = [
+      [cel('DÍAS DE OCUPACIÓN POR POTRERO'), cel('')],
+      [cel('Período'), cel(`${per.etiqueta}: ${fdt(per.D0)} a ${fdt(per.D1)}`)],
+      [cel('Generado'), cel(ffdHora(Date.now()))],
+      [cel(''), cel('')],
+      [cel('Ocupaciones'), fx(`COUNT(${rgDias})`, '0')],
+      [cel('Promedio (días)'), fx(`ROUND(AVERAGE(${rgDias}),1)`, '0.0')],
+      [cel('Mediana (días)'), fx(`MEDIAN(${rgDias})`, '0.0')],
+      [cel('Máximo (días)'), fx(`MAX(${rgDias})`, '0')],
+      [cel('Abiertas al corte'), fx(`COUNTIF(OCUPACIONES!$H$2:$H$${ult},"ABIERTA*")`, '0')],
+      [cel(''), cel('')],
+      [cel('RANGO'), cel('OCUPACIONES'), cel('%')],
+      ...OCUP_RANGOS.map((g, i) => {
+        const x = 12 + i
+        const f = g.max === Infinity ? `COUNTIF(${rgDias},">=${g.min}")` : `COUNTIFS(${rgDias},">=${g.min}",${rgDias},"<=${g.max}")`
+        return [cel(g.l), fx(f, '0'), fx(`IF($B$5=0,0,B${x}/$B$5)`, '0%')]
+      }),
+      [cel(''), cel('')],
+      [cel('Excluidas por 0 días'), cel(r.nCero)],
+      [cel('Excluidas por salida antes de la entrada'), cel(r.nInvalidos)],
+      [cel('Excluidos ciclos huérfanos (cerrados por corrección)'), cel(r.nHuerfanos)],
+      [cel(''), cel('')],
+      [cel('Reglas: promedio simple por ocupación; un lote en varios potreros cuenta una ocupación por potrero; las ocupaciones abiertas se cortan en la fecha final del período (o hoy); las de 0 días no se cuentan. Datos desde 01/06/2026.'), cel('')],
+    ]
+    const wsR = XLSX.utils.aoa_to_sheet([[]])
+    res.forEach((row, R) => row.forEach((v, c) => wsR[XLSX.utils.encode_cell({r: R, c})] = v))
+    wsR['!ref'] = XLSX.utils.encode_range({s: {r: 0, c: 0}, e: {r: res.length - 1, c: 2}})
+    wsR['!cols'] = [{wch: 40}, {wch: 34}, {wch: 8}]
+
+    // Hojas POR POTRERO y POR LOTE (fórmulas sobre OCUPACIONES)
+    const hojaGrupo = (lista, col, titulo) => {
+      const w = {}
+      ;[titulo, 'OCUPACIONES', 'PROMEDIO DÍAS', 'MÁXIMO DÍAS'].forEach((h, c) => w[XLSX.utils.encode_cell({r: 0, c})] = cel(h))
+      const rg = `OCUPACIONES!$${col}$2:$${col}$${ult}`
+      lista.forEach((g, i) => {
+        const x = i + 2
+        w['A' + x] = cel(g.nombre)
+        w['B' + x] = fx(`COUNTIF(${rg},A${x})`, '0')
+        w['C' + x] = fx(`ROUND(AVERAGEIF(${rg},A${x},${rgDias}),1)`, '0.0')
+        w['D' + x] = fx(`SUMPRODUCT(MAX((${rg}=A${x})*${rgDias}))`, '0')   // compatible con cualquier Excel (MAXIFS da #NAME? en algunos)
+      })
+      w['!ref'] = XLSX.utils.encode_range({s: {r: 0, c: 0}, e: {r: lista.length, c: 3}})
+      w['!cols'] = [{wch: 18}, {wch: 13}, {wch: 15}, {wch: 13}]
+      return w
+    }
+    XLSX.utils.book_append_sheet(wb, wsR, 'RESUMEN')
+    XLSX.utils.book_append_sheet(wb, ws, 'OCUPACIONES')
+    XLSX.utils.book_append_sheet(wb, hojaGrupo(r.porPotrero, 'B', 'POTRERO'), 'POR POTRERO')
+    XLSX.utils.book_append_sheet(wb, hojaGrupo(r.porLote, 'C', 'LOTE'), 'POR LOTE')
+
+    const buf = XLSX.write(wb, {bookType: 'xlsx', type: 'array'})
+    const blob = new Blob([buf], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+    const fname = `HPRapp-DiasOcupacion-${toD(per.D0).split('-').reverse().join('-')}_a_${toD(per.D1).split('-').reverse().join('-')}.xlsx`
+    const file = new File([blob], fname, {type: blob.type})
+    if (navigator.canShare && navigator.canShare({files: [file]})) {
+      try { await navigator.share({files: [file], title: 'Días de ocupación'}); return } catch (e) { if (e.name === 'AbortError') return }
+    }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+  } catch (e) {
+    console.error('exportarOcupacionExcel', e)
+    showToast('No se pudo generar el Excel: ' + (e.message || e), 'err', 5000)
+  }
+}
+
 async function pgDashboard() {
   const [nombre,areaUtil,metaGdp,ultimoBackup] = await Promise.all([getCfg('nombre_finca'),getCfg('area_util'),getCfg('meta_gdp'),getCfg('ultimo_backup')])
 
@@ -1638,6 +1954,7 @@ async function pgDashboard() {
   const catCount={}
   animales.forEach(a=>catCount[a.categoria]=(catCount[a.categoria]||0)+1)
   const catColors = {HC:'#E8F5E9,#2E7D32',MC:'#E8F5E9,#1B5E20',HL:'#E3F2FD,#1565C0',ML:'#E3F2FD,#0D47A1',NV:'#F3E5F5,#6A1B9A',VH:'#FFF3E0,#E65100',VP:'#FCE4EC,#C62828',T:'#FFFDE7,#F9A825',MCB:'#ECEFF1,#546E7A'}
+  const _ocupHtml = await cardOcupacion()
   const catResumen = catOrdenDash.map(k => {
     const [bg,fg] = (catColors[k]||'#F5F5F5,#555').split(',')
     const n = catCount[k] || 0
@@ -1736,6 +2053,8 @@ async function pgDashboard() {
       ${porAnio.length>1?`<p class="xs bold" style="margin-top:10px;margin-bottom:4px">Año contra año · kg/ha útil/año</p>
       ${porAnio.map(r=>`<div class="row-b mb4"><span class="xs gray">${r.anio}${r.parcial?' (parcial)':''}</span><span class="xs bold" style="color:${r.kgHaAnio>=0?'#1565C0':'#C62828'}">${r.kgHaAnio.toFixed(1)} <span class="gray" style="font-weight:400">(${r.produccion>=0?'+':''}${_fmtKg(r.produccion)} kg)</span></span></div>`).join('')}`:''}
     </div>
+
+    ${_ocupHtml}
 
     <div class="g3 mb8">
       <div class="card kpi"><div class="v" style="color:#FF7043">${ocupados}</div><div class="l">Potreros<br>ocupados</div></div>
@@ -3017,18 +3336,18 @@ async function saveLoteSeleccionados(){
   const ids=_sheetLoteIds
   const snapshots=_sheetLoteSnaps
   if(!ids.length){closeSheet();return}
-  const fechaStr=$('lt-fecha')?.value
-  const fechaLote=fechaStr?fromD(fechaStr):Date.now()
+  const fechaLote=$('lt-fecha') ? leerFechaMovLote('lt-fecha', snapshots) : Date.now()
+  if(fechaLote===null) return
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   // Capturar nombre del lote y hacer updates — todo en try-catch
-  let loteNom='lote'
+  let loteNom='lote', cerradosSL=[]
   const _slLoteIds=_sheetLoteSnaps.filter(a=>a&&a.loteId&&a.loteId!==loteId).map(a=>a.loteId)
   try{
     const lote=await db.lotes.get(loteId)
     loteNom=lote?.nombre||'lote'
     for(const id of ids) await fsUpdate('animales',id,{loteId,fechaLote})
-    if(_slLoteIds.length) await checkLoteVacio(_slLoteIds, fechaLote)
+    if(_slLoteIds.length) cerradosSL = await checkLoteVacio(_slLoteIds, fechaLote)
     await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     console.error('Error en saveLoteSeleccionados:',e)
@@ -3046,9 +3365,12 @@ async function saveLoteSeleccionados(){
       if(!prev) continue
       await fsUpdate('animales',prev.id,{
         loteId: prev.loteId||undefined,
-        fechaLote: prev.fechaLote||undefined
+        fechaLote: prev.fechaLote||undefined,
+        historialLotes: prev.historialLotes
       })
     }
+    await _reabrirCiclos(cerradosSL)
+    for(const l of new Set([loteId, ..._slLoteIds])) await sincronizarNumAnimalesLote(l)
   })
   go('ganado')
 }
@@ -3474,12 +3796,16 @@ async function saveCambiarLote(id) {
   const fechaCL = leerFecha('cl-f', {etiqueta:'la fecha del cambio de lote'}); if (fechaCL === null) return
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
-  let prev, loteId
+  let prev, loteId, cerradosCL=[]
+  {
+    const a0=await db.animales.get(id)
+    if (a0 && leerFechaMovLote('cl-f',[a0])===null) { if(btn){btn.disabled=false;btn.textContent='Guardar'} return }
+  }
   try{
     prev=await db.animales.get(id)
     loteId=$('cl-lote').value?parseInt($('cl-lote').value):undefined
-    await fsUpdate('animales',id,{loteId,fechaLote:loteId?fechaCL:undefined})
-    if(prev&&prev.loteId&&prev.loteId!==loteId) await checkLoteVacio([prev.loteId], fechaCL)
+    await fsUpdate('animales',id,{loteId,fechaLote:loteId?fechaCL:undefined,_fechaMov:fechaCL})
+    if(prev&&prev.loteId&&prev.loteId!==loteId) cerradosCL = await checkLoteVacio([prev.loteId], fechaCL)
     if(loteId) await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     showToast('Error al cambiar lote','err',4000)
@@ -3488,6 +3814,7 @@ async function saveCambiarLote(id) {
   }
   if(prev) pushUndo('Cambio de lote', async()=>{
     await fsUpdate('animales',id,{loteId:prev.loteId,fechaLote:prev.fechaLote,historialLotes:prev.historialLotes})
+    await _reabrirCiclos(cerradosCL)
     if (prev.loteId) await sincronizarNumAnimalesLote(prev.loteId)
     if (loteId) await sincronizarNumAnimalesLote(loteId)
   })
@@ -3879,7 +4206,7 @@ async function eliminarLotesSeleccionados(){
   for(const id of ids){
     const anis=await db.animales.where({activo:1,loteId:id}).toArray()
     const ciclosAct=await db.ciclos.where({loteId:id,activo:1}).toArray()
-    snapshots.push({id, anis:anis.map(a=>({id:a.id,loteId:a.loteId,fechaLote:a.fechaLote})), ciclos:ciclosAct})
+    snapshots.push({id, anis:anis.map(a=>({id:a.id,loteId:a.loteId,fechaLote:a.fechaLote,historialLotes:a.historialLotes})), ciclos:ciclosAct})
   }
   // Ejecutar eliminación
   const fechaDel=Date.now()
@@ -3893,7 +4220,7 @@ async function eliminarLotesSeleccionados(){
   pushUndo(`${n} lote${n>1?'s eliminados':' eliminado'}`, async()=>{
     for(const {id,anis,ciclos} of snapshots){
       await fsUpdate('lotes',id,{activo:1})
-      for(const a of anis) await fsUpdate('animales',a.id,{loteId:a.loteId,fechaLote:a.fechaLote})
+      for(const a of anis) await fsUpdate('animales',a.id,{loteId:a.loteId,fechaLote:a.fechaLote,historialLotes:a.historialLotes})
       for(const ciclo of ciclos){
         await fsUpdate('ciclos',ciclo.id,{activo:1,fechaSalida:undefined})
         await fsUpdate('potreros',ciclo.potreroId,{estado:'OCUPADO',numAnimales:ciclo.numAnimales,loteActual:id,fechaSalida:undefined})
@@ -4035,6 +4362,14 @@ async function openAccionQuitarLote(){
           ${lotesOpts||'<option disabled>No hay otros lotes activos</option>'}
         </select>
       </div>
+      <div class="field"><label>Fecha del movimiento *</label>
+        <input id="aq-fecha-lote" class="inp" type="date" value="${hoy}" max="${hoy}">
+      </div>
+    </div>
+    <div id="aq-det-sinlote" style="display:none;margin-bottom:14px">
+      <div class="field"><label>Fecha en que salieron del lote *</label>
+        <input id="aq-fecha-sl" class="inp" type="date" value="${hoy}" max="${hoy}">
+      </div>
     </div>
     <div id="aq-det-baja" style="display:none;margin-bottom:14px">
       <div class="field"><label>Causa *</label>
@@ -4086,6 +4421,22 @@ async function ejecutarAccionQuitar(){
   else if(_aqAccion==='baja') await ejecutarQuitarBaja()
   else await ejecutarQuitarSinLote()
 }
+
+// Fecha de un movimiento de animales entre lotes (20261028-002): obligatoria, no futura
+// y no anterior a la fecha en que cualquiera de los animales entró a su lote actual.
+function leerFechaMovLote(inputId, animales) {
+  const f = leerFecha(inputId, {etiqueta:'la fecha del movimiento'})
+  if (f === null) return null
+  const desdeA = a => Math.max(a.loteId && Number.isFinite(a.fechaLote) ? a.fechaLote : -Infinity, Number.isFinite(a.fechaIngreso) ? a.fechaIngreso : -Infinity)
+  const conflicto = (animales||[]).filter(a => a && Number.isFinite(desdeA(a)) && truncarDia(desdeA(a)) > f)
+  if (conflicto.length) {
+    const ej = conflicto.slice(0,3).map(a => `${a.arete} (${ffd(desdeA(a))})`).join(', ')
+    const el = $(inputId); if (el) el.style.border = '2px solid #C62828'
+    showToast(`La fecha es anterior al ingreso (a la finca o a su lote actual) de: ${ej}${conflicto.length>3?'…':''}`, 'err', 6000)
+    return null
+  }
+  return f
+}
 async function ejecutarQuitarMoverLote(){
   const loteId=parseInt($('aq-lote').value)
   if(!loteId){
@@ -4094,16 +4445,18 @@ async function ejecutarQuitarMoverLote(){
   }
   const ids=_sheetQuitarIds, snapshots=_sheetQuitarSnaps
   if(!ids.length){ closeSheet(); return }
+  const fechaMov=leerFechaMovLote('aq-fecha-lote', snapshots)
+  if(fechaMov===null) return
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Moviendo…'}
-  let loteNom
+  let loteNom, cerradosMvL=[]
   const _mvLoteIds=[...new Set(snapshots.filter(a=>a&&a.loteId&&a.loteId!==loteId).map(a=>a.loteId))]
   try{
-    const fechaLote=Date.now()
+    const fechaLote=fechaMov
     for(const id of ids) await fsUpdate('animales',id,{loteId,fechaLote})
     const lote=await db.lotes.get(loteId)
     loteNom=lote?.nombre||'lote'
-    if(_mvLoteIds.length) await checkLoteVacio(_mvLoteIds, Date.now())
+    if(_mvLoteIds.length) cerradosMvL = await checkLoteVacio(_mvLoteIds, fechaMov)
     await sincronizarNumAnimalesLote(loteId)
   }catch(e){
     showToast('Error al mover animales','err',4000)
@@ -4114,8 +4467,10 @@ async function ejecutarQuitarMoverLote(){
   pushUndo(`${n} animal${n>1?'es':''} → ${loteNom}`, async()=>{
     for(const prev of snapshots){
       if(!prev) continue
-      await fsUpdate('animales',prev.id,{loteId:prev.loteId||undefined,fechaLote:prev.fechaLote||undefined})
+      await fsUpdate('animales',prev.id,{loteId:prev.loteId||undefined,fechaLote:prev.fechaLote||undefined,historialLotes:prev.historialLotes})
     }
+    await _reabrirCiclos(cerradosMvL)          // el potrero que se cerró por lote vacío vuelve a ocupado
+    for(const l of new Set([loteId, ..._mvLoteIds])) await sincronizarNumAnimalesLote(l)
   })
   closeSheet()
   _sheetQuitarIds=[]; _sheetQuitarSnaps=[]; _editLoteSelQuitar=new Set()
@@ -4127,15 +4482,16 @@ async function ejecutarQuitarBaja(){
     const f=$('aq-causa');if(f){f.style.border='2px solid #C62828';f.focus()}
     showToast('Selecciona la causa de baja','err');return
   }
-  const fechaStr=$('aq-fecha').value
   const obs=$('aq-obs').value.trim()
-  const fechaBaja=fechaStr?fromD(fechaStr):Date.now()
   const ids=_sheetQuitarIds, snapshots=_sheetQuitarSnaps
   if(!ids.length){ closeSheet(); return }
+  const fechaBaja=leerFechaMovLote('aq-fecha', snapshots)
+  if(fechaBaja===null) return
   const btn=document.querySelector('#ov .btn-r')
   if(btn){btn.disabled=true;btn.textContent='Dando de baja…'}
   const _qbLoteIds=snapshots.filter(a=>a&&a.loteId).map(a=>a.loteId)
   const pesajesCreados=[]
+  let cerradosQB=[]
   try{
     const ahora=Date.now(), quien=USER?.nombre||'—'
     for(const id of ids){
@@ -4147,7 +4503,7 @@ async function ejecutarQuitarBaja(){
       }
       await fsUpdate('animales',id,{activo:0,causaBaja:causa,fechaBaja,obsBaja:obs||undefined,loteId:undefined,fechaLote:undefined})
     }
-    if(_qbLoteIds.length) await checkLoteVacio(_qbLoteIds, fechaBaja)
+    if(_qbLoteIds.length) cerradosQB = await checkLoteVacio(_qbLoteIds, fechaBaja)
   }catch(e){
     showToast('Error al dar de baja','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Confirmar baja'}
@@ -4157,9 +4513,11 @@ async function ejecutarQuitarBaja(){
   pushUndo(`${n} animal${n>1?'es dados':'dado'} de baja`, async()=>{
     for(const prev of snapshots){
       if(!prev) continue
-      await fsUpdate('animales',prev.id,{activo:1,causaBaja:undefined,fechaBaja:undefined,obsBaja:undefined,loteId:prev.loteId,fechaLote:prev.fechaLote})
+      await fsUpdate('animales',prev.id,{activo:1,causaBaja:undefined,fechaBaja:undefined,obsBaja:undefined,loteId:prev.loteId,fechaLote:prev.fechaLote,historialLotes:prev.historialLotes})
     }
     for(const pid of pesajesCreados) await fsDelete('pesajes', pid)
+    await _reabrirCiclos(cerradosQB)
+    for(const l of new Set(_qbLoteIds)) await sincronizarNumAnimalesLote(l)
   })
   closeSheet()
   _sheetQuitarIds=[]; _sheetQuitarSnaps=[]; _editLoteSelQuitar=new Set()
@@ -4168,12 +4526,15 @@ async function ejecutarQuitarBaja(){
 async function ejecutarQuitarSinLote(){
   const ids=_sheetQuitarIds, snapshots=_sheetQuitarSnaps
   if(!ids.length){ closeSheet(); return }
+  const fechaMov=leerFechaMovLote('aq-fecha-sl', snapshots)
+  if(fechaMov===null) return
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Quitando…'}
   const _qlLoteIds=snapshots.filter(a=>a&&a.loteId).map(a=>a.loteId)
+  let cerradosQL=[]
   try{
-    for(const id of ids) await fsUpdate('animales',id,{loteId:undefined,fechaLote:undefined})
-    if(_qlLoteIds.length) await checkLoteVacio(_qlLoteIds, Date.now())
+    for(const id of ids) await fsUpdate('animales',id,{loteId:undefined,fechaLote:undefined,_fechaMov:fechaMov})
+    if(_qlLoteIds.length) cerradosQL = await checkLoteVacio(_qlLoteIds, fechaMov)
   }catch(e){
     showToast('Error al quitar animales','err',4000)
     if(btn){btn.disabled=false;btn.textContent='Confirmar'}
@@ -4183,8 +4544,10 @@ async function ejecutarQuitarSinLote(){
   pushUndo(`${n} animal${n>1?'es':''} quitados del lote`, async()=>{
     for(const prev of snapshots){
       if(!prev) continue
-      await fsUpdate('animales',prev.id,{loteId:prev.loteId||undefined,fechaLote:prev.fechaLote||undefined})
+      await fsUpdate('animales',prev.id,{loteId:prev.loteId||undefined,fechaLote:prev.fechaLote||undefined,historialLotes:prev.historialLotes})
     }
+    await _reabrirCiclos(cerradosQL)
+    for(const l of new Set(_qlLoteIds)) await sincronizarNumAnimalesLote(l)
   })
   closeSheet()
   _sheetQuitarIds=[]; _sheetQuitarSnaps=[]; _editLoteSelQuitar=new Set()
@@ -4258,6 +4621,8 @@ async function saveEditarLote(id){
       }
     }
   }
+  // Validar la fecha de ingreso al potrero ANTES de guardar nada (vacía, inválida o futura → no se guarda)
+  if ($('el-pot') && $('el-pot-fecha') && leerFecha('el-pot-fecha',{etiqueta:'la fecha de ingreso al potrero'})===null) return
   const btn=document.querySelector('#ov .btn-b')
   if(btn){btn.disabled=true;btn.textContent='Guardando…'}
   let prev, cambioPotPrev=null
@@ -4276,7 +4641,7 @@ async function saveEditarLote(id){
       const cicloActivo = await db.ciclos.where({loteId:id,activo:1}).first()
       if (cicloActivo) {
         const potCambio   = nuevoPotId !== cicloActivo.potreroId
-        const fechaCambio = nuevaFecha && nuevaFecha !== cicloActivo.fechaEntrada
+        const fechaCambio = Number.isFinite(nuevaFecha) && truncarDia(nuevaFecha) !== truncarDia(cicloActivo.fechaEntrada)
         if (potCambio || fechaCambio) {
           cambioPotPrev = {cicloId:cicloActivo.id, potreroId:cicloActivo.potreroId, fechaEntrada:cicloActivo.fechaEntrada, nuevoPotId}
           // Primero se reasigna el ciclo; luego el potrero anterior se recalcula
@@ -4350,14 +4715,14 @@ async function eliminarLote(id){
   const msg=`¿Eliminar el lote "${l?.nombre}"?${anis.length?`\n\n${anis.length} animal(es) quedarán sin lote.`:''}`
   if(!await showConfirm(msg)) return
   const ciclosAct=await db.ciclos.where({loteId:id,activo:1}).toArray()
-  const snapshotAnis=anis.map(a=>({id:a.id,loteId:a.loteId,fechaLote:a.fechaLote}))
+  const snapshotAnis=anis.map(a=>({id:a.id,loteId:a.loteId,fechaLote:a.fechaLote,historialLotes:a.historialLotes}))
   const fechaDel=Date.now()
   for(const a of anis) await fsUpdate('animales',a.id,{loteId:undefined,fechaLote:undefined})
   await cerrarCiclosActivosLote(id, fechaDel)
   await fsUpdate('lotes',id,{activo:0})
   pushUndo(`Lote "${l?.nombre}" eliminado`, async()=>{
     await fsUpdate('lotes',id,{activo:1})
-    for(const s of snapshotAnis) await fsUpdate('animales',s.id,{loteId:s.loteId,fechaLote:s.fechaLote})
+    for(const s of snapshotAnis) await fsUpdate('animales',s.id,{loteId:s.loteId,fechaLote:s.fechaLote,historialLotes:s.historialLotes})
     for(const ciclo of ciclosAct){
       await fsUpdate('ciclos',ciclo.id,{activo:1,fechaSalida:undefined})
       await fsUpdate('potreros',ciclo.potreroId,{estado:'OCUPADO',numAnimales:ciclo.numAnimales,loteActual:id,fechaSalida:undefined})
@@ -5325,6 +5690,8 @@ async function openAgregarAnimal(loteId){
       <button id="aa-sel-todo" onclick="selTodoAA()" style="background:none;border:1.5px solid #1565C0;color:#1565C0;border-radius:7px;padding:3px 9px;font-size:.73rem;font-weight:700;cursor:pointer">☐ Seleccionar todo</button>
     </div>
     <div id="aa-lista" style="max-height:45vh;overflow-y:auto;border:1.5px solid #eee;border-radius:10px;margin-bottom:7px"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px"><label style="font-size:.78rem;color:#666;white-space:nowrap">📅 Fecha de ingreso al lote</label>
+      <input id="aa-fecha" class="inp" type="date" value="${toD(Date.now())}" max="${toD(Date.now())}" style="padding:7px 10px;font-size:.82rem"></div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
       <p id="aa-sel-info" style="font-size:.8rem;color:#1565C0;font-weight:600;min-height:18px"></p>
       <button id="aa-btn" class="btn btn-b" onclick="saveAgregarAnimal()" disabled style="width:auto;padding:11px 18px;font-size:.88rem">Agregar al lote</button>
@@ -5408,6 +5775,8 @@ function _actualizarBtnAA(){
 }
 async function saveAgregarAnimal(){
   const ids=[..._aniLoteSel]; if(!ids.length) return
+  const fechaMov=leerFechaMovLote('aa-fecha', await Promise.all(ids.map(id=>db.animales.get(id))))
+  if(fechaMov===null) return
   const traslados=_aniLoteEnOtros.filter(a=>ids.includes(a.id))
   if(traslados.length){
     const loteDestino=await db.lotes.get(_aniLoteId)
@@ -5417,16 +5786,17 @@ async function saveAgregarAnimal(){
   }
   const btn=$('aa-btn')
   if(btn){btn.disabled=true;btn.textContent='Agregando…'}
-  let snaps=[]
+  let snaps=[], cerradosAA=[], loteIdsOrigen=[]
+  const loteDest=_aniLoteId
   try{
     for(const anId of ids){
       const prev=await db.animales.get(anId)
-      snaps.push({id:anId,loteId:prev?.loteId,fechaLote:prev?.fechaLote})
-      await fsUpdate('animales',anId,{loteId:_aniLoteId,fechaLote:Date.now()})
+      snaps.push({id:anId,loteId:prev?.loteId,fechaLote:prev?.fechaLote,historialLotes:prev?.historialLotes})
+      await fsUpdate('animales',anId,{loteId:_aniLoteId,fechaLote:fechaMov})
     }
     // Si algún animal venía de otro lote, revisar si ese lote quedó vacío
-    const loteIdsOrigen=[...new Set(snaps.map(s=>s.loteId).filter(l=>l && l!==_aniLoteId))]
-    if(loteIdsOrigen.length) await checkLoteVacio(loteIdsOrigen, Date.now())
+    loteIdsOrigen=[...new Set(snaps.map(s=>s.loteId).filter(l=>l && l!==_aniLoteId))]
+    if(loteIdsOrigen.length) cerradosAA = await checkLoteVacio(loteIdsOrigen, fechaMov)
     // Refrescar el conteo del lote destino (por si ya está ocupando un potrero)
     await sincronizarNumAnimalesLote(_aniLoteId)
   }catch(e){
@@ -5435,7 +5805,9 @@ async function saveAgregarAnimal(){
     return
   }
   pushUndo(`${ids.length} animal${ids.length>1?'es':''} agregado${ids.length>1?'s':''}`, async()=>{
-    for(const s of snaps) await fsUpdate('animales',s.id,{loteId:s.loteId||undefined,fechaLote:s.fechaLote||undefined})
+    for(const s of snaps) await fsUpdate('animales',s.id,{loteId:s.loteId||undefined,fechaLote:s.fechaLote||undefined,historialLotes:s.historialLotes})
+    await _reabrirCiclos(cerradosAA)
+    for(const l of new Set([loteDest, ...loteIdsOrigen])) await sincronizarNumAnimalesLote(l)
   })
   _aniLoteSel=new Set()
   if(_aniLoteFromEdit){ _aniLoteFromEdit=false; openEditarLote(_aniLoteId) }
@@ -6828,7 +7200,7 @@ async function sacarYMover(potreroId, cicloId, nuevoPotId) {
       numAnimales:ciclo.numAnimales, fechaEntrada:ahora, activo:1, obs:''
     })
     // Potrero nuevo → ocupado
-    await fsUpdate('potreros', nuevoPotId, {estado:'OCUPADO', numAnimales:ciclo.numAnimales, loteActual:ciclo.loteId})
+    await fsUpdate('potreros', nuevoPotId, {estado:'OCUPADO', numAnimales:ciclo.numAnimales, loteActual:ciclo.loteId, fechaEntrada:ahora, fechaSalida:undefined})
     trazar('MOVER_POTRERO','CICLO', nuevoCicloId, {de:potreroId, a:nuevoPotId})
   } catch(e) { showToast('Error al mover','err',4000); return }
   pushUndo(`Lote movido — deshacer`, async () => {
@@ -8033,6 +8405,16 @@ async function revisionGeneralDatos() {
   A.filter(a => a.activo !== 1).forEach(a => {
     if (!a.fechaBaja) gBaja.push(`${a.arete}: sin fecha de baja`)
     if (!a.causaBaja) gBaja.push(`${a.arete}: sin causa de baja`)
+  })
+  // Historial de lotes con tramos superpuestos (20261028-002): lo dejaban los "Deshacer" de movimientos
+  // entre lotes antes de esta versión. Distorsiona el kg/ha por potrero (el animal cuenta dos veces).
+  const gHist = grupo('Animales', 'Historial de lotes con tramos superpuestos', 'medio', 'El animal figura en dos lotes (o dos veces en el mismo) durante los mismos días. Suele venir de un "Deshacer" de un traslado hecho antes de la versión 20261028-002.')
+  A.forEach(a => {
+    const h = (Array.isArray(a.historialLotes) ? a.historialLotes : []).filter(x => x && Number.isFinite(x.desde)).slice().sort((x, y) => x.desde - y.desde)
+    for (let i = 1; i < h.length; i++) {
+      const finPrev = Number.isFinite(h[i-1].hasta) ? h[i-1].hasta : Infinity
+      if (h[i].desde < finPrev - DIA_MS_COL) { gHist.push(`${a.arete}: ${lm[h[i-1].loteId]?.nombre || 'lote ' + h[i-1].loteId} (${fd(h[i-1].desde)}–${Number.isFinite(h[i-1].hasta) ? fd(h[i-1].hasta) : 'hoy'}) se cruza con ${lm[h[i].loteId]?.nombre || 'lote ' + h[i].loteId} (desde ${fd(h[i].desde)})`); break }
+    }
   })
   const gVenta = grupo('Ventas', 'Ventas incompletas', 'alto', 'Venta sin valor, sin peso de venta o sin pesaje de venta en la fecha.')
   const pesA = {}
@@ -9636,15 +10018,18 @@ async function importarTodo(input) {
       // String con formato DD/MM/YYYY o DD-MM-YYYY — siempre interpretamos como día/mes/año
       const s = String(v).trim()
       const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/)
-      if (m) { const y = m[3].length===2?'20'+m[3]:m[3]; return colTs(parseInt(y),parseInt(m[2])-1,parseInt(m[1])) }
+      // Fecha que no existe (ej. 31/02 o mes 13) → null, nunca se corre a otro día en silencio
+      const _fechaReal = (y,mo,d) => { const t=colTs(y,mo,d), r=DC(t); return (r.getUTCFullYear()===y && r.getUTCMonth()===mo && r.getUTCDate()===d) ? t : null }
+      if (m) { const y = m[3].length===2?2000+parseInt(m[3]):parseInt(m[3]); return _fechaReal(y,parseInt(m[2])-1,parseInt(m[1])) }
       // AAAA-MM-DD
       const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
-      if (iso) return colTs(+iso[1], +iso[2]-1, +iso[3])
+      if (iso) return _fechaReal(+iso[1], +iso[2]-1, +iso[3])
       // Formato largo español: "20 de abr de 2026" — fallback por si acaso
       const MESES_ES = {ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,sep:8,oct:9,nov:10,dic:11}
       const ml = s.match(/^(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})$/i)
       if (ml) { const mo=MESES_ES[ml[2].toLowerCase().substring(0,3)]; if(mo!==undefined) return colTs(parseInt(ml[3]),mo,parseInt(ml[1])) }
-      const dt = new Date(s); return isNaN(dt.getTime()) ? null : truncarDia(dt.getTime())
+      // Cualquier otro texto: no se adivina (new Date() lo leería como mes/día en inglés)
+      return null
     }
     // Helper: lee hoja como arrays desde fila 2 (range:0, slice(1) salta encabezados)
     const readSheet = (sh, raw=true) =>
