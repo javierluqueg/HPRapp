@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261028-004'
+const APP_VERSION = '20261030-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -551,14 +551,28 @@ function scheduleRefresh() {
   }, 2000)  // 2s de delay para agrupar múltiples cambios de otros dispositivos
 }
 
+// Elimina de Dexie lo que ya no está en la nube. No toca registros modificados en las últimas 24 h
+// (podrían ser escrituras de este dispositivo aún sin subir): esos se revisan en la próxima apertura.
+async function _reconciliarBorrados(table, snap) {
+  const enNube = new Set(snap.docs.map(d => d.id))
+  const limite = Date.now() - 86400000
+  const locales = await db[table].toArray()
+  const sobran = locales.filter(r => !enNube.has(String(r.id)) && (r._ts || 0) < limite).map(r => r.id)
+  if (!sobran.length) return false
+  await db[table].bulkDelete(sobran)
+  console.info(`Reconciliar ${table}: ${sobran.length} registro(s) local(es) ya borrado(s) en la nube`)
+  return true
+}
+
 function initFirebaseSync() {
   // Disconnect previous listeners
   _unsubscribers.forEach(u => u())
   _unsubscribers = []
 
   SYNC_TABLES.forEach(table => {
+    let reconciliada = false  // una vez por sesión y por tabla, con la primera respuesta del servidor
     const unsub = fsdb.collection(table)
-      .onSnapshot(async snap => {
+      .onSnapshot({includeMetadataChanges: true}, async snap => {
         if (!_syncActive) return
         let changed = false
         for (const change of snap.docChanges()) {
@@ -584,6 +598,14 @@ function initFirebaseSync() {
               changed = true
             }
           } catch(e) {}
+        }
+        // Borrados ocurridos mientras este dispositivo estaba cerrado o congelado (iOS) nunca llegan
+        // como 'removed' y quedaban vivos en Dexie (ej. lluvias duplicadas que reaparecían en el
+        // celular). Con la primera foto completa del SERVIDOR se eliminan de Dexie los registros que
+        // ya no existen en la nube. Bug 30-10-2026.
+        if (!reconciliada && !snap.metadata.fromCache) {
+          reconciliada = true
+          try { if (await _reconciliarBorrados(table, snap)) changed = true } catch(e) { console.warn('Reconciliar '+table+':', e.message) }
         }
         if (changed) { scheduleRefresh(); showSyncStatus('ok') }
       }, err => { showSyncStatus('err'); console.warn('Sync error:', err.message) })
@@ -2226,7 +2248,25 @@ function openRegistrarLluvia() {
   setTimeout(()=>{ const f=$('ll-mm'); if(f) f.focus() }, 200)
 }
 
+let _llvGuardando = false  // evita doble registro por doble toque en "Guardar" (bug 30-10-2026)
+async function _lluviaDelDia(fechaStr) {
+  const diaInicio = fromD(fechaStr), diaFin = fromDFin(fechaStr)
+  const local = await db.lluvias.where('fecha').between(diaInicio, diaFin, true, true).first()
+  if (local) return local
+  try {  // también en la nube, por si otro dispositivo ya registró ese día
+    const q = await fsdb.collection('lluvias').where('fecha','>=',diaInicio).where('fecha','<=',diaFin).limit(1).get()
+    if (!q.empty) return q.docs[0].data()
+  } catch(e) {}  // sin conexión: queda la validación local
+  return null
+}
+
 async function saveRegistrarLluvia() {
+  if (_llvGuardando) return
+  _llvGuardando = true
+  try { await _saveRegistrarLluvia() } finally { _llvGuardando = false }
+}
+
+async function _saveRegistrarLluvia() {
   const fechaStr = $('ll-fecha')?.value
   const mmVal    = parseFloat($('ll-mm')?.value)
   if (!fechaStr) { showToast('Selecciona la fecha','err'); return }
@@ -2237,10 +2277,8 @@ async function saveRegistrarLluvia() {
   const obs   = $('ll-obs')?.value?.trim() || ''
   const fecha = fromD(fechaStr)
 
-  // ── Verificar duplicado por día ──
-  const diaInicio = fromD(fechaStr)
-  const diaFin    = fromDFin(fechaStr)
-  const existente = await db.lluvias.where('fecha').between(diaInicio, diaFin, true, true).first()
+  // ── Verificar duplicado por día (local y nube) ──
+  const existente = await _lluviaDelDia(fechaStr)
   if (existente) {
     showToast(`Ya existe un registro para esa fecha (${existente.mm} mm)`, 'err', 4000)
     return
@@ -2255,6 +2293,13 @@ async function saveRegistrarLluvia() {
 
   const btn = $('ll-btn')
   if (btn) { btn.disabled=true; btn.textContent='Guardando…' }
+  // Segunda verificación justo antes de escribir (pudo registrarse mientras se confirmaba)
+  const yaHay = await _lluviaDelDia(fechaStr)
+  if (yaHay) {
+    showToast(`Ya existe un registro para esa fecha (${yaHay.mm} mm)`, 'err', 4000)
+    if (btn) { btn.disabled=false; btn.textContent='✓ Guardar' }
+    return
+  }
   let lid
   try {
     const obsLluvia = obs ? obs.trim() : undefined
