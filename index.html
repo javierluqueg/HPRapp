@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261030-001'
+const APP_VERSION = '20261106-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6760,6 +6760,24 @@ function selLaborTipo(tipo, btn) {
   btn.style.boxShadow = '0 0 0 3px ' + btn.style.color
 }
 
+// ─── Anti-duplicados de labores de potreros (20261106-001) ───
+// Origen: re-importaciones del Excel dejaron 24 copias (algunas con la fecha corrida 1 día y 0 jornales)
+// que duplicaban/triplicaban los jornales para costos. Una labor se considera repetida si es del mismo
+// potrero y tipo con fecha de inicio a ±1 día de otra ya registrada.
+function normTipoLaborPot(t) {
+  return String(t||'').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,'')
+}
+async function laborPotreroRepetida(potreroId, tipo, fecha, excluirId=null) {
+  const t = normTipoLaborPot(tipo), d = truncarDia(fecha)
+  const todas = await db.laboresPotrero.toArray()
+  return todas.find(l => l.potreroId == potreroId && l.id !== excluirId && normTipoLaborPot(l.tipo) === t &&
+    Math.abs(truncarDia(l.fecha) - d) <= DIA_MS_COL) || null
+}
+function _avisoLaborRepetida(l, nomPot) {
+  const f = new Date(l.fecha).toLocaleDateString('es-CO', {timeZone:TZ_COL, day:'2-digit', month:'2-digit', year:'numeric'})
+  return `⚠️ Ya existe una labor ${l.tipo} en ${nomPot||'este potrero'} el ${f} (${l.jornales||0} jornales).\n\n¿Es una labor DIFERENTE y quieres registrarla de todas formas?`
+}
+
 async function saveNuevaLaborPotrero(potreroId) {
   const tipo = $('lp-tipo')?.value
   if (!tipo) {
@@ -6778,6 +6796,14 @@ async function saveNuevaLaborPotrero(potreroId) {
   const btn = $('lp-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
 
+  const _rep = await laborPotreroRepetida(parseInt(potreroId), tipo, fecha)
+  if (_rep) {
+    const _pot = await db.potreros.get(parseInt(potreroId))
+    if (!confirm(_avisoLaborRepetida(_rep, _pot?.nombre))) {
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Guardar' }
+      return
+    }
+  }
   const payload = { potreroId: parseInt(potreroId), tipo, fecha, jornales }
   if (fechaFin)  payload.fechaFin    = fechaFin
   if (productos) payload.productos   = productos
@@ -6854,6 +6880,14 @@ async function saveEditarLaborPotrero(laborId, potreroId) {
   const obs = $('lp-obs')?.value?.trim() || ''
   const btn = $('lp-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
+  const _rep = await laborPotreroRepetida(parseInt(potreroId), tipo, fecha, laborId)
+  if (_rep) {
+    const _pot = await db.potreros.get(parseInt(potreroId))
+    if (!confirm(_avisoLaborRepetida(_rep, _pot?.nombre))) {
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Guardar cambios' }
+      return
+    }
+  }
   const payload = { tipo, fecha, jornales,
     fechaFin:      fechaFin   || null,
     productos:     productos  || null,
@@ -8351,6 +8385,14 @@ async function revisionGeneralDatos() {
   PO.filter(p => p.activo === 1 && !(p.areaHa > 0)).forEach(p => gNom.push(`${p.nombre}: sin área`))
   RO.filter(r => r.activo === 1).forEach(r => (r.potreroIds || []).filter(id => !pm[id]).forEach(id => gNom.push(`Rotación ${r.nombre}: potrero ${id} no existe`)))
   LP.filter(x => !pm[x.potreroId]).forEach(x => gNom.push(`Labor de potrero ${x.id}: potrero inexistente`))
+  const gLPDup = grupo('Labores potreros', 'Labores de potreros repetidas', 'alto', 'Mismo potrero y tipo de labor con fecha de inicio igual o a 1 día. Duplica los jornales en los costos. Si son dos labores reales distintas, márcalo como revisado.')
+  const lpS = [...LP].sort((a, b) => (a.fecha||0) - (b.fecha||0))
+  for (let i = 0; i < lpS.length; i++) for (let j = i + 1; j < lpS.length; j++) {
+    const a = lpS[i], b = lpS[j]
+    if (dia(b.fecha) - dia(a.fecha) > D) break
+    if (a.potreroId == b.potreroId && normTipoLaborPot(a.tipo) === normTipoLaborPot(b.tipo))
+      gLPDup.push(`${pm[a.potreroId]?.nombre || '?'} · ${a.tipo}: ${fd(a.fecha)} (${a.jornales||0} jorn.) y ${fd(b.fecha)} (${b.jornales||0} jorn.)`)
+  }
   LP.filter(x => x.fechaFin && dia(x.fechaFin) < dia(x.fecha)).forEach(x => gNom.push(`Labor ${x.tipo} en ${pm[x.potreroId]?.nombre || '?'}: termina ${fd(x.fechaFin)} antes de empezar ${fd(x.fecha)}`))
 
   // ── LLUVIAS ──
@@ -10126,14 +10168,16 @@ async function importarTodo(input) {
       const rows = readSheet(shLabP, true).filter(r => r[0] && r[1] && r[2])
       const todosPotLP = await db.potreros.where('activo').equals(1).toArray()
       const potMapLP = {}; todosPotLP.forEach(p=>potMapLP[p.nombre.trim().toLowerCase()]=p.id)
-      let addedLP=0, skipLP=0
+      let addedLP=0, skipLP=0, repLP=0
+      const invalLP = []
       for (const row of rows) {
         const potNom  = String(row[0]||'').trim(); if (!potNom) { skipLP++; continue }
-        const tipo    = String(row[1]||'').trim().toUpperCase(); if (!tiposValidos.includes(tipo)) { skipLP++; continue }
-        const fechaTs = parseFecha(row[2]); if (!fechaTs) { skipLP++; continue }
-        const potId   = potMapLP[potNom.toLowerCase()]; if (!potId) { skipLP++; continue }
-        const dup = await db.laboresPotrero.where('potreroId').equals(potId).filter(l=>truncarDia(l.fecha)===truncarDia(fechaTs)&&l.tipo===tipo).first()
-        if (dup) { skipLP++; continue }
+        // Tipo sin tildes/eñe: GUADAÑA → GUADANA, FUMIGACIÓN → FUMIGACION
+        const tipo    = normTipoLaborPot(row[1]); if (!tiposValidos.includes(tipo)) { skipLP++; invalLP.push(`${potNom}: tipo "${row[1]}"`); continue }
+        const fechaTs = parseFecha(row[2]); if (!fechaTs) { skipLP++; invalLP.push(`${potNom}: fecha "${row[2]}"`); continue }
+        const potId   = potMapLP[potNom.toLowerCase()]; if (!potId) { skipLP++; invalLP.push(`potrero "${potNom}" no existe`); continue }
+        // Repetida = mismo potrero + tipo con fecha a ±1 día (ya en la app o antes en el mismo archivo)
+        if (await laborPotreroRepetida(potId, tipo, fechaTs)) { repLP++; continue }
         const fechaFin  = parseFecha(row[3], true) || null
         const jornales  = parseInt(String(row[4]||'0')) || 0
         const productos = String(row[5]||'').trim() || null
@@ -10142,7 +10186,8 @@ async function importarTodo(input) {
         await fsAdd('laboresPotrero',{potreroId:potId,tipo,fecha:fechaTs,fechaFin,jornales,productos,volumen,observaciones:obs,registradoPor:quien,registradoEn:ahora})
         addedLP++
       }
-      if (addedLP||skipLP) resumen.push(`🌿 Labores potreros: ${addedLP} importadas${skipLP?' · '+skipLP+' omitidas':''}`)
+      if (addedLP||skipLP||repLP) resumen.push(`🌿 Labores potreros: ${addedLP} importadas${repLP?' · '+repLP+' ya estaban registradas (no se duplicaron)':''}${skipLP?' · '+skipLP+' omitidas por datos inválidos':''}`)
+      if (invalLP.length) resumen.push(`⚠️ Labores potreros no importadas: ${invalLP.slice(0,15).join(', ')}${invalLP.length>15?' y '+(invalLP.length-15)+' más':''}`)
     }
 
     _showProg(82, 'Importando rotaciones…')
