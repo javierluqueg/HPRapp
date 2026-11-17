@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261106-001'
+const APP_VERSION = '20261117-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -9302,7 +9302,7 @@ async function pgConfig() {
   if(tab==='backup') return tabs+`
     <div class="card mb10">
       <p class="bold mb8">📤 Exportar / Guardar copia de seguridad</p>
-      <p class="sm gray mb10">Guarda en tu dispositivo, carpeta, WhatsApp, correo o Drive. En celular se abre el menú de compartir.</p>
+      <p class="sm gray mb10">Guarda en tu dispositivo, carpeta, correo o Drive. En celular se abre el menú de compartir.</p>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <button class="btn btn-g" onclick="compartirArchivo('json')">
@@ -9310,23 +9310,13 @@ async function pgConfig() {
           <span style="font-size:.78rem;font-weight:700">JSON</span><br>
           <span style="font-size:.68rem;opacity:.85">Backup completo</span>
         </button>
-        <button class="btn btn-g" onclick="compartirArchivo('excel')">
-          <span style="font-size:1.1rem">📊</span><br>
-          <span style="font-size:.78rem;font-weight:700">Excel</span><br>
-          <span style="font-size:.68rem;opacity:.85">Hojas de datos</span>
-        </button>
         <button class="btn btn-g" onclick="compartirArchivo('pdf')">
           <span style="font-size:1.1rem">📄</span><br>
           <span style="font-size:.78rem;font-weight:700">PDF</span><br>
           <span style="font-size:.68rem;opacity:.85">Resumen imprimible</span>
         </button>
-        <button class="btn" style="background:#25D366;color:white" onclick="compartirWhatsApp()">
-          <span style="font-size:1.1rem">💬</span><br>
-          <span style="font-size:.78rem;font-weight:700">WhatsApp</span><br>
-          <span style="font-size:.68rem;opacity:.85">Resumen de texto</span>
-        </button>
       </div>
-      <p class="xs gray">💡 JSON recomendado para restauración completa · Excel para compartir con terceros · PDF para imprimir</p>
+      <p class="xs gray">💡 JSON para restauración completa · PDF para imprimir · Excel: Configuración › Excel</p>
     </div>
 
     <div class="card">
@@ -10410,10 +10400,6 @@ async function compartirArchivo(tipo) {
       const data = JSON.stringify({v:3,app:'HPRapp',ts:Date.now(),animales,pesajes,labores,potreros,lotes,ciclos,lluvias,usuarios,config,laboresPotrero,rotaciones},null,2)
       blob = new Blob([data], {type:'application/json'})
       filename = `HPRapp-backup-${toD(Date.now())}.json`
-    } else if (tipo === 'excel') {
-      // Reusar exportarExcel pero retornar blob en vez de descargar
-      blob = await generarExcelBlob()
-      filename = `HPRapp-datos-${toD(Date.now())}.xlsx`
     } else if (tipo === 'pdf') {
       blob = await generarPdfBlob()
       filename = `HPRapp-reporte-${toD(Date.now())}.pdf`
@@ -10433,46 +10419,6 @@ async function compartirArchivo(tipo) {
     a.click()
     setTimeout(()=>URL.revokeObjectURL(a.href), 5000)
     showToast('Archivo descargado ✅')
-  } catch(e) { showToast('Error: ' + e.message, 'err', 4000) }
-}
-
-async function compartirWhatsApp() {
-  try {
-    const finca   = await getCfg('nombre_finca') || 'HPRapp'
-    const animales = await db.animales.where('activo').equals(1).toArray()
-    const lotes    = await db.lotes.where('activo').equals(1).toArray()
-    const potreros = await db.potreros.where('activo').equals(1).toArray()
-    const lluvias  = await db.lluvias.orderBy('fecha').toArray()
-    const ahora    = new Date()
-    const fd = (ts) => { const d=DC(ts); return d.getUTCDate()+'/'+(d.getUTCMonth()+1)+'/'+d.getUTCFullYear() }
-
-    // Peso total
-    let pesoTotal = 0
-    for (const a of animales) {
-      const ult = await getPesoActual(a.id)
-      pesoTotal += (ult?.pesoKg || a.pesoInicial || 0)
-    }
-
-    // Lluvias último mes
-    const hace30 = Date.now() - 30*86400000
-    const lluvMes = lluvias.filter(l=>l.fecha>=hace30)
-    const mmMes   = lluvMes.reduce((s,l)=>s+l.mm,0)
-
-    const txt = [
-      `🌿 *${finca}* — Resumen HPRapp`,
-      `📅 ${fd(Date.now())}`,
-      ``,
-      `🐄 *Animales activos:* ${animales.length}`,
-      `⚖️ *Peso total:* ${Math.round(pesoTotal).toLocaleString('es-CO')} kg`,
-      `📂 *Lotes:* ${lotes.length}`,
-      `🌿 *Potreros:* ${potreros.length}`,
-      lluvMes.length ? `🌧 *Lluvia últimos 30 días:* ${mmMes.toFixed(0)} mm (${lluvMes.length} días)` : '',
-      ``,
-      `_Generado desde HPRapp_`
-    ].filter(l=>l!==null).join('\n')
-
-    const url = 'https://wa.me/?text=' + encodeURIComponent(txt)
-    window.open(url, '_blank')
   } catch(e) { showToast('Error: ' + e.message, 'err', 4000) }
 }
 
@@ -10568,39 +10514,6 @@ async function generarPdfBlob() {
 
   // Retornar null — el PDF se maneja via print dialog
   return null
-}
-
-async function generarExcelBlob() {
-  await loadXLSX()
-  const [animales,pesajes,labores,potreros,lotes,ciclos,lluvias] = await Promise.all([
-    db.animales.toArray(),db.pesajes.toArray(),db.labores.toArray(),
-    db.potreros.toArray(),db.lotes.toArray(),db.ciclos.toArray(),db.lluvias.toArray()
-  ])
-  const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-  const fd = ts => { const d=DC(ts); return d.getUTCDate()+'/'+((d.getUTCMonth()+1))+'/'+d.getUTCFullYear() }
-  const wb = XLSX.utils.book_new()
-  const addSheet = (name, rows) => {
-    if(!rows.length) return
-    const ws = XLSX.utils.json_to_sheet(rows)
-    XLSX.utils.book_append_sheet(wb, ws, name)
-  }
-  addSheet('ANIMALES', animales.filter(a=>a.activo).map(a=>({
-    'Arete':a.arete,'Nombre':a.nombre||'','Categoría':a.categoria,'Raza':a.raza||'',
-    'Color':a.color||'','Peso Inicial':a.pesoInicial||0,
-    'Fecha Ingreso':a.fechaIngreso?fd(a.fechaIngreso):'','Lote':lotes.find(l=>l.id===a.loteId)?.nombre||'',
-    'Procedencia':a.procedencia||'','Observaciones':a.descripcion||''
-  })))
-  addSheet('PESAJES', pesajes.map(p=>({
-    'Arete':animales.find(a=>a.id===p.animalId)?.arete||p.animalId,
-    'Peso (kg)':p.pesoKg,'Fecha':fd(p.fecha),'Método':p.metodo||'','Obs':p.obs||''
-  })))
-  addSheet('POTREROS', potreros.filter(p=>p.activo).map(p=>({
-    'Nombre':p.nombre,'Área (ha)':p.areaHa||0,'Estado':p.estado,'Distribución Forrajera':_distribForrajera(p.pastos),'Pendiente':p.pendiente||'','Fuente Agua':p.fuenteAgua||''
-  })))
-  addSheet('LOTES', lotes.filter(l=>l.activo).map(l=>({'Nombre':l.nombre,'Descripción':l.descripcion||''})))
-  if(lluvias.length) addSheet('LLUVIAS', lluvias.map(l=>({'Fecha':fd(l.fecha),'mm':l.mm,'Obs':l.obs||''})))
-  const buf = XLSX.write(wb, {bookType:'xlsx', type:'array'})
-  return new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
 }
 
 async function exportarBackup(){
