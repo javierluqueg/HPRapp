@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261124-001'
+const APP_VERSION = '20261124-002'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -6669,8 +6669,7 @@ async function pgPotreroFicha({id}) {
                 </div>
               </div>
             </div>
-            ${l.productos?`<p class="xs gray mt8"><span class="bold">Producto:</span> ${l.productos}${l.volumen?' · '+l.volumen+' lt':''}</p>`:''}
-            ${l.gasolina?`<p class="xs gray mt4"><span class="bold">Gasolina:</span> ${String(l.gasolina).replace('.',',')} gal</p>`:''}
+            <div class="mt8">${lpDetalleHTML(l, p?.areaHa)}</div>
             ${l.observaciones?`<p class="xs gray mt4">${l.observaciones}</p>`:''}
           </div>`
       }).join('')
@@ -6775,75 +6774,6 @@ async function forzarDisponible(potreroId, cicloId) {
   go('potrero-ficha', {id: potreroId})
 }
 
-function openNuevaLaborPotrero(potreroId) {
-  const hoy = toD(Date.now())
-  showSheet(`
-    <div class="sh-title">🛠 Registrar labor<button class="sh-x" onclick="closeSheet()">✕</button></div>
-    <input type="hidden" id="lp-tipo" value="">
-    <p style="font-size:.8rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px">Tipo de labor *</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px" id="lp-grid">
-      <button onclick="selLaborTipo('CERCA',this)" style="border:2.5px solid #1565C0;border-radius:14px;padding:18px 8px;background:#E3F2FD;color:#1565C0;font-size:1.05rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer">
-        <span style="font-size:2rem">🔧</span>Cerca
-      </button>
-      <button onclick="selLaborTipo('GUADANA',this)" style="border:2.5px solid #2E7D32;border-radius:14px;padding:18px 8px;background:#E8F5E9;color:#2E7D32;font-size:1.05rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer">
-        <span style="font-size:2rem">🌿</span>Guadaña
-      </button>
-      <button onclick="selLaborTipo('FUMIGACION',this)" style="border:2.5px solid #E65100;border-radius:14px;padding:18px 8px;background:#FFF3E0;color:#E65100;font-size:1.05rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer">
-        <span style="font-size:2rem">🧴</span>Fumigación
-      </button>
-      <button onclick="selLaborTipo('TOCONEO',this)" style="border:2.5px solid #4A148C;border-radius:14px;padding:18px 8px;background:#F3E5F5;color:#4A148C;font-size:1.05rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer">
-        <span style="font-size:2rem">🪓</span>Toconeo
-      </button>
-      <button onclick="selLaborTipo('SIEMBRA',this)" style="border:2.5px solid #00695C;border-radius:14px;padding:18px 8px;background:#E0F2F1;color:#00695C;font-size:1.05rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer">
-        <span style="font-size:2rem">🌱</span>Siembra
-      </button>
-      <button onclick="selLaborTipo('RESIEMBRA',this)" style="border:2.5px solid #558B2F;border-radius:14px;padding:18px 8px;background:#F1F8E9;color:#558B2F;font-size:1.05rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer">
-        <span style="font-size:2rem">🌾</span>Resiembra
-      </button>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="field">
-        <label>Fecha inicio *</label>
-        <input id="lp-fecha-ini" class="inp" type="date" value="${hoy}">
-      </div>
-      <div class="field">
-        <label>Fecha fin</label>
-        <input id="lp-fecha-fin" class="inp" type="date" data-futura="1">
-      </div>
-    </div>
-    <div class="field">
-      <label>Jornales</label>
-      <input id="lp-jornales" class="inp" type="text" inputmode="decimal" placeholder="0">
-    </div>
-    <div class="field">
-      <label>Producto</label>
-      <input id="lp-productos" class="inp" placeholder="Nombre del producto (opcional)">
-    </div>
-    <div class="field">
-      <label>Volumen producto (litros)</label>
-      <input id="lp-volumen" class="inp" type="text" inputmode="decimal" placeholder="0">
-    </div>
-    <div class="field">
-      <label>Gasolina (galones)</label>
-      <input id="lp-gasolina" class="inp" type="text" inputmode="decimal" placeholder="0">
-    </div>
-    <div class="field">
-      <label>Observaciones</label>
-      <input id="lp-obs" class="inp" placeholder="Opcional…">
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
-      <button class="btn btn-b" id="lp-btn" onclick="saveNuevaLaborPotrero(${potreroId})">✓ Guardar</button>
-    </div>`)
-}
-
-function selLaborTipo(tipo, btn) {
-  $('lp-tipo').value = tipo
-  document.querySelectorAll('#lp-grid button').forEach(b => b.style.opacity = '0.55')
-  btn.style.opacity = '1'
-  btn.style.boxShadow = '0 0 0 3px ' + btn.style.color
-}
-
 // ─── Anti-duplicados de labores de potreros (20261106-001) ───
 // Origen: re-importaciones del Excel dejaron 24 copias (algunas con la fecha corrida 1 día y 0 jornales)
 // que duplicaban/triplicaban los jornales para costos. Una labor se considera repetida si es del mismo
@@ -6862,26 +6792,196 @@ function _avisoLaborRepetida(l, nomPot) {
   return `⚠️ Ya existe una labor ${l.tipo} en ${nomPot||'este potrero'} el ${f} (${l.jornales||0} jornales).\n\n¿Es una labor DIFERENTE y quieres registrarla de todas formas?`
 }
 
-async function saveNuevaLaborPotrero(potreroId) {
-  const tipo = $('lp-tipo')?.value
-  if (!tipo) {
-    showToast('Selecciona el tipo de labor','err')
-    return
+// ─── Labores de potreros: campos por tipo de labor (20261124-002) ───
+// Formatos acordados con Jesús. Fumigación: método (bomba, estacionaria, dron), área aplicada,
+// agua L/ha y mezcla de productos con dosis por ha. Toconeo: bombas + dosis cc/bomba.
+// Cerca: metros, hilos, postes (estacones), alambre. Siembra/Resiembra: especie, método, semilla, fertilizante, cobertura.
+const LP_TIPOS = {CERCA:['🔧','Cerca','#1565C0','#E3F2FD'], GUADANA:['🌿','Guadaña','#2E7D32','#E8F5E9'], FUMIGACION:['🧴','Fumigación','#E65100','#FFF3E0'], TOCONEO:['🪓','Toconeo','#4A148C','#F3E5F5'], SIEMBRA:['🌱','Siembra','#00695C','#E0F2F1'], RESIEMBRA:['🌾','Resiembra','#558B2F','#F1F8E9']}
+const LP_METODO_FUM = {BOMBA:'Bomba de espalda', ESTACIONARIA:'Estacionaria', DRON:'Dron'}
+const LP_METODO_SIEM = {VOLEO:'Semilla al voleo', VEGETATIVO:'Material vegetativo', DRON:'Dron', MAQUINARIA:'Maquinaria'}
+const LP_TIPO_CERCA = {NUEVA:'Nueva', REPARACION:'Reparación'}
+const LP_CLASE_CERCA = {PUAS:'Púas', ELECTRICA:'Eléctrica'}
+const LP_CAUSAS = {GERMINACION:'Falla de germinación', SOBREPASTOREO:'Sobrepastoreo', VERANO:'Verano', QUEMA:'Quema', ENCHARCAMIENTO:'Encharcamiento', OTRA:'Otra'}
+const LP_UNIDADES = ['L/ha','cc/ha','kg/ha','g/ha']
+const LP_ESPECIES = ['Brizanta','Decumbens','Humidícola','Mombasa','Toledo','Mulato II','Cayman','Colosuana','Angleton','Estrella']
+const LP_CAMPOS = ['gasolina','metodo','areaAplicada','bombas','canecas','aguaHa','costoDronHa','mezcla','dosisBomba',
+  'tipoCerca','claseCerca','metros','hilos','postes','rollos','grapasKg','aisladores',
+  'especie','metodoSiembra','semillaKgHa','materialBultosHa','fertilizante','fertDosisKgHa','causa','coberturaAntes','coberturaEstab',
+  'productos','volumen']
+
+const _lpF = n => (n===null||n===undefined||n==='') ? '' : String(Math.round(n*100)/100).replace('.',',')
+const _lpN = id => { const v = String($(id)?.value ?? '').trim(); if (!v) return null; const n = parseFloat(v.replace(',','.')); return isNaN(n) ? null : n }
+const _lpT = id => String($(id)?.value ?? '').trim() || null
+const _esc = s => String(s??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')
+function _lpFld(label, id, val, mode='decimal', ph='0', extra='') {
+  return `<div class="field"><label>${label}</label><input id="${id}" class="inp" type="text" inputmode="${mode}" placeholder="${ph}" value="${_esc(val??'')}" ${extra}></div>`
+}
+function _lpSel(label, id, opts, val, extra='') {
+  return `<div class="field"><label>${label}</label><select id="${id}" class="inp" ${extra}><option value="">—</option>${Object.entries(opts).map(([k,v])=>`<option value="${k}" ${val===k?'selected':''}>${v}</option>`).join('')}</select></div>`
+}
+const _lp2 = (a,b) => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${a}${b}</div>`
+
+function _lpFilaMezcla(m={}) {
+  return `<div class="lp-mz" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;margin-bottom:6px;align-items:center">
+    <input class="inp lp-mz-n" placeholder="Producto" value="${_esc(m.nombre||'')}">
+    <input class="inp lp-mz-d" type="text" inputmode="decimal" placeholder="Dosis" value="${_lpF(m.dosis)}">
+    <select class="inp lp-mz-u">${LP_UNIDADES.map(u=>`<option ${ (m.unidad||'L/ha')===u?'selected':''}>${u}</option>`).join('')}</select>
+    <button type="button" onclick="this.parentNode.remove()" style="border:none;background:none;font-size:1.1rem;color:#C62828;cursor:pointer">✕</button></div>`
+}
+function lpAgregarProducto() { $('lp-mz-box').insertAdjacentHTML('beforeend', _lpFilaMezcla()) }
+function lpActualizarMetodo() {
+  const m = $('lp-metodo')?.value
+  if ($('lp-terr')) $('lp-terr').style.display = m==='DRON' ? 'none' : ''
+  if ($('lp-dron')) $('lp-dron').style.display = m==='DRON' ? '' : 'none'
+  lpCalcAgua()
+}
+function lpCalcAgua() {
+  const out = $('lp-agua-calc'); if (!out) return
+  const area = _lpN('lp-area'), b = _lpN('lp-bombas')||0, c = _lpN('lp-canecas')||0
+  out.textContent = (area && (b||c)) ? `Agua: ${_lpF((b*20+c*200)/area)} L/ha (${_lpF(b*20+c*200)} L en total)` : 'Agua: se calcula con bombas, canecas y área'
+}
+
+function _lpCamposTipo(tipo, l, areaPot) {
+  l = l || {}
+  const gas = _lpFld('Gasolina (galones)','lp-gasolina',_lpF(l.gasolina))
+  const areaDef = _lpF(l.areaAplicada ?? areaPot)
+  const legacyVol = l.volumen ? _lpFld('Volumen producto (litros) · registro anterior','lp-volumen',_lpF(l.volumen)) : ''
+  if (tipo === 'GUADANA') return gas
+  if (tipo === 'TOCONEO') return `
+    ${_lp2(_lpFld('N° bombas (20 L)','lp-bombas',_lpF(l.bombas)), gas)}
+    <div class="field"><label>Producto</label><input id="lp-productos" class="inp" placeholder="Nombre del producto o mezcla" value="${_esc(l.productos||'')}"></div>
+    ${_lpFld('Dosis (cc por bomba de 20 L)','lp-dosis-bomba',_lpF(l.dosisBomba))}
+    ${legacyVol}`
+  if (tipo === 'FUMIGACION') {
+    const met = l.metodo || 'BOMBA'
+    let mez = Array.isArray(l.mezcla) && l.mezcla.length ? l.mezcla : [{nombre: l.mezcla ? '' : (l.productos||''), unidad:'L/ha'}]
+    return `
+    ${_lp2(_lpSel('Método *','lp-metodo',LP_METODO_FUM,met,'onchange="lpActualizarMetodo()"'), _lpFld('Área aplicada (ha) *','lp-area',areaDef,'decimal','0','oninput="lpCalcAgua()"'))}
+    <div id="lp-terr" style="${met==='DRON'?'display:none':''}">
+      ${_lp2(_lpFld('N° bombas (20 L)','lp-bombas',_lpF(l.bombas),'decimal','0','oninput="lpCalcAgua()"'), _lpFld('N° canecas (200 L)','lp-canecas',_lpF(l.canecas),'decimal','0','oninput="lpCalcAgua()"'))}
+      <p id="lp-agua-calc" class="xs gray" style="margin:-4px 0 10px"></p>
+    </div>
+    <div id="lp-dron" style="${met==='DRON'?'':'display:none'}">
+      ${_lp2(_lpFld('Agua (L/ha)','lp-agua-ha',met==='DRON'?_lpF(l.aguaHa):''), _lpFld('Costo servicio ($/ha)','lp-costo-dron',_lpF(l.costoDronHa),'numeric'))}
+    </div>
+    ${gas}
+    <p style="font-size:.8rem;font-weight:700;color:#555;margin:4px 0 6px">Productos y dosis por hectárea</p>
+    <div id="lp-mz-box">${mez.map(_lpFilaMezcla).join('')}</div>
+    <button type="button" class="btn btn-sm" style="margin-bottom:12px;background:#FFF3E0;color:#E65100;border:none;border-radius:9px;padding:6px 12px" onclick="lpAgregarProducto()">+ Producto</button>
+    ${legacyVol}`
   }
+  if (tipo === 'CERCA') return `
+    ${_lp2(_lpSel('Tipo','lp-tipo-cerca',LP_TIPO_CERCA,l.tipoCerca), _lpSel('Clase','lp-clase-cerca',LP_CLASE_CERCA,l.claseCerca))}
+    ${_lp2(_lpFld('Metros lineales','lp-metros',_lpF(l.metros)), _lpFld('N° hilos','lp-hilos',_lpF(l.hilos),'numeric'))}
+    ${_lp2(_lpFld('N° postes (estacones)','lp-postes',_lpF(l.postes),'numeric'), _lpFld('Rollos de alambre','lp-rollos',_lpF(l.rollos)))}
+    ${_lp2(_lpFld('Grapas (kg)','lp-grapas',_lpF(l.grapasKg)), _lpFld('Aisladores (cantidad)','lp-aisladores',_lpF(l.aisladores),'numeric'))}`
+  if (tipo === 'SIEMBRA' || tipo === 'RESIEMBRA') return `
+    <div class="field"><label>Especie / variedad</label><input id="lp-especie" class="inp" list="lp-esp-list" placeholder="Ej. Brizanta" value="${_esc(l.especie||'')}">
+      <datalist id="lp-esp-list">${LP_ESPECIES.map(e=>`<option value="${e}">`).join('')}</datalist></div>
+    ${_lp2(_lpSel('Método','lp-metodo-siem',LP_METODO_SIEM,l.metodoSiembra), _lpFld('Área sembrada (ha)','lp-area',areaDef))}
+    ${_lp2(_lpFld('Semilla (kg/ha)','lp-semilla',_lpF(l.semillaKgHa)), _lpFld('Material vegetativo (bultos/ha)','lp-material',_lpF(l.materialBultosHa)))}
+    ${_lp2(`<div class="field"><label>Fertilizante</label><input id="lp-fert" class="inp" placeholder="Opcional" value="${_esc(l.fertilizante||'')}"></div>`, _lpFld('Dosis fertilizante (kg/ha)','lp-fert-dosis',_lpF(l.fertDosisKgHa)))}
+    ${gas}
+    ${tipo==='RESIEMBRA' ? _lp2(_lpSel('Causa','lp-causa',LP_CAUSAS,l.causa), _lpFld('Cobertura antes (%)','lp-cob-antes',_lpF(l.coberturaAntes),'numeric')) : ''}
+    ${_lpFld('Cobertura de establecimiento (%) · llenar a los 60–90 días','lp-cob-estab',_lpF(l.coberturaEstab),'numeric','')}`
+  return ''
+}
+
+async function _lpFormLabor(l, potreroId) {
+  const pot = await db.potreros.get(parseInt(potreroId))
+  window._lpAreaPot = pot?.areaHa || null
+  window._lpEditando = l || null
+  const tipo = l?.tipo || ''
+  const toDateStr = ts => ts ? toD(ts) : ''
+  return `
+    <input type="hidden" id="lp-tipo" value="${tipo}">
+    <p style="font-size:.8rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px">Tipo de labor *</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px" id="lp-grid">
+      ${Object.entries(LP_TIPOS).map(([k,[ic,nom,c,bg]])=>{ const sel = tipo===k
+        return `<button onclick="selLaborTipo('${k}',this)" style="border:2.5px solid ${c};border-radius:14px;padding:12px 4px;background:${bg};color:${c};font-size:.9rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;opacity:${!tipo||sel?'1':'0.55'};${sel?'box-shadow:0 0 0 3px '+c:''}"><span style="font-size:1.6rem">${ic}</span>${nom}</button>` }).join('')}
+    </div>
+    ${_lp2(`<div class="field"><label>Fecha inicio *</label><input id="lp-fecha-ini" class="inp" type="date" value="${l?toDateStr(l.fecha):toD(Date.now())}"></div>`,
+           `<div class="field"><label>Fecha fin</label><input id="lp-fecha-fin" class="inp" type="date" data-futura="1" value="${toDateStr(l?.fechaFin)}"></div>`)}
+    ${_lpFld('N° jornales','lp-jornales',l?_lpF(l.jornales||0):'')}
+    <div id="lp-campos">${tipo?_lpCamposTipo(tipo,l,window._lpAreaPot):'<p class="xs gray" style="margin-bottom:12px">Selecciona el tipo de labor para ver sus campos.</p>'}</div>
+    <div class="field"><label>Observaciones (operadores)</label><input id="lp-obs" class="inp" value="${_esc(l?.observaciones||'')}" placeholder="Opcional…"></div>`
+}
+
+async function openNuevaLaborPotrero(potreroId) {
+  const form = await _lpFormLabor(null, potreroId)
+  showSheet(`
+    <div class="sh-title">🛠 Registrar labor<button class="sh-x" onclick="closeSheet()">✕</button></div>
+    ${form}
+    <div class="btn-row">
+      <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
+      <button class="btn btn-b" id="lp-btn" onclick="saveNuevaLaborPotrero(${potreroId})">✓ Guardar</button>
+    </div>`)
+}
+
+function selLaborTipo(tipo, btn) {
+  $('lp-tipo').value = tipo
+  document.querySelectorAll('#lp-grid button').forEach(b => { b.style.opacity = '0.55'; b.style.boxShadow = 'none' })
+  btn.style.opacity = '1'
+  btn.style.boxShadow = '0 0 0 3px ' + btn.style.color
+  const ed = window._lpEditando
+  const base = ed && ed.tipo === tipo ? ed : (ed ? {areaAplicada: ed.areaAplicada, gasolina: ed.gasolina} : null)
+  if ($('lp-campos')) $('lp-campos').innerHTML = _lpCamposTipo(tipo, base, window._lpAreaPot)
+  lpCalcAgua()
+}
+
+// Lee los campos del formulario. Devuelve todos los campos propios (null los que no aplican al tipo)
+function _lpLeerCampos(tipo) {
+  const o = Object.fromEntries(LP_CAMPOS.map(k=>[k,null]))
+  o.gasolina = _lpN('lp-gasolina')
+  if ($('lp-volumen')) o.volumen = _lpN('lp-volumen')
+  if (tipo === 'TOCONEO') {
+    o.bombas = _lpN('lp-bombas'); o.productos = _lpT('lp-productos'); o.dosisBomba = _lpN('lp-dosis-bomba')
+  } else if (tipo === 'FUMIGACION') {
+    o.metodo = _lpT('lp-metodo'); o.areaAplicada = _lpN('lp-area')
+    if (!o.metodo) throw new Error('Selecciona el método de fumigación')
+    if (!o.areaAplicada) throw new Error('Escribe el área aplicada (ha)')
+    if (o.metodo === 'DRON') {
+      o.aguaHa = _lpN('lp-agua-ha'); o.costoDronHa = _lpN('lp-costo-dron')
+    } else {
+      o.bombas = _lpN('lp-bombas'); o.canecas = _lpN('lp-canecas')
+      const litros = (o.bombas||0)*20 + (o.canecas||0)*200
+      o.aguaHa = litros ? Math.round(litros/o.areaAplicada*100)/100 : null
+    }
+    const mz = [...document.querySelectorAll('#lp-mz-box .lp-mz')].map(r => {
+      const nombre = r.querySelector('.lp-mz-n').value.trim()
+      const d = parseFloat(String(r.querySelector('.lp-mz-d').value).replace(',','.'))
+      return {nombre, dosis: isNaN(d)?null:d, unidad: r.querySelector('.lp-mz-u').value}
+    }).filter(m => m.nombre)
+    o.mezcla = mz.length ? mz : null
+    o.productos = mz.length ? mz.map(m=>m.nombre+(m.dosis!=null?` ${_lpF(m.dosis)} ${m.unidad}`:'')).join(' + ') : null
+  } else if (tipo === 'CERCA') {
+    o.tipoCerca=_lpT('lp-tipo-cerca'); o.claseCerca=_lpT('lp-clase-cerca'); o.metros=_lpN('lp-metros'); o.hilos=_lpN('lp-hilos')
+    o.postes=_lpN('lp-postes'); o.rollos=_lpN('lp-rollos'); o.grapasKg=_lpN('lp-grapas'); o.aisladores=_lpN('lp-aisladores')
+  } else if (tipo === 'SIEMBRA' || tipo === 'RESIEMBRA') {
+    o.especie=_lpT('lp-especie'); o.metodoSiembra=_lpT('lp-metodo-siem'); o.areaAplicada=_lpN('lp-area')
+    o.semillaKgHa=_lpN('lp-semilla'); o.materialBultosHa=_lpN('lp-material'); o.fertilizante=_lpT('lp-fert'); o.fertDosisKgHa=_lpN('lp-fert-dosis')
+    o.coberturaEstab=_lpN('lp-cob-estab')
+    if (tipo === 'RESIEMBRA') { o.causa=_lpT('lp-causa'); o.coberturaAntes=_lpN('lp-cob-antes') }
+  }
+  return o
+}
+
+function _lpLeerBase() {
+  const tipo = $('lp-tipo')?.value
+  if (!tipo) throw new Error('Selecciona el tipo de labor')
   const fechaIniStr = $('lp-fecha-ini')?.value
-  if (!fechaIniStr) { showToast('Selecciona la fecha de inicio','err'); return }
-  const fecha = fromD(fechaIniStr)
+  if (!fechaIniStr) throw new Error('Selecciona la fecha de inicio')
   const fechaFinStr = $('lp-fecha-fin')?.value
-  const fechaFin = fechaFinStr ? fromD(fechaFinStr) : null
-  const jornales = parseFloat(String($('lp-jornales')?.value||'').replace(',','.')) || 0
-  const productos = $('lp-productos')?.value?.trim() || ''
-  const volumen   = parseFloat(String($('lp-volumen')?.value||'').replace(',','.')) || null
-  const gasolina  = parseFloat(String($('lp-gasolina')?.value||'').replace(',','.')) || null
-  const obs = $('lp-obs')?.value?.trim() || ''
+  return { tipo, fecha: fromD(fechaIniStr), fechaFin: fechaFinStr ? fromD(fechaFinStr) : null,
+    jornales: _lpN('lp-jornales') || 0, observaciones: _lpT('lp-obs'), ..._lpLeerCampos(tipo) }
+}
+
+async function saveNuevaLaborPotrero(potreroId) {
+  let datos
+  try { datos = _lpLeerBase() } catch(e) { showToast(e.message,'err'); return }
   const btn = $('lp-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
-
-  const _rep = await laborPotreroRepetida(parseInt(potreroId), tipo, fecha)
+  const _rep = await laborPotreroRepetida(parseInt(potreroId), datos.tipo, datos.fecha)
   if (_rep) {
     const _pot = await db.potreros.get(parseInt(potreroId))
     if (!confirm(_avisoLaborRepetida(_rep, _pot?.nombre))) {
@@ -6889,13 +6989,9 @@ async function saveNuevaLaborPotrero(potreroId) {
       return
     }
   }
-  const payload = { potreroId: parseInt(potreroId), tipo, fecha, jornales }
-  if (fechaFin)  payload.fechaFin    = fechaFin
-  if (productos) payload.productos   = productos
-  if (volumen)   payload.volumen     = volumen
-  if (gasolina)  payload.gasolina    = gasolina
-  if (obs)       payload.observaciones = obs
-
+  const payload = { potreroId: parseInt(potreroId) }
+  for (const [k,v] of Object.entries(datos)) if (v !== null && v !== undefined && v !== '') payload[k] = v
+  payload.jornales = datos.jornales
   let laborId
   try {
     laborId = await fsAdd('laboresPotrero', payload)
@@ -6917,72 +7013,29 @@ async function saveNuevaLaborPotrero(potreroId) {
 async function openEditarLaborPotrero(laborId, potreroId) {
   const l = await db.laboresPotrero.get(laborId)
   if (!l) { showToast('Labor no encontrada','err'); return }
-  const TIPOS_LP = {CERCA:'🔧 Cerca', GUADANA:'🌿 Guadaña', FUMIGACION:'🧴 Fumigación', TOCONEO:'🪓 Toconeo', SIEMBRA:'🌱 Siembra', RESIEMBRA:'🌾 Resiembra'}
-  const toDateStr = ts => ts ? toD(ts) : ''
+  const form = await _lpFormLabor(l, potreroId)
   showSheet(`
     <div class="sh-title">✏️ Editar labor<button class="sh-x" onclick="closeSheet()">✕</button></div>
-    <input type="hidden" id="lp-tipo" value="${l.tipo}">
-    <p style="font-size:.8rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px">Tipo de labor *</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px" id="lp-grid">
-      ${Object.entries(TIPOS_LP).map(([k,v])=>{
-        const colors={CERCA:'#1565C0,#E3F2FD',GUADANA:'#2E7D32,#E8F5E9',FUMIGACION:'#E65100,#FFF3E0',TOCONEO:'#4A148C,#F3E5F5',SIEMBRA:'#00695C,#E0F2F1',RESIEMBRA:'#558B2F,#F1F8E9'}
-        const [c,bg]=colors[k].split(',')
-        const sel = l.tipo===k
-        return `<button onclick="selLaborTipo('${k}',this)" style="border:2.5px solid ${c};border-radius:14px;padding:18px 8px;background:${bg};color:${c};font-size:1.05rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;opacity:${sel?'1':'0.55'};${sel?'box-shadow:0 0 0 3px '+c:''}">
-          <span style="font-size:2rem">${['🔧','🌿','🧴','🪓','🌱','🌾'][Object.keys(TIPOS_LP).indexOf(k)]}</span>${v.replace(/.*\s/,'')}</button>`
-      }).join('')}
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="field"><label>Fecha inicio *</label>
-        <input id="lp-fecha-ini" class="inp" type="date" value="${toDateStr(l.fecha)}"></div>
-      <div class="field"><label>Fecha fin</label>
-        <input id="lp-fecha-fin" class="inp" type="date" data-futura="1" value="${toDateStr(l.fechaFin)}"></div>
-    </div>
-    <div class="field"><label>Jornales</label>
-      <input id="lp-jornales" class="inp" type="text" inputmode="decimal" value="${String(l.jornales||0).replace('.',',')}"></div>
-    <div class="field"><label>Producto</label>
-      <input id="lp-productos" class="inp" value="${l.productos||''}" placeholder="Nombre del producto (opcional)"></div>
-    <div class="field"><label>Volumen producto (litros)</label>
-      <input id="lp-volumen" class="inp" type="text" inputmode="decimal" value="${l.volumen||''}"></div>
-    <div class="field"><label>Gasolina (galones)</label>
-      <input id="lp-gasolina" class="inp" type="text" inputmode="decimal" value="${l.gasolina!=null?String(l.gasolina).replace('.',','):''}"></div>
-    <div class="field"><label>Observaciones</label>
-      <input id="lp-obs" class="inp" value="${l.observaciones||''}" placeholder="Opcional…"></div>
+    ${form}
     <div class="btn-row">
       <button class="btn btn-gray" onclick="closeSheet()">Cancelar</button>
       <button class="btn btn-b" id="lp-btn" onclick="saveEditarLaborPotrero(${laborId},${potreroId})">✓ Guardar cambios</button>
     </div>`)
+  lpCalcAgua()
 }
 
 async function saveEditarLaborPotrero(laborId, potreroId) {
-  const tipo = $('lp-tipo')?.value
-  if (!tipo) { showToast('Selecciona el tipo de labor','err'); return }
-  const fechaIniStr = $('lp-fecha-ini')?.value
-  if (!fechaIniStr) { showToast('Selecciona la fecha de inicio','err'); return }
-  const fecha = fromD(fechaIniStr)
-  const fechaFinStr = $('lp-fecha-fin')?.value
-  const fechaFin = fechaFinStr ? fromD(fechaFinStr) : null
-  const jornales = parseFloat(String($('lp-jornales')?.value||'').replace(',','.')) || 0
-  const productos = $('lp-productos')?.value?.trim() || ''
-  const volumen   = parseFloat(String($('lp-volumen')?.value||'').replace(',','.')) || null
-  const gasolina  = parseFloat(String($('lp-gasolina')?.value||'').replace(',','.')) || null
-  const obs = $('lp-obs')?.value?.trim() || ''
+  let payload
+  try { payload = _lpLeerBase() } catch(e) { showToast(e.message,'err'); return }
   const btn = $('lp-btn')
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…' }
-  const _rep = await laborPotreroRepetida(parseInt(potreroId), tipo, fecha, laborId)
+  const _rep = await laborPotreroRepetida(parseInt(potreroId), payload.tipo, payload.fecha, laborId)
   if (_rep) {
     const _pot = await db.potreros.get(parseInt(potreroId))
     if (!confirm(_avisoLaborRepetida(_rep, _pot?.nombre))) {
       if (btn) { btn.disabled = false; btn.textContent = '✓ Guardar cambios' }
       return
     }
-  }
-  const payload = { tipo, fecha, jornales,
-    fechaFin:      fechaFin   || null,
-    productos:     productos  || null,
-    volumen:       volumen    || null,
-    gasolina:      gasolina   || null,
-    observaciones: obs        || null
   }
   try {
     await fsUpdate('laboresPotrero', laborId, payload)
@@ -6996,6 +7049,94 @@ async function saveEditarLaborPotrero(laborId, potreroId) {
   showToast('Labor actualizada ✓', 'ok')
   setTab('pf','labores')
   go('potrero-ficha', {id: potreroId})
+}
+
+// Columnas extra de LABORES_POTREROS en el Excel (desde col J). [encabezado, campo, ancho, tipo]
+const LP_XLS_COLS = [
+  ['Método (BOMBA/ESTACIONARIA/DRON)','metodo',14,'t'], ['Área aplicada (ha)','areaAplicada',10,'n'],
+  ['N° bombas (20 L)','bombas',9,'n'], ['N° canecas (200 L)','canecas',9,'n'], ['Agua (L/ha)','aguaHa',9,'n'],
+  ['Mezcla (Producto dosis unidad; ...)','mezcla',34,'m'], ['Costo dron ($/ha)','costoDronHa',11,'n'],
+  ['Dosis toconeo (cc/bomba)','dosisBomba',10,'n'],
+  ['Tipo cerca (NUEVA/REPARACION)','tipoCerca',12,'t'], ['Clase cerca (PUAS/ELECTRICA)','claseCerca',12,'t'],
+  ['Metros','metros',8,'n'], ['N° hilos','hilos',7,'n'], ['N° postes','postes',8,'n'], ['Rollos alambre','rollos',8,'n'],
+  ['Grapas (kg)','grapasKg',8,'n'], ['Aisladores','aisladores',9,'n'],
+  ['Especie','especie',14,'t'], ['Método siembra (VOLEO/VEGETATIVO/DRON/MAQUINARIA)','metodoSiembra',14,'t'],
+  ['Semilla (kg/ha)','semillaKgHa',9,'n'], ['Material vegetativo (bultos/ha)','materialBultosHa',10,'n'],
+  ['Fertilizante','fertilizante',14,'t'], ['Dosis fertilizante (kg/ha)','fertDosisKgHa',10,'n'],
+  ['Causa resiembra','causa',14,'t'], ['Cobertura antes (%)','coberturaAntes',9,'n'], ['Cobertura establecimiento (%)','coberturaEstab',10,'n']
+]
+function lpXlsValores(l) {
+  return LP_XLS_COLS.map(([,k,,t]) => {
+    const v = l[k]
+    if (v === null || v === undefined) return ''
+    if (t === 'm') return Array.isArray(v) ? v.map(m=>`${m.nombre}${m.dosis!=null?' '+m.dosis+' '+(m.unidad||'L/ha'):''}`).join('; ') : ''
+    return v
+  })
+}
+function lpXlsLeer(row, desde) {
+  const o = {}
+  LP_XLS_COLS.forEach(([,k,,t], i) => {
+    const raw = row[desde+i]; if (raw === undefined || raw === null || String(raw).trim() === '') return
+    if (t === 'n') { const n = parseFloat(String(raw).replace(',','.')); if (!isNaN(n)) o[k] = n }
+    else if (t === 'm') {
+      const mz = String(raw).split(';').map(x=>x.trim()).filter(Boolean).map(x => {
+        const m = x.match(/^(.*?)\s+([\d.,]+)\s*((?:L|cc|kg|g)\/ha)$/i)
+        return m ? {nombre:m[1].trim(), dosis:parseFloat(m[2].replace(',','.')), unidad:m[3]} : {nombre:x, dosis:null, unidad:'L/ha'}
+      })
+      if (mz.length) o.mezcla = mz
+    } else o[k] = ['metodo','tipoCerca','claseCerca','metodoSiembra','causa'].includes(k) ? normTipoLaborPot(raw) : String(raw).trim()
+  })
+  return o
+}
+
+// Detalle de una labor en la ficha del potrero, con indicadores por hectárea o por metro
+function lpDetalleHTML(l, areaPot) {
+  const area = l.areaAplicada || areaPot || null
+  const L = []
+  const ph = v => area && v ? ` (${_lpF(v/area)}/ha)` : ''
+  const linea = (k,v) => L.push(`<span class="bold">${k}:</span> ${v}`)
+  if (l.tipo==='FUMIGACION') {
+    if (l.metodo) linea('Método', LP_METODO_FUM[l.metodo]||l.metodo)
+    if (l.areaAplicada) linea('Área aplicada', _lpF(l.areaAplicada)+' ha')
+    if (l.bombas) linea('Bombas', _lpF(l.bombas)+ph(l.bombas))
+    if (l.canecas) linea('Canecas', _lpF(l.canecas)+ph(l.canecas))
+    if (l.aguaHa) linea('Agua', _lpF(l.aguaHa)+' L/ha')
+    if (Array.isArray(l.mezcla) && l.mezcla.length) linea('Productos', l.mezcla.map(m => {
+      const u = (m.unidad||'L/ha').split('/')[0]
+      const tot = (m.dosis!=null && area) ? ` → ${_lpF(m.dosis*area)} ${u}` : ''
+      return `${m.nombre}${m.dosis!=null?' '+_lpF(m.dosis)+' '+(m.unidad||'L/ha'):''}${tot}`
+    }).join(' · '))
+    if (l.costoDronHa) linea('Servicio dron', '$'+Math.round(l.costoDronHa).toLocaleString('es-CO')+'/ha'+(area?' → $'+Math.round(l.costoDronHa*area).toLocaleString('es-CO'):''))
+  }
+  if (l.tipo==='TOCONEO') {
+    if (l.bombas) linea('Bombas', _lpF(l.bombas)+ph(l.bombas))
+    if (l.dosisBomba) linea('Dosis', _lpF(l.dosisBomba)+' cc/bomba'+(l.bombas?' → '+_lpF(l.dosisBomba*l.bombas/1000)+' L de producto':''))
+  }
+  if (l.tipo==='CERCA') {
+    const t = [LP_TIPO_CERCA[l.tipoCerca], LP_CLASE_CERCA[l.claseCerca]].filter(Boolean).join(' · ')
+    if (t) linea('Cerca', t)
+    if (l.metros) linea('Metros', _lpF(l.metros)+(l.jornales?` (${_lpF(l.jornales/l.metros*100)} jornales/100 m)`:''))
+    const mat = [l.hilos?_lpF(l.hilos)+' hilos':'', l.postes?_lpF(l.postes)+' postes':'', l.rollos?_lpF(l.rollos)+' rollos':'', l.grapasKg?_lpF(l.grapasKg)+' kg grapas':'', l.aisladores?_lpF(l.aisladores)+' aisladores':''].filter(Boolean)
+    if (mat.length) linea('Materiales', mat.join(' · '))
+  }
+  if (l.tipo==='SIEMBRA' || l.tipo==='RESIEMBRA') {
+    if (l.especie) linea('Especie', l.especie)
+    if (l.metodoSiembra) linea('Método', LP_METODO_SIEM[l.metodoSiembra]||l.metodoSiembra)
+    if (l.areaAplicada) linea('Área', _lpF(l.areaAplicada)+' ha')
+    if (l.semillaKgHa) linea('Semilla', _lpF(l.semillaKgHa)+' kg/ha'+(area?' → '+_lpF(l.semillaKgHa*area)+' kg':''))
+    if (l.materialBultosHa) linea('Material vegetativo', _lpF(l.materialBultosHa)+' bultos/ha'+(area?' → '+_lpF(l.materialBultosHa*area)+' bultos':''))
+    if (l.fertilizante) linea('Fertilizante', l.fertilizante+(l.fertDosisKgHa?' '+_lpF(l.fertDosisKgHa)+' kg/ha':''))
+    if (l.causa) linea('Causa', LP_CAUSAS[l.causa]||l.causa)
+    if (l.coberturaAntes!=null) linea('Cobertura antes', _lpF(l.coberturaAntes)+'%')
+    if (l.coberturaEstab!=null) linea('Cobertura establecimiento', _lpF(l.coberturaEstab)+'%')
+  }
+  const _mz = Array.isArray(l.mezcla) && l.mezcla.length
+  if (l.productos && !_mz && l.tipo!=='TOCONEO') linea('Producto', l.productos)
+  if (l.productos && l.tipo==='TOCONEO') linea('Producto', l.productos)
+  if (l.volumen) linea('Volumen producto', _lpF(l.volumen)+' L'+ph(l.volumen))
+  if (l.gasolina) linea('Gasolina', _lpF(l.gasolina)+' gal'+ph(l.gasolina))
+  if (l.jornales && area && l.tipo!=='CERCA') linea('Jornales/ha', _lpF(l.jornales/area))
+  return L.map(x=>`<p class="xs gray mt4">${x}</p>`).join('')
 }
 
 async function recuperarLaboresFirebase(potreroId) {
@@ -9721,18 +9862,18 @@ async function exportarParaImportar(){
 
     // ── LABORES_POTREROS ──
     const wsLabP = XLSX.utils.aoa_to_sheet([
-      ['Potrero','Tipo','Fecha Inicio (DD/MM/AAAA)','Fecha Final (DD/MM/AAAA)','Jornales','Producto','Volumen Producto (litros)','Observaciones','Gasolina (galones)'],
+      ['Potrero','Tipo','Fecha Inicio (DD/MM/AAAA)','Fecha Final (DD/MM/AAAA)','Jornales','Producto','Volumen Producto (litros)','Observaciones','Gasolina (galones)',...LP_XLS_COLS.map(c=>c[0])],
       ...laboresPotrero
         .filter(l=>potNomMap[l.potreroId])
         .sort((a,b)=>a.fecha-b.fecha)
         .map(l=>[
           potNomMap[l.potreroId]||'', l.tipo||'',
           fd(l.fecha), fd(l.fechaFin),
-          l.jornales||0, l.productos||'', l.volumen||'', l.observaciones||'', l.gasolina||''
+          l.jornales||0, l.productos||'', l.volumen||'', l.observaciones||'', l.gasolina||'', ...lpXlsValores(l)
         ])
     ])
-    wsLabP['!cols']=[{wch:11},{wch:12},{wch:14},{wch:14},{wch:8},{wch:24},{wch:14},{wch:20},{wch:12}]
-    wsLabP['!autofilter']={ref:'A1:I'+(laboresPotrero.length+1)}
+    wsLabP['!cols']=[{wch:11},{wch:12},{wch:14},{wch:14},{wch:8},{wch:24},{wch:14},{wch:20},{wch:12},...LP_XLS_COLS.map(c=>({wch:c[2]||12}))]
+    wsLabP['!autofilter']={ref:'A1:'+XLSX.utils.encode_col(8+LP_XLS_COLS.length)+(laboresPotrero.length+1)}
     XLSX.utils.book_append_sheet(wb, wsLabP, 'LABORES_POTREROS')
 
     // ── LLUVIAS ──
@@ -10244,7 +10385,7 @@ async function importarTodo(input) {
     // Col 0:Potrero  1:Tipo  2:Producto  3:Dosis  4:Fecha  5:Obs
     const shLabP = wb.SheetNames.find(s => /LABORES?_POTREROS?/i.test(s))
     if (shLabP) {
-      // Col: 0=Potrero 1=Tipo 2=FechaIni 3=FechaFin 4=Jornales 5=Producto 6=Volumen 7=Obs 8=Gasolina (gal)
+      // Col: 0=Potrero 1=Tipo 2=FechaIni 3=FechaFin 4=Jornales 5=Producto 6=Volumen 7=Obs 8=Gasolina (gal) 9+=LP_XLS_COLS
       const tiposValidos = ['CERCA','GUADANA','FUMIGACION','TOCONEO','SIEMBRA','RESIEMBRA']
       const rows = readSheet(shLabP, true).filter(r => r[0] && r[1] && r[2])
       const todosPotLP = await db.potreros.where('activo').equals(1).toArray()
@@ -10265,7 +10406,9 @@ async function importarTodo(input) {
         const volumen   = parseFloat(String(row[6]||'').replace(',','.')) || null
         const obs       = String(row[7]||'').trim() || null
         const gasolina  = parseFloat(String(row[8]||'').replace(',','.')) || null
-        await fsAdd('laboresPotrero',{potreroId:potId,tipo,fecha:fechaTs,fechaFin,jornales,productos,volumen,gasolina,observaciones:obs,registradoPor:quien,registradoEn:ahora})
+        const extra     = lpXlsLeer(row, 9)
+        if (extra.mezcla && !productos) extra.productos = extra.mezcla.map(m=>m.nombre+(m.dosis!=null?' '+m.dosis+' '+m.unidad:'')).join(' + ')
+        await fsAdd('laboresPotrero',{potreroId:potId,tipo,fecha:fechaTs,fechaFin,jornales,productos,volumen,gasolina,observaciones:obs,...extra,registradoPor:quien,registradoEn:ahora})
         addedLP++
       }
       if (addedLP||skipLP||repLP) resumen.push(`🌿 Labores potreros: ${addedLP} importadas${repLP?' · '+repLP+' ya estaban registradas (no se duplicaron)':''}${skipLP?' · '+skipLP+' omitidas por datos inválidos':''}`)
