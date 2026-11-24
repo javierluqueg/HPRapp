@@ -11,7 +11,7 @@
 <meta name="apple-touch-fullscreen" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=20260716-002">
 <script>
-const APP_VERSION = '20261117-002'
+const APP_VERSION = '20261123-001'
 
 // ── Service Worker ────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -213,6 +213,9 @@ button{cursor:pointer}
 #appToast.err{background:#C62828;color:white}
 #appToast.info{background:#1565C0;color:white}
 @keyframes slideDown{from{transform:translateX(-50%) translateY(-12px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
+/* 20261123: solo consulta (todo rol distinto de Administrador 1) */
+body.ro .ro-oculto, body.ro .solo-admin{display:none!important}
+body.ro #hdrTitle::after{content:' · Solo consulta';font-size:.7em;font-weight:600;opacity:.75}
 </style>
 </head>
 <body>
@@ -466,6 +469,7 @@ function _histLotesAplicar(prev, obj) {
 
 // ─── Wrapper: Add to Dexie + Firebase ─────────────
 async function fsAdd(table, obj) {
+  if (_escrituraBloqueada(table, null)) return null
   _validarFechas(table, obj)
   if (table === 'animales' && obj.loteId && !obj.historialLotes)
     obj = {...obj, historialLotes:[{loteId:obj.loteId, desde:obj.fechaLote||obj.fechaIngreso||Date.now()}]}
@@ -485,6 +489,7 @@ async function fsAdd(table, obj) {
 
 // ─── Wrapper: Update Dexie + Firebase ─────────────
 async function fsUpdate(table, id, obj) {
+  if (_escrituraBloqueada(table, id)) return
   _validarFechas(table, obj)
   if (table === 'animales' && 'loteId' in obj) {
     obj = {...obj}
@@ -506,6 +511,7 @@ async function fsUpdate(table, id, obj) {
 
 // ─── Wrapper: setCfg + Firebase ──────────────────
 async function setCfgSync(k, v) {
+  if (_escrituraBloqueada('config', k)) return
   await setCfg(k, v)
   fsdb.collection('config').doc(k).set({clave:k, valor:String(v), _ts: Date.now()}).catch(e=>console.warn('cfg offline:',e.message))
 }
@@ -709,6 +715,7 @@ async function doUndo() {
   goRefrescar(PAGE, PARAMS)
 }
 async function fsDelete(table, id) {
+  if (_escrituraBloqueada(table, id)) return
   await db[table].delete(id)
   fsdb.collection(table).doc(String(id)).delete().catch(e=>console.warn('del offline:',e.message))
 }
@@ -823,6 +830,49 @@ const ROLES = [
   'Mayordomo','Vaquero',
   'Administrador 1','Administrador 2','Administrador 3','Administrador 4'
 ]
+
+// ─── Permisos (20261123) ──────────────────────────
+// Solo el Administrador 1 agrega, edita o elimina datos. Todos los demás roles
+// (Administrador 2/3/4, Mayordomo y cualquiera que se cree después) quedan en
+// solo consulta. Cada usuario sí puede cambiar su propio PIN/nombre.
+// Restricción de la app (pantalla + funciones de guardado), no reglas de Firebase.
+const ROL_ESCRITURA = 'Administrador 1'
+function puedeEscribir(){ return USER?.rol === ROL_ESCRITURA }
+function soloConsulta(){ return !!USER && !puedeEscribir() }
+const _RO_ACCIONES = /\b(save[A-Z]\w*|guardar(?!EditarUsuario)\w*|eliminar\w*|darBaja|revertirBaja|ejecutar(SalidaPotrero|RevertirBaja|Resetear|AccionQuitar)|confirmar\w*|crearUsuario|resetearPin|repararFechaIngreso|importar\w*|sacar\w*|moverPotreroRot|quitarPotreroRot|agregarPotreroRot|setEstadoPotrero|forzarDisponible|posponerCambioCat\w*|cambiarCategoriaMasivo|marcarRevisado|deshacerResetear|doUndo|dupSeleccionar|vtConfElim|rvAbrirSheet|rvGuardarPesoNuevo|rvAbrirPesoPrompt|rvMostrarInputPeso|activarSel(Lotes|Potreros|LF)|open(Registrar|Nuev|Agregar|Ingresar|Mover|Cambiar|Labor|Pesar|VentaDesdeLote|AccionQuitar|Editar(?!Usuario)|Cat|Desc|Lote|Baja)\w*)\s*\(|go\('(animal-nuevo|lote-nuevo|potrero-nuevo|rotacion-nueva)'/
+const _PAGINAS_ESCRITURA = new Set(['animal-nuevo','lote-nuevo','potrero-nuevo','rotacion-nueva'])
+let _roAvisoTs = 0
+function _avisoSoloConsulta(){
+  if (Date.now() - _roAvisoTs < 3000) return
+  _roAvisoTs = Date.now()
+  try { showToast('🔒 Tu usuario es solo de consulta. Solo el Administrador 1 puede cambiar datos.', 'err', 3500) } catch(e) {}
+}
+// Bloqueo en las funciones de guardado (respaldo de lo que oculta la pantalla)
+function _escrituraBloqueada(table, id){
+  if (!USER || puedeEscribir()) return false          // login/configuración inicial o Administrador 1
+  if (table === 'usuarios' && String(id) === String(USER.id)) return false   // su propio PIN/nombre
+  console.warn('Solo consulta: escritura bloqueada en', table, id)
+  _avisoSoloConsulta()
+  return true
+}
+function _roMarcar(root){
+  if (!root || root.nodeType !== 1) return
+  const els = root.matches?.('[onclick],[onchange]') ? [root, ...root.querySelectorAll('[onclick],[onchange]')] : root.querySelectorAll('[onclick],[onchange]')
+  for (const el of els) {
+    const h = (el.getAttribute('onclick')||'') + ' ' + (el.getAttribute('onchange')||'')
+    if (_RO_ACCIONES.test(h)) el.classList.add('ro-oculto')
+  }
+}
+function aplicarPermisosUI(){ document.body.classList.toggle('ro', soloConsulta()) }
+new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) _roMarcar(n) })
+  .observe(document.documentElement, {childList:true, subtree:true})
+document.addEventListener('click', e => {
+  if (!soloConsulta()) return
+  const el = e.target?.closest?.('[onclick]')
+  if (el && _RO_ACCIONES.test(el.getAttribute('onclick')||'')) {
+    e.stopImmediatePropagation(); e.preventDefault(); _avisoSoloConsulta()
+  }
+}, true)
 
 const VARIEDADES_PASTO = [
   'Colosuana','Climacuna','Brachiaria Brizanta Marandú','Brachiaria Decumbens',
@@ -1118,6 +1168,8 @@ async function go(page, params={}) {
   const _miSeq = ++_goSeq
   // Guard: páginas protegidas requieren usuario autenticado
   if (!NO_NAV.has(page) && !USER) { page='login'; params={} }
+  if (soloConsulta() && _PAGINAS_ESCRITURA.has(page)) { _avisoSoloConsulta(); page='dashboard'; params={} }
+  aplicarPermisosUI()
   PAGE=page; PARAMS=params
   const isApp=!NO_NAV.has(page)
   $('hdr').hidden=!isApp; $('nav').hidden=!isApp
@@ -1249,10 +1301,45 @@ async function stp2() {
 // ═══════════════════════════════════════════════════
 // LOGIN
 // ═══════════════════════════════════════════════════
+// Devuelve cuántos usuarios hay en Firebase (y los guarda en el teléfono),
+// o null si no se pudo consultar (sin conexión).
+async function _usuariosDeLaNube() {
+  try {
+    const snap = await Promise.race([
+      fsdb.collection('usuarios').get({source:'server'}),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),12000))
+    ])
+    for (const doc of snap.docs) {
+      const d = doc.data(); const id = d._id ?? (isNaN(+doc.id) ? doc.id : +doc.id)
+      await db.usuarios.put({...d, id})
+    }
+    return snap.size
+  } catch(e) { console.warn('usuarios nube:', e.message); return null }
+}
+function _pantallaSinUsuarios() {
+  return `<div style="min-height:100dvh;background:linear-gradient(160deg,#1a1a2e,#0f3460);padding:32px 20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+    ${logoHPR(56)}
+    <p style="color:white;font-weight:700;margin:24px 0 8px">No se pudieron cargar los usuarios</p>
+    <p style="color:rgba(255,255,255,.65);font-size:.85rem;max-width:300px;margin-bottom:20px">Revisa la conexión a internet e intenta de nuevo. No se crea ningún usuario nuevo desde este teléfono.</p>
+    <button class="btn btn-g" style="max-width:240px" onclick="location.reload()">🔄 Reintentar</button>
+  </div>`
+}
 async function pgLogin() {
   document.body.style.background=''
-  const usuarios = await db.usuarios.where('activo').equals(1).toArray()
-  if(!usuarios.length) { _setupData={step:1}; return pgSetup() }
+  let usuarios = await db.usuarios.where('activo').equals(1).toArray()
+  if(!usuarios.length) {
+    // 20261123: la configuración inicial (que crea un usuario y reescribe los datos
+    // de la finca) solo se permite si la nube confirma que no existe ningún usuario.
+    // Si el teléfono no alcanzó a descargar los usuarios (sin señal, datos borrados),
+    // se traen de la nube o se pide reintentar — nunca se abre la configuración inicial.
+    const nube = await _usuariosDeLaNube()
+    if (nube === null) return _pantallaSinUsuarios()
+    if (nube > 0) usuarios = await db.usuarios.where('activo').equals(1).toArray()
+    if (!usuarios.length) {
+      if (nube > 0) return _pantallaSinUsuarios()
+      _setupData={step:1}; return pgSetup()
+    }
+  }
 
   const _bgLogin=`min-height:100dvh;background:url('https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=1400&q=85') center/cover no-repeat fixed;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;position:relative`
   const _overlay=`<div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,20,0,.18) 0%,rgba(0,10,0,.55) 60%,rgba(0,5,0,.72) 100%)"></div>`
@@ -1380,6 +1467,9 @@ async function pinCrear2(pin) {
 }
 async function finSetup(pin) {
   const d=_setupData
+  // 20261123: doble verificación — si ya hay usuarios en la nube, no se crea nada
+  const nube = await _usuariosDeLaNube()
+  if (nube !== 0) { _setupData={step:1}; _pinBuf=''; showToast('Ya existen usuarios en la finca. Ingresa con tu usuario.','err',4000); go('login'); return }
   await setCfgSync('nombre_finca',d.nombre); await setCfgSync('municipio',d.municipio)
   await setCfgSync('area_total',d.areaTotal||'0'); await setCfgSync('area_util',d.areaUtil||'0')
   await setCfgSync('meta_gdp','500'); await setCfgSync('setup_ok','true')
@@ -9203,17 +9293,18 @@ function rendRenderDetalleWrap(filas){
 }
 
 async function pgConfig() {
-  const tab=_tab['cfg']||'finca'
+  let tab=_tab['cfg']||'finca'
+  if (soloConsulta() && ['finca','metas','integridad','resetear'].includes(tab)) tab='rendimiento'
   const cfgTabStyle = t => `flex:0 0 auto;padding:11px 12px;font-size:.92rem;font-weight:700;${tab===t?'color:#E65100;border-bottom-color:#E65100':'color:#aaa'}`
   const tabs=`<div class="tabs" style="flex-wrap:wrap;row-gap:4px;overflow-x:visible">
-    <div class="tab${tab==='finca'?' on':''}" style="${cfgTabStyle('finca')};white-space:nowrap" onclick="setTab('cfg','finca');go('config')">Finca</div>
-    <div class="tab${tab==='metas'?' on':''}" style="${cfgTabStyle('metas')};white-space:nowrap" onclick="setTab('cfg','metas');go('config')">Metas</div>
+    <div class="tab solo-admin${tab==='finca'?' on':''}" style="${cfgTabStyle('finca')};white-space:nowrap" onclick="setTab('cfg','finca');go('config')">Finca</div>
+    <div class="tab solo-admin${tab==='metas'?' on':''}" style="${cfgTabStyle('metas')};white-space:nowrap" onclick="setTab('cfg','metas');go('config')">Metas</div>
     <div class="tab${tab==='rendimiento'?' on':''}" style="${cfgTabStyle('rendimiento')};white-space:nowrap" onclick="setTab('cfg','rendimiento');go('config')">📈 Rendimiento</div>
-    <div class="tab${tab==='integridad'?' on':''}" style="${cfgTabStyle('integridad')};white-space:nowrap" onclick="setTab('cfg','integridad');go('config')">🔍 Integridad</div>
+    <div class="tab solo-admin${tab==='integridad'?' on':''}" style="${cfgTabStyle('integridad')};white-space:nowrap" onclick="setTab('cfg','integridad');go('config')">🔍 Integridad</div>
     <div class="tab${tab==='usuarios'?' on':''}" style="${cfgTabStyle('usuarios')};white-space:nowrap" onclick="setTab('cfg','usuarios');go('config')">Usuarios</div>
     <div class="tab${tab==='backup'?' on':''}" style="${cfgTabStyle('backup')};white-space:nowrap" onclick="setTab('cfg','backup');go('config')">Backup</div>
     <div class="tab${tab==='excel'?' on':''}" style="${cfgTabStyle('excel')};white-space:nowrap" onclick="setTab('cfg','excel');go('config')">Excel</div>
-    <div class="tab${tab==='resetear'?' on':''}" style="${cfgTabStyle('resetear')};white-space:nowrap;color:#B71C1C" onclick="setTab('cfg','resetear');go('config')">🗑 Resetear</div>
+    <div class="tab solo-admin${tab==='resetear'?' on':''}" style="${cfgTabStyle('resetear')};white-space:nowrap;color:#B71C1C" onclick="setTab('cfg','resetear');go('config')">🗑 Resetear</div>
   </div>`
 
   if(tab==='finca'){
@@ -9308,7 +9399,7 @@ async function pgConfig() {
       <p class="xs gray">💡 JSON para restauración completa · PDF para imprimir · Excel: Configuración › Excel</p>
     </div>
 
-    <div class="card">
+    <div class="card solo-admin">
       <p class="bold mb8">📥 Restaurar copia de seguridad</p>
       <p class="sm gray mb12"><span class="red bold">⚠️ Esto borrará todos los datos actuales.</span> Solo para restaurar un backup JSON previo.</p>
       <input type="file" id="bkFile" accept=".json" style="display:none" onchange="importarBackup(this)">
@@ -9386,7 +9477,7 @@ async function pgConfig() {
       </div>
     </div>
 
-    <div class="card mb10" style="border:2px solid #2E7D32">
+    <div class="card mb10 solo-admin" style="border:2px solid #2E7D32">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
         <span style="font-size:1.5rem">📥</span>
         <div>
@@ -11001,7 +11092,7 @@ async function init(){
       await go('dashboard')
       setTimeout(migracionesPendientes, 2500)
     } else {
-      await go(ok ? 'login' : 'setup')
+      await go('login')   // 20261123: pgLogin decide si hace falta la configuración inicial (solo si la nube no tiene usuarios)
     }
     setTimeout(checkAppVersion, 3000)
   } catch(e) {
